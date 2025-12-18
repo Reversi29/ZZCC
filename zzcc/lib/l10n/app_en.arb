@@ -1,0 +1,108 @@
+{
+  "@@locale": "en",
+  "homeMenuItem": "Home",
+  "@homeMenuItem": {"description": "Home menu item"},
+  "messagesMenuItem": "Messages",
+  "@messagesMenuItem": {"description": "Messages menu item"},
+  "workbenchMenuItem": "Workbench",
+  "@workbenchMenuItem": {"description": "Workbench menu item"},
+  "sharedMenuItem": "Shared",
+  "@sharedMenuItem": {"description": "Shared menu item"},
+  "squareMenuItem": "Square",
+  "@squareMenuItem": {"description": "Square menu item"},
+  "settingsMenuItem": "Settings",
+  "@settingsMenuItem": {"description": "Settings menu item"},
+  "settingsTitle": "Settings",
+  "@settingsTitle": {
+    "description": "Title for settings page"
+  },
+  "languageSetting": "Language",
+  "@languageSetting": {
+    "description": "Label for language setting"
+  },
+  "english": "English",
+  "@english": {
+    "description": "English language name"
+  },
+  "simplifiedChinese": "Simplified Chinese",
+  "@simplifiedChinese": {
+    "description": "Simplified Chinese language name"
+  },
+  "traditionalChinese": "Traditional Chinese",
+  "@traditionalChinese": {
+    "description": "Traditional Chinese language name"
+  },
+  "spanish": "Spanish",
+  "@spanish": {
+    "description": "Spanish language name"
+  },
+  "fileSaved": "File saved",
+  "@fileSaved": {
+    "description": "Message when file is saved"
+  },
+  "saveFailed": "Save failed: {error}",
+  "@saveFailed": {
+    "description": "Message when file save fails",
+    "placeholders": {
+      "error": {
+        "type": "String",
+        "description": "Error message"
+      }
+    }
+  },
+  "userSettings": "User Settings",
+  "autoLogin": "Auto Login",
+  "themeSettings": "Theme Settings",
+  "appSettings": "App Settings",
+  "otherSettings": "Other Settings",
+  "shortcutSettings": "Shortcut Settings",
+  "fontSetting": "Font Settings",
+  "@fontSetting": {
+    "description": "Label for font setting"
+  },
+  "splashAnimationSetting": "Splash Screen Animation",
+  "@splashAnimationSetting": {
+    "description": "Setting option to enable/disable splash screen animation (switch title)",
+    "type": "text",
+    "placeholders": {}
+  },
+  "currentDataPathWithHint": "Current APP data storage path (will migrate after edit)",
+  "migrationCancelled": "Migration cancelled",
+  "migrationSuccess": "Data migrated to: ",
+  "targetFolderNotEmpty": "Target folder is not empty",
+  "selectEmptyFolderHint": "Please select an empty folder as new storage path",
+  "confirm": "Confirm",
+  "migrationFailed": "Migration failed: ",
+  "migratingData": "Migrating data",
+  "migrationComplete": "Migration complete!",
+  "cancel": "Cancel",
+  "migratingFiles": "Migrating files:",
+  "presetThemes": "Preset Themes",
+  "@presetThemes": {
+    "description": "Title for preset themes section"
+  },
+  "customTheme": "Custom Theme",
+  "@customTheme": {
+    "description": "Title for custom theme section"
+  },
+  "primaryColorLabel": "Primary Color",
+  "@primaryColorLabel": {
+    "description": "Label for primary color selector"
+  },
+  "leftSidebarColorLabel": "Left Sidebar Color",
+  "@leftSidebarColorLabel": {
+    "description": "Label for left sidebar color selector"
+  },
+  "rightPanelColorLabel": "Right Panel Color",
+  "@rightPanelColorLabel": {
+    "description": "Label for right panel color selector"
+  },
+  "chooseColor": "Choose Color",
+  "@chooseColor": {
+    "description": "Title for color picker dialog"
+  },
+  "apply": "Apply",
+  "@apply": {
+    "description": "Apply button text"
+  }
+}

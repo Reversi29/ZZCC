@@ -1,0 +1,108 @@
+{
+  "@@locale": "zh_Hans",
+  "homeMenuItem": "首页",
+  "@homeMenuItem": {"description": "首页菜单项"},
+  "messagesMenuItem": "消息",
+  "@messagesMenuItem": {"description": "消息菜单项"},
+  "workbenchMenuItem": "工作台",
+  "@workbenchMenuItem": {"description": "工作台菜单项"},
+  "sharedMenuItem": "共享",
+  "@sharedMenuItem": {"description": "共享菜单项"},
+  "squareMenuItem": "广场",
+  "@squareMenuItem": {"description": "广场菜单项"},
+  "settingsMenuItem": "设置",
+  "@settingsMenuItem": {"description": "设置菜单项"},
+  "settingsTitle": "设置",
+  "@settingsTitle": {
+    "description": "设置页面标题"
+  },
+  "languageSetting": "语言",
+  "@languageSetting": {
+    "description": "语言设置标签"
+  },
+  "english": "英语",
+  "@english": {
+    "description": "英语语言名称"
+  },
+  "simplifiedChinese": "简体中文",
+  "@simplifiedChinese": {
+    "description": "简体中文语言名称"
+  },
+  "traditionalChinese": "繁体中文",
+  "@traditionalChinese": {
+    "description": "繁体中文语言名称"
+  },
+  "spanish": "西班牙语",
+  "@spanish": {
+    "description": "西班牙语语言名称"
+  },
+  "fileSaved": "文件已保存",
+  "@fileSaved": {
+    "description": "文件保存成功时的消息"
+  },
+  "saveFailed": "保存失败: {error}",
+  "@saveFailed": {
+    "description": "文件保存失败时的消息",
+    "placeholders": {
+      "error": {
+        "type": "String",
+        "description": "错误信息"
+      }
+    }
+  },
+  "userSettings": "用户设置",
+  "autoLogin": "自动登录",
+  "themeSettings": "主题设置",
+  "appSettings": "应用设置",
+  "otherSettings": "其他设置",
+  "shortcutSettings": "快捷键设置",
+  "fontSetting": "字体设置",
+  "@fontSetting": {
+    "description": "字体设置标签"
+  },
+  "splashAnimationSetting": "启动页动画",
+  "@splashAnimationSetting": {
+    "description": "控制是否开启启动页动画的设置选项（开关标题）",
+    "type": "text",
+    "placeholders": {}
+  },
+  "currentDataPathWithHint": "当前APP数据存储路径(编辑后迁移至新路径)",
+  "migrationCancelled": "迁移已取消",
+  "migrationSuccess": "数据已迁移至: ",
+  "targetFolderNotEmpty": "目标文件夹非空",
+  "selectEmptyFolderHint": "请选择一个空文件夹作为新的数据存储路径",
+  "confirm": "确定",
+  "migrationFailed": "迁移失败: ",
+  "migratingData": "正在迁移数据",
+  "migrationComplete": "迁移完成！",
+  "cancel": "取消",
+  "migratingFiles": "正在迁移文件:",
+  "presetThemes": "预设主题",
+  "@presetThemes": {
+    "description": "预设主题部分标题"
+  },
+  "customTheme": "自定义主题",
+  "@customTheme": {
+    "description": "自定义主题部分标题"
+  },
+  "primaryColorLabel": "主要颜色",
+  "@primaryColorLabel": {
+    "description": "主要颜色选择器标签"
+  },
+  "leftSidebarColorLabel": "左侧边栏颜色",
+  "@leftSidebarColorLabel": {
+    "description": "左侧边栏颜色选择器标签"
+  },
+  "rightPanelColorLabel": "右侧面板颜色",
+  "@rightPanelColorLabel": {
+    "description": "右侧面板颜色选择器标签"
+  },
+  "chooseColor": "选择颜色",
+  "@chooseColor": {
+    "description": "颜色选择器对话框标题"
+  },
+  "apply": "应用",
+  "@apply": {
+    "description": "应用按钮文本"
+  }
+}

@@ -1,0 +1,50 @@
+lib/
+├── core/
+│   ├── di/                             # 依赖注入
+│   │   └── service_locator.dart
+│   ├── routes/                         # 路由管理
+│   │   ├── app_router.dart
+│   │   └── route_names.dart
+│   ├── theme/                          # 主题系统
+│   │   ├── custom_theme.dart
+│   │   └── theme_manager.dart
+│   └── utils/                          # 工具类
+│       ├── image_utils.dart
+│       └── storage_manager.dart
+├── data/
+│   ├── datasources/                    # 数据源
+│   │   ├── file_datasource.dart
+│   │   └── theme_datasource.dart
+│   ├── models/                         # 数据模型
+│   │   ├── theme_model.dart
+│   │   └── workbench_model.dart
+│   └── repositories/                   # 仓库实现
+│       ├── file_repository.dart
+│       └── theme_repository.dart
+├── domain/
+│   ├── entities/                       # 业务实体
+│   │   ├── file_entity.dart
+│   │   └── theme_entity.dart
+│   ├── repositories/                   # 抽象仓库
+│   │   ├── file_repository.dart
+│   │   └── theme_repository.dart
+│   └── usecases/                       # 业务逻辑
+│       ├── get_theme.dart
+│       └── save_file.dart
+└── presentation/
+    ├── pages/                          # 页面组件
+    │   ├── home/
+    │   │   ├── home_page.dart          # 主页面
+    │   │   └── widgets/
+    │   │       ├── hardware_card.dart        # 硬件状态卡片
+    │   │       ├── calendar_card.dart        # 日历卡片
+    │   │       ├── network_card.dart         # 网络卡片
+    │   │       └── custom_components.dart    # 自定义组件区
+    │   ├── workbench_page.dart
+    │   └── settings_page.dart
+    ├── widgets/                        # 通用组件
+    │   ├── resizable_panel.dart
+    │   └── system_info_card.dart
+    └── providers/                      # 状态管理
+        ├── theme_provider.dart
+        └── workbench_provider.dart

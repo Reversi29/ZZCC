@@ -1,0 +1,29 @@
+{
+    "name": "zzcc",
+    "version": "1.0.0",
+    "dependencies": [
+      {
+        "name": "libtorrent",
+        "version>=": "2.0.9"
+      },
+      {
+        "name": "boost-system",
+        "version>=": "1.82.0"
+      },
+      {
+        "name": "boost-chrono",
+        "version>=": "1.82.0"
+      },
+      {
+        "name": "boost-random",
+        "version>=": "1.82.0"
+      }
+    ],
+    "builtin-baseline": "a6957a0d4b3e22d8d60a0e5a2e8e5c6d8f5b5b5e",
+    "overrides": [
+      {
+        "name": "libtorrent",
+        "version": "2.0.9"
+      }
+    ]
+  }

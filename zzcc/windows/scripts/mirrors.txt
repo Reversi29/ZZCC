@@ -1,0 +1,15 @@
+# GitHub 镜像列表
+# 格式: 每行一个镜像域名
+# 注释以 # 开头
+
+gh.ddlc.top
+github.com.cnpmjs.org
+hub.fastgit.org
+github.com.net
+ghproxy.com
+hub.gitmirror.com
+ghps.cc
+ghproxy.com
+mirror.ghproxy.com
+download.fastgit.org
+gh.api.99988866.xyz
