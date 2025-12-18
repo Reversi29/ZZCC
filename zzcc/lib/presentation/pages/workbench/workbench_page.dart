@@ -610,6 +610,7 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
                                   width: 12,
                                   height: 12,
                                   margin: const EdgeInsets.symmetric(vertical: 6),
+                                  decoration: BoxDecoration(
                                     color: Theme.of(context).primaryColor,
                                     shape: BoxShape.circle,
                                   ),
