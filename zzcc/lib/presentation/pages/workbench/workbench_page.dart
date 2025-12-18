@@ -445,10 +445,10 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
                   break;
               }
             },
-            child: const Padding(
+            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('文件', style: TextStyle(fontSize: 12)),
-            ),
+            )),
           ),
           
           PopupMenuButton<String>(
@@ -481,10 +481,10 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
               ),
             ],
             onSelected: (value) {},
-            child: const Padding(
+            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('编辑', style: TextStyle(fontSize: 12)),
-            ),
+            )),
           ),
           
           PopupMenuButton<String>(
@@ -507,10 +507,10 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
               ),
             ],
             onSelected: (value) {},
-            child: const Padding(
+            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('视图', style: TextStyle(fontSize: 12)),
-            ),
+            )),
           ),
           
           PopupMenuButton<String>(
@@ -528,10 +528,10 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
               ),
             ],
             onSelected: (value) {},
-            child: const Padding(
+            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('运行', style: TextStyle(fontSize: 12)),
-            ),
+            )),
           ),
         ],
       ),
@@ -605,7 +605,16 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
                               notifier.closeFile(index);
                             }
                           },
-                          child: const Icon(Icons.close, size: 16),
+                          child: file.isModified
+                              ? Container(
+                                  width: 12,
+                                  height: 12,
+                                  margin: const EdgeInsets.symmetric(vertical: 6),
+                                    color: Theme.of(context).primaryColor,
+                                    shape: BoxShape.circle,
+                                  ),
+                                )
+                              : const Icon(Icons.close, size: 16),
                         ),
                       ],
                     ),
@@ -671,9 +680,68 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
               ],
             ),
           ),
+          // Bottom status bar showing editor/file metadata
+          Container(
+            height: 28,
+            color: Colors.grey[100],
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                const Icon(Icons.code, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Expanded(child: Text('行: ${provider.editorLine} 列: ${provider.editorColumn}  选中: ${provider.selectionCount}  缩进: ${provider.firstLineIndent}', style: const TextStyle(fontSize: 12))),
+                      const SizedBox(width: 8),
+                      // Encoding selector
+                      PopupMenuButton<String>(
+                        tooltip: '文件编码',
+                        initialValue: provider.encoding,
+                        onSelected: (v) {
+                          ref.read(workbenchProvider.notifier).setEncoding(v);
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(value: 'utf-8', child: Text('utf-8')), 
+                          PopupMenuItem(value: 'gbk', child: Text('gbk')),
+                          PopupMenuItem(value: 'utf-16le', child: Text('utf-16le')),
+                          PopupMenuItem(value: 'utf-16be', child: Text('utf-16be')),
+                          PopupMenuItem(value: 'windows-1252', child: Text('windows-1252')),
+                        ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.language, size: 14),
+                            const SizedBox(width: 4),
+                            Text(provider.encoding, style: const TextStyle(fontSize: 12)),
+                            const Icon(Icons.arrow_drop_down, size: 16),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(provider.activeFileIndex >= 0 && provider.activeFileIndex < provider.openedFiles.length ? '大小: ${_humanFileSize(provider.openedFiles[provider.activeFileIndex].path)}' : '', style: const TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  String _humanFileSize(String path) {
+    try {
+      final file = File(path);
+      if (!file.existsSync()) return '';
+      final len = file.lengthSync();
+        if (len < 1024) return '$len B';
+      if (len < 1024 * 1024) return '${(len / 1024).toStringAsFixed(1)} KB';
+      return '${(len / (1024 * 1024)).toStringAsFixed(2)} MB';
+    } catch (e) {
+      return '';
+    }
   }
 }
 
@@ -705,12 +773,12 @@ class _EditorArea extends StatelessWidget { // 改为 StatelessWidget
       'dart', 'py', 'c', 'cpp', 'h', 'hpp', 'java', 'js', 'ts', 
       'lua', 'go', 'rs', 'php', 'html', 'css', 'xml', 'json', 'yaml', 'yml', 'md'
     ].contains(ext)) {
-      return _CodeEditor(content: file.content, language: _getLanguageFromExtension(ext));
+      return _CodeEditor(content: file.content, language: _getLanguageFromExtension(ext), provider: provider, filePath: file.path);
     } 
     else if (const [
       'hive',
     ].contains(ext)) {
-      return _CodeEditor(content: file.content, language: json);
+      return _CodeEditor(content: file.content, language: json, provider: provider, filePath: file.path);
     }
     else if (const [
       'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'jfif'
@@ -725,7 +793,7 @@ class _EditorArea extends StatelessWidget { // 改为 StatelessWidget
       return _MediaPlayer(filePath: file.path, bytes: file.bytes);
     }
     else if (const ['txt', 'log', 'ini', 'conf', 'cfg', 'env'].contains(ext)) {
-      return _TextEditor(content: file.content);
+      return _TextEditor(content: file.content, provider: provider, filePath: file.path);
     } 
     else if (const ['ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx'].contains(ext)) {
       return _OfficeFilePreview(filePath: file.path, bytes: file.bytes);
@@ -1355,8 +1423,10 @@ class _UnsupportedFilePreview extends StatelessWidget {
 class _CodeEditor extends StatefulWidget {
   final String content;
   final Mode language;
+  final WorkbenchProvider provider;
+  final String filePath;
   
-  const _CodeEditor({required this.content, required this.language});
+  const _CodeEditor({required this.content, required this.language, required this.provider, required this.filePath});
 
   @override
   State<_CodeEditor> createState() => _CodeEditorState();
@@ -1365,18 +1435,61 @@ class _CodeEditor extends StatefulWidget {
 class _CodeEditorState extends State<_CodeEditor> {
   late final CodeController controller;
   final ScrollController _scrollController = ScrollController();
+  bool _internalUpdate = false;
 
   @override
   void initState() {
     super.initState();
     controller = CodeController(
       language: widget.language,
-      text: widget.content
+      text: widget.content,
     );
+
+    // register controller so menu actions (cut/copy/paste) can act on it
+    widget.provider.registerEditorController(widget.filePath, controller);
+
+    controller.addListener(() {
+      if (_internalUpdate) return;
+      final text = controller.text;
+      // push content changes to provider
+      widget.provider.updateFileContent(text);
+
+      // selection and cursor
+      final sel = controller.selection;
+      final offset = sel.baseOffset.clamp(0, text.length);
+      final prefix = text.substring(0, offset);
+      final lines = prefix.split('\n');
+      final line = lines.length;
+      final column = lines.isNotEmpty ? lines.last.length + 1 : 1;
+      final selectionCount = (sel.end - sel.start).abs();
+
+      // first non-empty line indentation
+      final firstLine = text.split('\n').firstWhere((l) => l.trim().isNotEmpty, orElse: () => '');
+      final indentMatch = RegExp(r'^[ \t]*').firstMatch(firstLine);
+      final firstIndent = indentMatch?.group(0) ?? '';
+
+      widget.provider.updateEditorStatus(
+        line: line,
+        column: column,
+        selectionCount: selectionCount,
+        firstLineIndent: firstIndent,
+      );
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _CodeEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.content != controller.text) {
+      _internalUpdate = true;
+      controller.text = widget.content;
+      _internalUpdate = false;
+    }
   }
 
   @override
   void dispose() {
+    widget.provider.unregisterEditorController(widget.filePath);
     controller.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -1404,10 +1517,63 @@ class _CodeEditorState extends State<_CodeEditor> {
   }
 }
 
-class _TextEditor extends StatelessWidget {
+class _TextEditor extends StatefulWidget {
   final String content;
-  
-  const _TextEditor({required this.content});
+  final WorkbenchProvider provider;
+  final String filePath;
+
+  const _TextEditor({required this.content, required this.provider, required this.filePath});
+
+  @override
+  State<_TextEditor> createState() => _TextEditorState();
+}
+
+class _TextEditorState extends State<_TextEditor> {
+  late final TextEditingController _controller;
+  bool _internalUpdate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.content);
+    widget.provider.registerEditorController(widget.filePath, _controller);
+    _controller.addListener(() {
+      if (_internalUpdate) return;
+      final text = _controller.text;
+      widget.provider.updateFileContent(text);
+
+      final sel = _controller.selection;
+      final offset = sel.baseOffset.clamp(0, text.length);
+      final prefix = text.substring(0, offset);
+      final lines = prefix.split('\n');
+      final line = lines.length;
+      final column = lines.isNotEmpty ? lines.last.length + 1 : 1;
+      final selectionCount = (sel.end - sel.start).abs();
+
+      final firstLine = text.split('\n').firstWhere((l) => l.trim().isNotEmpty, orElse: () => '');
+      final indentMatch = RegExp(r'^[ \t]*').firstMatch(firstLine);
+      final firstIndent = indentMatch?.group(0) ?? '';
+
+      widget.provider.updateEditorStatus(line: line, column: column, selectionCount: selectionCount, firstLineIndent: firstIndent);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _TextEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.content != _controller.text) {
+      _internalUpdate = true;
+      _controller.text = widget.content;
+      _internalUpdate = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.provider.unregisterEditorController(widget.filePath);
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1420,7 +1586,7 @@ class _TextEditor extends StatelessWidget {
             ),
             child: IntrinsicHeight(
               child: TextField(
-                controller: TextEditingController(text: content),
+                controller: _controller,
                 maxLines: null,
                 expands: true,
                 decoration: const InputDecoration(

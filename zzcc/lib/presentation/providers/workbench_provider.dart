@@ -1,8 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
+// import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'dart:async';
 import 'package:zzcc/data/models/file_tree_model.dart';
 import 'package:zzcc/core/services/net_service.dart';
@@ -10,6 +11,7 @@ import 'package:get_it/get_it.dart';
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 import 'dart:convert';
+import 'package:charset_converter/charset_converter.dart';
 
 final workbenchProvider = ChangeNotifierProvider((ref) => WorkbenchProvider());
 
@@ -38,11 +40,28 @@ class OpenedFile {
   final String path;
   String content;
   final Uint8List? bytes;
+  bool isModified;
+  /// The content as it was on disk when opened or last saved. Used to
+  /// determine whether the displayed content differs from the file's
+  /// actual content (so cursor movement/selection won't mark modified).
+  String originalContent;
+
+  OpenedFile copyWith({String? content, bool? isModified, String? originalContent}) {
+    return OpenedFile(
+      path: path,
+      content: content ?? this.content,
+      bytes: bytes,
+      isModified: isModified ?? this.isModified,
+      originalContent: originalContent ?? this.originalContent,
+    );
+  }
 
   OpenedFile({
     required this.path,
     required this.content,
     this.bytes,
+    this.isModified = false,
+    this.originalContent = '',
   });
 }
 
@@ -66,6 +85,61 @@ class WorkbenchProvider extends ChangeNotifier {
   Timer? _fileWatcherTimer;
   bool _fileTreeNeedsRefresh = false;
   final ApiService _apiService = GetIt.I<ApiService>();
+  // Editor status
+  int _editorLine = 1;
+  int _editorColumn = 1;
+  int _selectionCount = 0;
+  String _encoding = 'utf-8';
+  String _firstLineIndent = '';
+
+  String get encoding => _encoding;
+
+  int get editorLine => _editorLine;
+  int get editorColumn => _editorColumn;
+  int get selectionCount => _selectionCount;
+  String get firstLineIndent => _firstLineIndent;
+
+  /// Change decoding encoding for current file and attempt to re-decode
+  /// the file content using the selected encoding.
+  Future<void> setEncoding(String enc) async {
+    _encoding = enc;
+    // If there's an active file that's a text file, attempt decode
+    if (_activeFileIndex >= 0 && _activeFileIndex < _openedFiles.length) {
+      final of = _openedFiles[_activeFileIndex];
+      try {
+        final f = File(of.path);
+        if (await f.exists()) {
+          final bytes = await f.readAsBytes();
+          try {
+            final decoded = await CharsetConverter.decode(enc, bytes);
+            of.content = decoded;
+            // Do not change originalContent when re-decoding — originalContent
+            // remains the on-disk/last-saved content in original encoding.
+            // Mark modified only if decoded text differs from originalContent
+            of.isModified = (of.content != of.originalContent);
+            _currentFileContent = of.content;
+            notifyListeners();
+          } catch (e) {
+            // decoding failed, keep existing content
+            debugPrint('Decoding failed for encoding $enc: $e');
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to set encoding: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Update editor cursor/selection and metadata. Called by editor widgets.
+  void updateEditorStatus({required int line, required int column, required int selectionCount, String? encoding, String? firstLineIndent}) {
+    _editorLine = line;
+    _editorColumn = column;
+    _selectionCount = selectionCount;
+    if (encoding != null) _encoding = encoding;
+    if (firstLineIndent != null) _firstLineIndent = firstLineIndent;
+    notifyListeners();
+  }
   
 
   String get currentFilePath => _currentFilePath;
@@ -381,7 +455,9 @@ class WorkbenchProvider extends ChangeNotifier {
   void updateCurrentFileContent(String content) {
     _currentFileContent = content;
     if (_activeFileIndex != -1) {
-      _openedFiles[_activeFileIndex].content = content;
+      final of = _openedFiles[_activeFileIndex];
+      of.content = content;
+      of.isModified = (of.content != of.originalContent);
     }
     notifyListeners();
   }
@@ -434,6 +510,11 @@ class WorkbenchProvider extends ChangeNotifier {
 
   void updateFileContent(String content) {
     _currentFileContent = content;
+    if (_activeFileIndex != -1) {
+      final of = _openedFiles[_activeFileIndex];
+      of.content = content;
+      of.isModified = (of.content != of.originalContent);
+    }
     notifyListeners();
   }
   
@@ -469,7 +550,45 @@ class WorkbenchProvider extends ChangeNotifier {
         'lua', 'go', 'rs', 'php', 'html', 'css', 'xml', 'json', 
         'yaml', 'yml', 'md', 'txt', 'log', 'ini', 'conf', 'cfg', 'env',
       ].contains(ext)) {
-        content = await file.readAsString();
+        try {
+          final fileLength = await file.length();
+          const largeFileThreshold = 2 * 1024 * 1024; // 2 MB
+
+          if (fileLength > largeFileThreshold) {
+            // Create opened file entry immediately and stream content in chunks
+            _openedFiles.add(OpenedFile(
+              path: normalizedPath,
+              content: '',
+              bytes: null,
+              isModified: false,
+            ));
+            setActiveFile(_openedFiles.length - 1);
+
+            final stream = file.openRead().transform(utf8.decoder);
+            final buffer = StringBuffer();
+            int chunkCount = 0;
+            await for (final chunk in stream) {
+              buffer.write(chunk);
+              chunkCount++;
+              // update UI every 20 chunks to avoid too many rebuilds
+              if (chunkCount % 20 == 0) {
+                final idx = _activeFileIndex;
+                if (idx >= 0 && idx < _openedFiles.length) {
+                  _openedFiles[idx] = _openedFiles[idx].copyWith(content: buffer.toString());
+                  _currentFileContent = buffer.toString();
+                  notifyListeners();
+                }
+              }
+            }
+
+            content = buffer.toString();
+          } else {
+            content = await file.readAsString();
+          }
+        } catch (e) {
+          debugPrint('流式读取失败或编码问题，回退到一次性读取: $e');
+          content = await file.readAsString();
+        }
       } 
       // 图片文件类型
       else if (const [
@@ -504,12 +623,21 @@ class WorkbenchProvider extends ChangeNotifier {
         }
       }
       
-      _openedFiles.add(OpenedFile(
-        path: normalizedPath,
-        content: content,
-        bytes: bytes,
-      ));
-      setActiveFile(_openedFiles.length - 1);
+      // If streaming already created the opened file entry, update it; otherwise add.
+      final alreadyIndex = _openedFiles.indexWhere((f) => f.path == normalizedPath);
+      if (alreadyIndex >= 0) {
+        _openedFiles[alreadyIndex] = _openedFiles[alreadyIndex].copyWith(content: content, isModified: false, originalContent: content);
+        setActiveFile(alreadyIndex);
+      } else {
+        _openedFiles.add(OpenedFile(
+          path: normalizedPath,
+          content: content,
+          bytes: bytes,
+          isModified: false,
+          originalContent: content,
+        ));
+        setActiveFile(_openedFiles.length - 1);
+      }
       
       notifyListeners();
     } catch (e) {
@@ -629,6 +757,12 @@ class WorkbenchProvider extends ChangeNotifier {
           const SnackBar(content: Text('文件已保存')),
         );
       }
+      // mark current opened file as saved
+      if (_activeFileIndex >= 0 && _activeFileIndex < _openedFiles.length) {
+        final of = _openedFiles[_activeFileIndex];
+        of.isModified = false;
+        of.originalContent = _currentFileContent;
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -645,6 +779,12 @@ class WorkbenchProvider extends ChangeNotifier {
     try {
       final file = File(path);
       await file.writeAsString(content);
+      // clear modified flag for matching opened file
+      final idx = _openedFiles.indexWhere((f) => f.path == _normalizePath(path));
+      if (idx >= 0) {
+        _openedFiles[idx].isModified = false;
+        _openedFiles[idx].originalContent = content;
+      }
     } catch (e) {
       debugPrint('文件保存失败: $e');
       rethrow;
@@ -768,6 +908,66 @@ class WorkbenchProvider extends ChangeNotifier {
   void saveAudioPosition(String path, Duration position) {
     _audioPositions[path] = position;
     // 不需要通知监听器，因为UI不会立即响应这个变化
+  }
+
+  // Keep references to active editor controllers so menu actions can operate
+  // on the focused editor (cut/copy/paste).
+  final Map<String, TextEditingController> _editorControllers = {};
+
+  void registerEditorController(String path, TextEditingController controller) {
+    _editorControllers[_normalizePath(path)] = controller;
+  }
+
+  void unregisterEditorController(String path) {
+    _editorControllers.remove(_normalizePath(path));
+  }
+
+  Future<void> performEditAction(String action) async {
+    try {
+      final path = _currentFilePath;
+      if (path.isEmpty) return;
+      final key = _normalizePath(path);
+      final controller = _editorControllers[key];
+      if (controller == null) return;
+
+      final sel = controller.selection;
+      final start = sel.start.clamp(0, controller.text.length);
+      final end = sel.end.clamp(0, controller.text.length);
+
+      switch (action) {
+        case 'cut':
+          final selected = controller.text.substring(start, end);
+          await Clipboard.setData(ClipboardData(text: selected));
+          controller.text = controller.text.replaceRange(start, end, '');
+          controller.selection = TextSelection.collapsed(offset: start);
+          break;
+        case 'copy':
+          final selected = controller.text.substring(start, end);
+          await Clipboard.setData(ClipboardData(text: selected));
+          break;
+        case 'paste':
+          final data = await Clipboard.getData('text/plain');
+          final insert = data?.text ?? '';
+          controller.text = controller.text.replaceRange(start, end, insert);
+          controller.selection = TextSelection.collapsed(offset: start + insert.length);
+          break;
+        case 'undo':
+          // Best-effort: if controller supports undo, try calling it.
+          try {
+            final maybe = controller as dynamic;
+            if (maybe.undo != null) maybe.undo();
+          } catch (_) {}
+          break;
+        case 'redo':
+          try {
+            final maybe = controller as dynamic;
+            if (maybe.redo != null) maybe.redo();
+          } catch (_) {}
+          break;
+      }
+    } catch (e) {
+      debugPrint('Edit action failed: $e');
+    }
   }
 
   // 获取音频位置
