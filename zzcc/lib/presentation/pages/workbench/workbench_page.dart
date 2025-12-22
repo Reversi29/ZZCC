@@ -36,6 +36,7 @@ import 'package:zzcc/core/utils/lrc_parser.dart';
 import 'package:zzcc/presentation/pages/workbench/widgets/lyrics_display.dart';
 import 'package:zzcc/presentation/pages/workbench/widgets/audio_visualizer.dart';
 import 'dart:developer';
+import 'package:zzcc/presentation/widgets/hover_popup_menu_button.dart';
 
 bool get isWeb {
   return identical(0, 0.0); // 简单的检测Web平台的方法
@@ -371,167 +372,203 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
       color: Colors.grey[100],
       child: Row(
         children: [
-          PopupMenuButton<String>(
-            offset: const Offset(0, 35),
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                height: 25,
-                value: 'new',
-                child: Text('新建文件', style: TextStyle(fontSize: 12)),
+          HoverPopupMenuButton<String>(
+            menuWidth: 120,
+            childButton: PopupMenuButton<String>(
+              tooltip: '',
+              offset: const Offset(0, 35),
+              popUpAnimationStyle: AnimationStyle(
+                duration: const Duration(milliseconds: 0),
+                curve: Curves.linear,
+                reverseDuration: const Duration(milliseconds: 0),
               ),
-              PopupMenuItem(
-                height: 25,
-                value: 'new_folder',
-                child: Text('新建文件夹', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'open_folder',
-                child: Text('打开文件夹', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'open',
-                child: Text('打开文件', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'save',
-                child: Text('保存', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'save_all',
-                child: Text('全部保存', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'close',
-                child: Text('关闭文件', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'close_folder',
-                child: Text('关闭文件夹', style: TextStyle(fontSize: 12)),
-              ),
-            ],
-            onSelected: (value) async {
-              switch (value) {
-                case 'new':
-                  provider.createNewFile();
-                  break;
-                case 'new_folder':
-                  await provider.createNewDirectory();
-                  break;
-                case 'open_folder':
-                  await provider.openFolder(context);
-                  break;
-                case 'open':
-                  provider.openFile(context);
-                  break;
-                case 'save':
-                  provider.saveCurrentFile(context);
-                  break;
-                case 'save_all':
-                  provider.saveAllFiles(context);
-                  break;
-                case 'close':
-                  if (provider.activeFileIndex != -1) {
-                    provider.closeFile(provider.activeFileIndex);
-                  }
-                  break;
-                case 'close_folder':
-                  provider.closeFolder();
-                  break;
-              }
-            },
-            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('文件', style: TextStyle(fontSize: 12)),
-            )),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  height: 25,
+                  value: 'new',
+                  child: Text('新建文件', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'new_folder',
+                  child: Text('新建文件夹', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'open_folder',
+                  child: Text('打开文件夹', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'open',
+                  child: Text('打开文件', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'save',
+                  child: Text('保存', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'save_all',
+                  child: Text('全部保存', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'close',
+                  child: Text('关闭文件', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'close_folder',
+                  child: Text('关闭文件夹', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+              onSelected: (value) async {
+                switch (value) {
+                  case 'new':
+                    provider.createNewFile();
+                    break;
+                  case 'new_folder':
+                    await provider.createNewDirectory();
+                    break;
+                  case 'open_folder':
+                    await provider.openFolder(context);
+                    break;
+                  case 'open':
+                    provider.openFile(context);
+                    break;
+                  case 'save':
+                    provider.saveCurrentFile(context);
+                    break;
+                  case 'save_all':
+                    provider.saveAllFiles(context);
+                    break;
+                  case 'close':
+                    if (provider.activeFileIndex != -1) {
+                      provider.closeFile(provider.activeFileIndex);
+                    }
+                    break;
+                  case 'close_folder':
+                    provider.closeFolder();
+                    break;
+                }
+              },
+              child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('文件', style: TextStyle(fontSize: 12)),
+              )),
+            ),
           ),
           
-          PopupMenuButton<String>(
-            offset: const Offset(0, 35),
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                height: 25,
-                value: 'undo',
-                child: Text('撤销', style: TextStyle(fontSize: 12)),
+          HoverPopupMenuButton<String>(
+            menuWidth: 120,
+            childButton: PopupMenuButton<String>(
+              tooltip: '',
+              offset: const Offset(0, 35),
+              popUpAnimationStyle: AnimationStyle(
+                duration: const Duration(milliseconds: 0),
+                curve: Curves.linear,
+                reverseDuration: const Duration(milliseconds: 0),
               ),
-              PopupMenuItem(
-                height: 25,
-                value: 'redo',
-                child: Text('重做', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'cut',
-                child: Text('剪切', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'copy',
-                child: Text('复制', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'paste',
-                child: Text('粘贴', style: TextStyle(fontSize: 12)),
-              ),
-            ],
-            onSelected: (value) {},
-            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('编辑', style: TextStyle(fontSize: 12)),
-            )),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  height: 25,
+                  value: 'undo',
+                  child: Text('撤销', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'redo',
+                  child: Text('重做', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'cut',
+                  child: Text('剪切', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'copy',
+                  child: Text('复制', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'paste',
+                  child: Text('粘贴', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+              onSelected: (value) {},
+              child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('编辑', style: TextStyle(fontSize: 12)),
+              )),
+            ),
           ),
           
-          PopupMenuButton<String>(
-            offset: const Offset(0, 35),
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                height: 25,
-                value: 'zoom_in',
-                child: Text('放大', style: TextStyle(fontSize: 12)),
+          HoverPopupMenuButton<String>(
+            menuWidth: 120,
+            childButton: PopupMenuButton<String>(
+              tooltip: '',
+              offset: const Offset(0, 35),
+              popUpAnimationStyle: AnimationStyle(
+                duration: const Duration(milliseconds: 0),
+                curve: Curves.linear,
+                reverseDuration: const Duration(milliseconds: 0),
               ),
-              PopupMenuItem(
-                height: 25,
-                value: 'zoom_out',
-                child: Text('缩小', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'reset_zoom',
-                child: Text('重置缩放', style: TextStyle(fontSize: 12)),
-              ),
-            ],
-            onSelected: (value) {},
-            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('视图', style: TextStyle(fontSize: 12)),
-            )),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  height: 25,
+                  value: 'zoom_in',
+                  child: Text('放大', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'zoom_out',
+                  child: Text('缩小', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'reset_zoom',
+                  child: Text('重置缩放', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+              onSelected: (value) {},
+              child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('视图', style: TextStyle(fontSize: 12)),
+              )),
+            ),
           ),
           
-          PopupMenuButton<String>(
-            offset: const Offset(0, 35),
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                height: 25,
-                value: 'run',
+          HoverPopupMenuButton<String>(
+            menuWidth: 120,
+            childButton: PopupMenuButton<String>(
+              tooltip: '',
+              offset: const Offset(0, 35),
+              popUpAnimationStyle: AnimationStyle(
+                duration: const Duration(milliseconds: 0),
+                curve: Curves.linear,
+                reverseDuration: const Duration(milliseconds: 0),
+              ),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  height: 25,
+                  value: 'run',
+                  child: Text('运行', style: TextStyle(fontSize: 12)),
+                ),
+                PopupMenuItem(
+                  height: 25,
+                  value: 'debug',
+                  child: Text('调试', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+              onSelected: (value) {},
+              child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Text('运行', style: TextStyle(fontSize: 12)),
-              ),
-              PopupMenuItem(
-                height: 25,
-                value: 'debug',
-                child: Text('调试', style: TextStyle(fontSize: 12)),
-              ),
-            ],
-            onSelected: (value) {},
-            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('运行', style: TextStyle(fontSize: 12)),
-            )),
+              )),
+            ),
           ),
         ],
       ),
@@ -696,27 +733,35 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
                       Expanded(child: Text('行: ${provider.editorLine} 列: ${provider.editorColumn}  选中: ${provider.selectionCount}  缩进: ${provider.firstLineIndent}', style: const TextStyle(fontSize: 12))),
                       const SizedBox(width: 8),
                       // Encoding selector
-                      PopupMenuButton<String>(
-                        tooltip: '文件编码',
-                        initialValue: provider.encoding,
-                        onSelected: (v) {
-                          ref.read(workbenchProvider.notifier).setEncoding(v);
-                        },
-                        itemBuilder: (context) => const [
-                          PopupMenuItem(value: 'utf-8', child: Text('utf-8')), 
-                          PopupMenuItem(value: 'gbk', child: Text('gbk')),
-                          PopupMenuItem(value: 'utf-16le', child: Text('utf-16le')),
-                          PopupMenuItem(value: 'utf-16be', child: Text('utf-16be')),
-                          PopupMenuItem(value: 'windows-1252', child: Text('windows-1252')),
-                        ],
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.language, size: 14),
-                            const SizedBox(width: 4),
-                            Text(provider.encoding, style: const TextStyle(fontSize: 12)),
-                            const Icon(Icons.arrow_drop_down, size: 16),
+                      HoverPopupMenuButton<String>(
+                        menuWidth: 120,
+                        childButton: PopupMenuButton<String>(
+                          tooltip: '',
+                          popUpAnimationStyle: AnimationStyle(
+                            duration: const Duration(milliseconds: 0),
+                            curve: Curves.linear,
+                            reverseDuration: const Duration(milliseconds: 0),
+                          ),
+                          initialValue: provider.encoding,
+                          onSelected: (v) {
+                            ref.read(workbenchProvider.notifier).setEncoding(v);
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'utf-8', child: Text('utf-8')), 
+                            PopupMenuItem(value: 'gbk', child: Text('gbk')),
+                            PopupMenuItem(value: 'utf-16le', child: Text('utf-16le')),
+                            PopupMenuItem(value: 'utf-16be', child: Text('utf-16be')),
+                            PopupMenuItem(value: 'windows-1252', child: Text('windows-1252')),
                           ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.language, size: 14),
+                              const SizedBox(width: 4),
+                              Text(provider.encoding, style: const TextStyle(fontSize: 12)),
+                              const Icon(Icons.arrow_drop_down, size: 16),
+                            ],
+                          ),
                         ),
                       ),
                     ],
