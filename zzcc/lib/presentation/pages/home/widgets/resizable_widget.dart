@@ -9,6 +9,8 @@ class ResizableWidget extends StatefulWidget {
   final VoidCallback? onBringToFront;
   final GlobalKey stashBoxKey;
   final bool isStashBoxExpanded;
+  final ValueChanged<Offset>? onPositionChanged;
+  final ValueChanged<Size>? onSizeChanged;
 
   const ResizableWidget({
     super.key,
@@ -20,6 +22,8 @@ class ResizableWidget extends StatefulWidget {
     required this.isStashBoxExpanded,
     this.onStash,
     this.onBringToFront,
+    this.onPositionChanged,
+    this.onSizeChanged,
   });
 
   @override
@@ -37,6 +41,18 @@ class _ResizableWidgetState extends State<ResizableWidget> {
     super.initState();
     _size = widget.size;
     _position = widget.position;
+  }
+
+  @override
+  void didUpdateWidget(covariant ResizableWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Keep internal state in sync if parent updates position/size.
+    if (oldWidget.position != widget.position) {
+      _position = widget.position;
+    }
+    if (oldWidget.size != widget.size) {
+      _size = widget.size;
+    }
   }
 
   bool _checkRectIntersection(Rect rect1, Rect rect2) {
@@ -112,7 +128,7 @@ class _ResizableWidgetState extends State<ResizableWidget> {
                 color: const Color.fromARGB(25, 0, 0, 0),
                 child: Center(
                   child: Icon(
-                    Icons.open_with,
+                    Icons.pan_tool_alt,
                     size: 40,
                     color: Colors.grey[600],
                   ),
@@ -134,6 +150,7 @@ class _ResizableWidgetState extends State<ResizableWidget> {
     setState(() {
       _position = details.globalPosition - _dragStart!;
     });
+    widget.onPositionChanged?.call(_position);
   }
 
   void _handleResizeStart(DragStartDetails details) {
@@ -152,5 +169,6 @@ class _ResizableWidgetState extends State<ResizableWidget> {
       );
       _dragStart = details.globalPosition;
     });
+    widget.onSizeChanged?.call(_size);
   }
 }

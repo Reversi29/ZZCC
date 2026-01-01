@@ -50,8 +50,8 @@ typedef ProgressCallbackDart = void Function(
 abstract class TorrentService {
   Future<void> initialize();
   Future<String> startDownload(String magnetUrl, String savePath);
-  Future<void> pauseDownload(String taskId);
-  Future<void> resumeDownload(String taskId);
+  Future<void> pauseDownload(String taskId, {String? infoHash});
+  Future<void> resumeDownload(String taskId, {String? infoHash});
   // optional infoHash can be provided if the service doesn't have mapping (e.g. after restart)
   Future<void> cancelDownload(String taskId, {String? infoHash});
   Future<void> removeTorrentKeepFiles(String taskId, {String? infoHash});
@@ -430,14 +430,18 @@ class TorrentServiceImpl implements TorrentService {
   }
 
   @override
-  Future<void> pauseDownload(String taskId) async {
+  Future<void> pauseDownload(String taskId, {String? infoHash}) async {
     try {
-      final infoHash = _taskIdToInfoHash[taskId];
-      if (infoHash == null) {
+      String? hash = infoHash ?? _taskIdToInfoHash[taskId];
+      hash = _normalizeInfoHash(hash) ?? hash;
+      if (hash == null) {
         throw Exception('InfoHash not found for task $taskId');
       }
-      
-      final infoHashPtr = infoHash.toNativeUtf8();
+
+      // Ensure mapping cached for later resume/cancel
+      _taskIdToInfoHash[taskId] = hash;
+
+      final infoHashPtr = hash.toNativeUtf8();
       final result = _pauseTorrent(_sessionPtr!, infoHashPtr);
       malloc.free(infoHashPtr);
       
@@ -451,14 +455,17 @@ class TorrentServiceImpl implements TorrentService {
   }
 
   @override
-  Future<void> resumeDownload(String taskId) async {
+  Future<void> resumeDownload(String taskId, {String? infoHash}) async {
     try {
-      final infoHash = _taskIdToInfoHash[taskId];
-      if (infoHash == null) {
+      String? hash = infoHash ?? _taskIdToInfoHash[taskId];
+      hash = _normalizeInfoHash(hash) ?? hash;
+      if (hash == null) {
         throw Exception('InfoHash not found for task $taskId');
       }
-      
-      final infoHashPtr = infoHash.toNativeUtf8();
+
+      _taskIdToInfoHash[taskId] = hash;
+
+      final infoHashPtr = hash.toNativeUtf8();
       final result = _resumeTorrent(_sessionPtr!, infoHashPtr);
       malloc.free(infoHashPtr);
       

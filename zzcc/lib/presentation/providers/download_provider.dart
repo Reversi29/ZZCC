@@ -4,6 +4,7 @@ import 'package:zzcc/core/di/service_locator.dart';
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/services/torrent_metadata_service.dart';
 import 'package:zzcc/core/services/torrent_service.dart';
+import 'package:zzcc/core/services/logger_service.dart';
 
 class DownloadState {
   final String? savePath;
@@ -173,29 +174,78 @@ class DownloadProvider extends StateNotifier<DownloadState> {
   }
 
   void pauseTorrent(String id) {
-    state = state.copyWith(
-      torrents: state.torrents.map((t) {
-        if (t.id == id) {
-          final updated = t.copyWith(isPaused: true);
-          try { _storage.updateTorrentTask(id, updated.toMap()); } catch (_) {}
-          return updated;
-        }
-        return t;
-      }).toList(),
-    );
+    _pauseOrResume(id, pause: true);
   }
 
   void resumeTorrent(String id) {
+    _pauseOrResume(id, pause: false);
+  }
+
+  Future<void> _pauseOrResume(String id, {required bool pause}) async {
     state = state.copyWith(
       torrents: state.torrents.map((t) {
         if (t.id == id) {
-          final updated = t.copyWith(isPaused: false);
+          final updated = t.copyWith(isPaused: pause);
           try { _storage.updateTorrentTask(id, updated.toMap()); } catch (_) {}
           return updated;
         }
         return t;
       }).toList(),
     );
+
+    try {
+      final service = getIt<TorrentService>();
+      final torrent = state.torrents.firstWhere((t) => t.id == id, orElse: () => throw Exception('Torrent not found'));
+      final infoHash = await _ensureInfoHash(id, torrent);
+      if (infoHash == null) {
+        throw Exception('InfoHash unavailable for task $id');
+      }
+      if (pause) {
+        await service.pauseDownload(id, infoHash: infoHash);
+      } else {
+        await service.resumeDownload(id, infoHash: infoHash);
+      }
+    } catch (e) {
+      // Log but keep state updated; consider surfacing to UI if needed
+      try {
+        getIt<LoggerService>().error('Failed to ${pause ? 'pause' : 'resume'} download $id: $e');
+      } catch (_) {}
+    }
+  }
+
+  Future<String?> _ensureInfoHash(String id, TorrentInfo torrent) async {
+    final service = getIt<TorrentService>();
+    // Try to derive from magnet or torrent path
+    final magnet = torrent.magnetUrl;
+    String? derived;
+    if (magnet != null && magnet.isNotEmpty) {
+      derived = _extractInfoHashFromMagnet(magnet);
+      // If path to .torrent file, try to compute hash
+      if ((derived == null || derived.isEmpty) && magnet.toLowerCase().endsWith('.torrent')) {
+        try {
+          final meta = getIt<TorrentMetadataService>();
+          derived = await meta.computeInfoHashFromFile(magnet);
+        } catch (_) {}
+      }
+    }
+
+    if (derived != null && derived.isNotEmpty) {
+      try { service.registerTaskInfoHash(id, derived); } catch (_) {}
+      return derived;
+    }
+    return null;
+  }
+
+  String? _extractInfoHashFromMagnet(String magnet) {
+    try {
+      final params = magnet.split('?').last.split('&');
+      for (final p in params) {
+        if (p.startsWith('xt=urn:btih:')) {
+          return p.substring(12);
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> setIncompletePath(String path) async {
