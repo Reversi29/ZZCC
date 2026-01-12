@@ -10,6 +10,7 @@ import 'package:zzcc/presentation/pages/message/message_screen.dart';
 import 'package:zzcc/presentation/pages/workbench/workbench_page.dart';
 import 'package:zzcc/presentation/pages/shared/shared_page.dart';
 import 'package:zzcc/presentation/pages/square/square_page.dart';
+import 'package:zzcc/presentation/pages/test/test_page.dart';
 import 'package:zzcc/presentation/pages/settings/settings_page.dart';
 import 'package:zzcc/presentation/pages/profile/profile_page.dart';
 import 'package:zzcc/presentation/providers/theme_provider.dart';
@@ -135,6 +136,7 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
       RouteNames.workbench,
       RouteNames.shared,
       RouteNames.square,
+      RouteNames.test,
       RouteNames.settings,
       RouteNames.profile,
     ];
@@ -190,6 +192,7 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
           const WorkbenchPage(),
           const SharedPage(),
           const SquarePage(),
+          const TestPage(),
           SettingsPage(presetThemes: widget.presetThemes),
           ProfilePage(onAvatarChanged: (file) {}),
         ],

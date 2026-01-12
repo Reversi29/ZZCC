@@ -24,6 +24,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get squareMenuItem => '广场';
 
   @override
+  String get testMenuItem => '测试';
+
+  @override
   String get settingsMenuItem => '设置';
 
   @override
@@ -151,6 +154,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get squareMenuItem => '广场';
 
   @override
+  String get testMenuItem => '测试';
+
+  @override
   String get settingsMenuItem => '设置';
 
   @override
@@ -276,6 +282,9 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get squareMenuItem => '廣場';
+
+  @override
+  String get testMenuItem => '測試';
 
   @override
   String get settingsMenuItem => '設定';

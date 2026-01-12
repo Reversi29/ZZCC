@@ -1,0 +1,53 @@
+# Ordered installation sequence for Ubuntu 24.04
+# Each item:
+# - name: one of [docker_repo, docker, docker_compose, kernel, swap, kubernetes_repo, kubernetes]
+# - config: step-specific options (optional)
+# - command: post-install shell command run after this step (optional)
+# - uninstall_command: post-uninstall shell command run after uninstalling this step (optional)
+sequence:
+  - name: docker
+    description: "Configure Docker apt repo and install Docker Engine/CLI/containerd/buildx/compose"
+    install_function: install_docker
+    uninstall_function: uninstall_docker
+    config:
+      docker_gpg_urls:
+        - https://mirrors.tencentyun.com/docker-ce/linux/ubuntu/gpg
+      docker_repo_urls:
+        - https://mirrors.tencentyun.com/docker-ce/linux/ubuntu
+      registry_mirrors:
+        - https://mirror.ccs.tencentyun.com
+        - https://docker.m.daocloud.io
+        - https://hub-mirror.c.163.com
+    # command: docker info
+
+  - name: docker_compose
+    description: "Ensure Docker Compose (v2 plugin) is installed and available"
+    install_function: install_docker_compose
+    uninstall_function: uninstall_docker_compose
+    config:
+      method: plugin
+    # command: docker compose version
+
+  - name: kernel
+    description: "Load overlay and br_netfilter modules; set required sysctls"
+    install_function: install_kernel
+    uninstall_function: uninstall_kernel
+    # command: sysctl net.ipv4.ip_forward
+
+  - name: swap
+    description: "Disable swap and comment out fstab entries"
+    install_function: install_swap
+    uninstall_function: uninstall_swap
+    config:
+      disable: true
+    # command: swapon --show
+
+  - name: kubernetes
+    description: "Configure Kubernetes repo and install kubelet/kubeadm/kubectl; enable kubelet"
+    install_function: install_kubernetes
+    uninstall_function: uninstall_kubernetes
+    config:
+      k8s_version: "1.30"
+      k8s_gpg_urls:
+        - https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+    # command: systemctl status kubelet --no-pager

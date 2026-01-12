@@ -24,6 +24,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get squareMenuItem => 'Square';
 
   @override
+  String get testMenuItem => 'Test';
+
+  @override
   String get settingsMenuItem => 'Settings';
 
   @override

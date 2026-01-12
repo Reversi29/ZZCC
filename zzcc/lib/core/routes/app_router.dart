@@ -67,6 +67,13 @@ final appRouter = GoRouter(
           ),
         ),
         GoRoute(
+          path: '${RouteNames.root}${RouteNames.test}',
+          name: RouteNames.test,
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: SizedBox.shrink(),
+          ),
+        ),
+        GoRoute(
           path: '${RouteNames.root}${RouteNames.settings}',
           name: RouteNames.settings,
           pageBuilder: (context, state) => const NoTransitionPage(

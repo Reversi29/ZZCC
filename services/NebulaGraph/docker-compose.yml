@@ -1,0 +1,229 @@
+name: nebulagraph-stack
+
+services:
+  # NebulaGraph 元数据服务
+  nebula-metad:
+    image: vesoft/nebula-metad:${NEBULA_VERSION:-latest}
+    container_name: nebula-metad
+    env_file:
+      - .env
+    environment:
+      USER: root
+      TZ: "${TZ}"
+    ports:
+      - "9559:9559"
+      - 19559
+      - 19560
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - ./data/meta:/data/meta
+      - ./logs/meta:/logs
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --port=9559
+      - --ws_ip=nebula-metad
+      - --ws_http_port=19559
+      - --local_ip=nebula-metad
+      - --data_path=/data/meta
+      - --minloglevel=0
+      - --v=0
+      - --log_dir=/logs
+    networks:
+      -  nebula-net
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://nebula-metad:19559/status || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # NebulaGraph 存储服务
+  nebula-storaged:
+    image: vesoft/nebula-storaged:${NEBULA_VERSION:-latest}
+    container_name: nebula-storaged
+    env_file:
+      - .env
+    environment:
+      USER: root
+      TZ: "${TZ}"
+    ports:
+      - "9779:9779"
+      - 19779
+      - 19780
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - ./data/storage:/data/storage
+      - ./logs/storage:/logs
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-storaged
+      - --port=9779
+      - --ws_ip=nebula-storaged
+      - --ws_http_port=19779
+      - --data_path=/data/storage
+      - --minloglevel=0
+      - --v=0
+      - --log_dir=/logs
+    networks:
+      - nebula-net
+    restart: on-failure
+    depends_on:
+      - nebula-metad
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://nebula-storaged:19779/status || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # NebulaGraph 查询引擎
+  nebula-graphd:
+    image: vesoft/nebula-graphd:${NEBULA_VERSION:-latest}
+    container_name: nebula-graphd
+    env_file:
+      - .env
+    environment:
+      USER: root
+      TZ: "${TZ}"
+    ports:
+      - "9669:9669"
+      - 19669
+      - 19670
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - ./logs/graph:/logs
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-graphd
+      - --port=9669
+      - --ws_ip=nebula-graphd
+      - --ws_http_port=19669
+      - --minloglevel=0
+      - --v=0
+      - --log_dir=/logs
+    networks:
+      - nebula-net
+    restart: on-failure
+    depends_on:
+      - nebula-metad    # 改为数组格式
+      - nebula-storaged # 改为数组格式
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://nebula-graphd:19669/status || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # NebulaGraph 控制台
+  nebula-console:
+    image: vesoft/nebula-console:v3.8.0
+    container_name: nebula-console
+    stdin_open: true
+    tty: true
+    networks:
+      - nebula-net
+    depends_on:
+      - nebula-graphd  # 改为数组格式
+
+  # NebulaGraph 数据导入器
+  nebula-importer:
+    image: vesoft/nebula-importer:${NEBULA_IMPORTER_VERSION:-v3.6.0}
+    container_name: nebula-importer
+    env_file:
+      - .env
+    environment:
+      USER: root
+      TZ: "${TZ}"
+    volumes:
+      - ./importer:/config
+    working_dir: /config
+    command:
+      - --config
+      - /config/config.yaml
+    networks:
+      - nebula-net
+    depends_on:
+      - nebula-graphd
+    restart: "no"
+
+  nebula-studio:
+    image: vesoft/nebula-graph-studio:${NEBULA_STUDIO_VERSION:-latest}
+    container_name: nebula-studio
+    restart: unless-stopped
+    # depends_on:
+    #   - nebula-graphd
+    ports:
+      - "7001:7001"   # Nebula Studio web UI
+    environment:
+      - STUDIO_SERVER_PORT=7001
+    networks:
+      - nebula-net
+
+  # # 知识图谱API服务
+  # api:
+  #   build: ./backend
+  #   container_name: kg-api
+  #   ports:
+  #     - "8000:8000"
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - NEBULA_HOST=${NEBULA_HOST:-nebula-graphd}
+  #     - NEBULA_PORT=${NEBULA_PORT:-9669}
+  #   networks:
+  #     - nebula-net
+  #   depends_on:
+  #     - nebula-graphd  # 改为数组格式
+
+  # # 前端服务
+  # frontend:
+  #   build: ./frontend
+  #   container_name: kg-frontend
+  #   ports:
+  #     - "3009:80"
+  #   networks:
+  #     - nebula-net
+  #   depends_on:
+  #     - api
+  #   healthcheck:
+  #     test: [ "CMD-SHELL", "curl -sf http://localhost || exit 0" ]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 20s
+
+  # # 监控服务
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #   networks:
+  #     - nebula-net
+
+  # # 添加Grafana
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - ./monitoring/grafana:/var/lib/grafana
+  #   user: "472:472"
+  #   networks:
+  #     - nebula-net
+  #   restart: unless-stopped
+
+networks:
+  nebula-net:
+    driver: bridge

@@ -1,0 +1,35 @@
+name: matrix-stack
+
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: matrix-synapse
+    restart: unless-stopped
+    # First run: generate config (see README). Normal run uses default entrypoint.
+    environment:
+      - SYNAPSE_SERVER_NAME=${SERVER_NAME}
+      - SYNAPSE_REPORT_STATS=${REPORT_STATS:-no}
+      - UID=${SYNAPSE_UID:-991}
+      - GID=${SYNAPSE_GID:-991}
+    volumes:
+      - ./synapse:/data
+    ports:
+      - "8008:8008"    # Client-Server (HTTP). Put behind reverse proxy with TLS in production.
+      # - "8448:8448"  # Federation (TLS). Typically terminated by reverse proxy.
+
+  element:
+    image: vectorim/element-web:latest
+    container_name: matrix-element
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./element/config.json:/app/config.json:ro
+
+# For a simple start, Synapse defaults to SQLite in /data. For production,
+# switch to PostgreSQL and update homeserver.yaml accordingly.
+# See README for Postgres notes and initial config generation.
+
+volumes: {}

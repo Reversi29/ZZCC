@@ -10,6 +10,7 @@ class RouteNames {
   static const String messages = 'messages';
   static const String shared = 'shared';
   static const String square = 'square';
+  static const String test = 'test';
   static const String login = 'login';
   static const String register = 'register';
   

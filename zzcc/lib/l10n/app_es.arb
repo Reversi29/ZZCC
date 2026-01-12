@@ -5,6 +5,7 @@
   "workbenchMenuItem": "Taller",
   "sharedMenuItem": "Compartido",
   "squareMenuItem": "Plaza",
+  "testMenuItem": "Pruebas",
   "settingsMenuItem": "Configuración",
   "settingsTitle": "Configuración",
   "languageSetting": "Idioma",

@@ -132,6 +132,12 @@ abstract class AppLocalizations {
   /// **'Square'**
   String get squareMenuItem;
 
+  /// Test menu item (debug only)
+  ///
+  /// In en, this message translates to:
+  /// **'Test'**
+  String get testMenuItem;
+
   /// Settings menu item
   ///
   /// In en, this message translates to:

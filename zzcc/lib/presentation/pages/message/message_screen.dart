@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_chat_ui/flutter_chat_ui.dart';
+import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import 'package:zzcc/data/models/message_model.dart';
 import 'package:zzcc/presentation/widgets/alphabet_index.dart';
 
@@ -14,6 +16,9 @@ class _MessageScreenState extends State<MessageScreen> with SingleTickerProvider
   bool _showContacts = true;
   double _sidebarWidth = 250;
   final TextEditingController _controller = TextEditingController();
+  final types.User _me = const types.User(id: 'me', firstName: 'Me');
+  final types.User _peer = const types.User(id: 'peer', firstName: 'Peer');
+  final List<types.Message> _chatMessages = [];
   int _activeTabIndex = 0; // 0: 消息, 1: 联系人, 2: 群组
   String _searchQuery = '';
   List<ContactGroup> contactGroups = [
@@ -31,16 +36,36 @@ class _MessageScreenState extends State<MessageScreen> with SingleTickerProvider
     ]),
   ];
   
-  final List<Message> messages = [
-    const Message(text: "你好！今天有空吗？", isMe: false, time: "10:30 AM"),
-    const Message(text: "有的，有什么事吗？", isMe: true, time: "10:32 AM"),
-    const Message(text: "想讨论一下项目进度", isMe: false, time: "10:33 AM"),
-    const Message(text: "好的，什么时候见面？", isMe: true, time: "10:35 AM"),
-  ];
-
   @override
   void initState() {
     super.initState();
+    // seed demo messages using defined users
+    _chatMessages.addAll([
+      types.TextMessage(
+        id: '1',
+        author: _peer,
+        text: '你好！今天有空吗？',
+        createdAt: DateTime.now().subtract(const Duration(minutes: 5)).millisecondsSinceEpoch,
+      ),
+      types.TextMessage(
+        id: '2',
+        author: _me,
+        text: '有的，有什么事吗？',
+        createdAt: DateTime.now().subtract(const Duration(minutes: 4)).millisecondsSinceEpoch,
+      ),
+      types.TextMessage(
+        id: '3',
+        author: _peer,
+        text: '想讨论一下项目进度',
+        createdAt: DateTime.now().subtract(const Duration(minutes: 3)).millisecondsSinceEpoch,
+      ),
+      types.TextMessage(
+        id: '4',
+        author: _me,
+        text: '好的，什么时候见面？',
+        createdAt: DateTime.now().subtract(const Duration(minutes: 2)).millisecondsSinceEpoch,
+      ),
+    ]);
     // 初始化 TabController
     _tabController = TabController(
       length: 3, // 三个标签页
@@ -153,23 +178,12 @@ class _MessageScreenState extends State<MessageScreen> with SingleTickerProvider
                 ),
               ],
               Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: ListView.builder(
-                        reverse: true,
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) {
-                          final message = messages[index];
-                          return MessageBubble(
-                            message: message,
-                            isMe: message.isMe,
-                          );
-                        },
-                      ),
-                    ),
-                    _buildInputField(),
-                  ],
+                child: Chat(
+                  messages: _chatMessages,
+                  user: _me,
+                  onSendPressed: _handleSendPressed,
+                  showUserAvatars: true,
+                  showUserNames: true,
                 ),
               ),
             ],
@@ -284,104 +298,17 @@ class _MessageScreenState extends State<MessageScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildInputField() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: Colors.grey.shade300)),
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () {},
-          ),
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              decoration: const InputDecoration(
-                hintText: "输入消息...",
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send),
-            onPressed: () {
-              if (_controller.text.isNotEmpty) {
-                setState(() {
-                  messages.insert(0, Message(
-                    text: _controller.text,
-                    isMe: true,
-                    time: "刚刚"
-                  ));
-                  _controller.clear();
-                });
-              }
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class Message {
-  final String text;
-  final bool isMe;
-  final String time;
-
-  const Message({
-    required this.text,
-    required this.isMe,
-    required this.time,
-  });
-}
-
-class MessageBubble extends StatelessWidget {
-  final Message message;
-  final bool isMe;
-
-  const MessageBubble({
-    super.key,
-    required this.message,
-    required this.isMe,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.7,
+  void _handleSendPressed(types.PartialText message) {
+    setState(() {
+      _chatMessages.insert(
+        0,
+        types.TextMessage(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          author: _me,
+          text: message.text,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
         ),
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isMe ? Theme.of(context).primaryColor : Colors.grey[200],
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                color: isMe ? Colors.white : Colors.black,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              message.time,
-              style: TextStyle(
-                color: isMe ? Colors.white70 : Colors.grey[600],
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+      );
+    });
   }
 }

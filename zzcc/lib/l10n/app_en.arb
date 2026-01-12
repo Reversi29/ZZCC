@@ -10,6 +10,8 @@
   "@sharedMenuItem": {"description": "Shared menu item"},
   "squareMenuItem": "Square",
   "@squareMenuItem": {"description": "Square menu item"},
+  "testMenuItem": "Test",
+  "@testMenuItem": {"description": "Test menu item (debug only)"},
   "settingsMenuItem": "Settings",
   "@settingsMenuItem": {"description": "Settings menu item"},
   "settingsTitle": "Settings",

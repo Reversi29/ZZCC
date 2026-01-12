@@ -10,6 +10,8 @@
   "@sharedMenuItem": {"description": "共享菜单项"},
   "squareMenuItem": "广场",
   "@squareMenuItem": {"description": "广场菜单项"},
+  "testMenuItem": "测试",
+  "@testMenuItem": {"description": "测试菜单项（仅调试）"},
   "settingsMenuItem": "设置",
   "@settingsMenuItem": {"description": "设置菜单项"},
   "settingsTitle": "设置",
