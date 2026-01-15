@@ -1,0 +1,9 @@
+services:
+  nebula-interface:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nebula-interface
+    restart: on-failure
+    ports:
+      - "8001:8000"
