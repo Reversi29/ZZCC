@@ -1,6 +1,10 @@
+import json
 import logging
+import time
+from pathlib import Path
 from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from modules.nebula_client import NebulaClient
@@ -57,6 +61,22 @@ class DeployRequest(BaseModel):
     vid_type: str = Field("FIXED_STRING(64)", description="VID type, e.g. FIXED_STRING(64) or INT64")
     tags: list[TagDef] = Field(default_factory=list, description="Tags (vertex types) to create")
     edges: list[EdgeDef] = Field(default_factory=list, description="Edge types to create")
+
+
+class QueryResponse(BaseModel):
+    message: str
+    rows: list[dict] = Field(default_factory=list)
+
+
+DEFAULT_DEPLOY_FILE = Path(__file__).with_name("deploy_defaults.json")
+
+
+def load_default_deploy() -> DeployRequest:
+    if not DEFAULT_DEPLOY_FILE.exists():
+        raise RuntimeError(f"Default deploy file not found: {DEFAULT_DEPLOY_FILE}")
+    with DEFAULT_DEPLOY_FILE.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    return DeployRequest.parse_obj(data)
 
 
 def get_session():
@@ -135,10 +155,43 @@ def drop_space(name: str, sess=Depends(get_session_with_override)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/query", response_model=QueryResponse)
+def run_query(q: str, space: str, sess=Depends(get_session_with_override)):
+    try:
+        resp = client.query(sess, space=space, nql=q)
+        rows = []
+        if resp and resp.rows():
+            col_names = resp.keys()
+            for row in resp.rows():
+                values = row.as_values()
+                row_obj = {}
+                for idx, col in enumerate(col_names):
+                    # Convert Nebula Value to python primitive/string
+                    val = values[idx]
+                    if val.is_bool():
+                        row_obj[col] = val.as_bool()
+                    elif val.is_int():
+                        row_obj[col] = val.as_int()
+                    elif val.is_double():
+                        row_obj[col] = val.as_double()
+                    elif val.is_string():
+                        row_obj[col] = val.as_string()
+                    else:
+                        row_obj[col] = str(val)
+                rows.append(row_obj)
+
+        return QueryResponse(message="ok", rows=rows)
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/deploy")
-def deploy(payload: DeployRequest, sess=Depends(get_session_with_override)):
+def deploy(payload: Optional[DeployRequest] = None, sess=Depends(get_session_with_override)):
     steps = []
     try:
+        if payload is None:
+            payload = load_default_deploy()
+
         client.create_space(
             sess,
             name=payload.space,
@@ -147,6 +200,19 @@ def deploy(payload: DeployRequest, sess=Depends(get_session_with_override)):
             replica_factor=payload.replica_factor,
         )
         steps.append(f"space:{payload.space}")
+
+        # Wait until space is visible to graphd/metad before issuing USE/DDL
+        timeout_sec = 60
+        interval_sec = 1
+        start = time.time()
+        while True:
+            spaces = client.list_spaces(sess)
+            if payload.space in spaces:
+                break
+            if time.time() - start > timeout_sec:
+                raise RuntimeError(f"Space '{payload.space}' not ready within {timeout_sec}s")
+            time.sleep(interval_sec)
+        steps.append(f"space-ready:{payload.space}")
 
         for tag in payload.tags:
             cols = [(prop.name, prop.type) for prop in tag.properties]
