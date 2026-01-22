@@ -106,9 +106,13 @@ class NebulaClient:
         resp = self._run(session, "SHOW SPACES;")
         spaces = {}
         for row in resp.rows():
-            values = row.as_values()
+            values = row.values
             if values:
-                name = values[0].as_string()
+                v = values[0]
+                try:
+                    name = v.as_string()
+                except AttributeError:
+                    name = str(v)
                 spaces[name] = {"name": name}
         return spaces
 
@@ -122,17 +126,62 @@ class NebulaClient:
         stmt = f"USE `{space}`; CREATE EDGE IF NOT EXISTS `{edge}`({cols});"
         self._run(session, stmt)
 
+    def drop_tag(self, session, space: str, tag: str):
+        stmt = f"USE `{space}`; DROP TAG IF EXISTS `{tag}`;"
+        self._run(session, stmt)
+
+    def drop_edge_type(self, session, space: str, edge: str):
+        stmt = f"USE `{space}`; DROP EDGE IF EXISTS `{edge}`;"
+        self._run(session, stmt)
+
+    def alter_tag_add(self, session, space: str, tag: str, columns: Iterable[Tuple[str, str]]):
+        cols = ", ".join(f"`{name}` {ctype}" for name, ctype in columns)
+        stmt = f"USE `{space}`; ALTER TAG `{tag}` ADD ({cols});"
+        self._run(session, stmt)
+
+    def alter_edge_add(self, session, space: str, edge: str, columns: Iterable[Tuple[str, str]]):
+        cols = ", ".join(f"`{name}` {ctype}" for name, ctype in columns)
+        stmt = f"USE `{space}`; ALTER EDGE `{edge}` ADD ({cols});"
+        self._run(session, stmt)
+
     def insert_vertex(self, session, space: str, vid: str, tag: str, props: Dict[str, object]):
-        cols = ", ".join(props.keys())
+        cols = ", ".join(f"`{k}`" for k in props.keys())
         vals = ", ".join(self._format_value(v) for v in props.values())
         stmt = f"USE `{space}`; INSERT VERTEX `{tag}`({cols}) VALUES \"{vid}\":({vals});"
         self._run(session, stmt)
 
+    def update_vertex(self, session, space: str, vid: str, tag: str, props: Dict[str, object]):
+        sets = ", ".join(f"`{k}`={self._format_value(v)}" for k, v in props.items())
+        stmt = f"USE `{space}`; UPDATE VERTEX ON `{tag}` \"{vid}\" SET {sets};"
+        self._run(session, stmt)
+
+    def delete_vertex(self, session, space: str, vid: str, with_edges: bool = True):
+        stmt = f"USE `{space}`; DELETE VERTEX \"{vid}\"{' WITH EDGE' if with_edges else ''};"
+        self._run(session, stmt)
+
+    def fetch_vertex(self, session, space: str, vid: str, tag: Optional[str] = None):
+        on = f"`{tag}`" if tag else "*"
+        stmt = f"USE `{space}`; FETCH PROP ON {on} \"{vid}\";"
+        return self._run(session, stmt)
+
     def insert_edge(self, session, space: str, src: str, dst: str, edge: str, props: Dict[str, object]):
-        cols = ", ".join(props.keys())
+        cols = ", ".join(f"`{k}`" for k in props.keys())
         vals = ", ".join(self._format_value(v) for v in props.values())
         stmt = f"USE `{space}`; INSERT EDGE `{edge}`({cols}) VALUES \"{src}\"->\"{dst}\":({vals});"
         self._run(session, stmt)
+
+    def update_edge(self, session, space: str, src: str, dst: str, edge: str, props: Dict[str, object]):
+        sets = ", ".join(f"`{k}`={self._format_value(v)}" for k, v in props.items())
+        stmt = f"USE `{space}`; UPDATE EDGE ON `{edge}` \"{src}\"->\"{dst}\" SET {sets};"
+        self._run(session, stmt)
+
+    def delete_edge(self, session, space: str, src: str, dst: str, edge: str):
+        stmt = f"USE `{space}`; DELETE EDGE `{edge}` \"{src}\"->\"{dst}\";"
+        self._run(session, stmt)
+
+    def fetch_edge(self, session, space: str, src: str, dst: str, edge: str):
+        stmt = f"USE `{space}`; FETCH PROP ON `{edge}` \"{src}\"->\"{dst}\";"
+        return self._run(session, stmt)
 
     def query(self, session, space: str, nql: str):
         stmt = f"USE `{space}`; {nql}"

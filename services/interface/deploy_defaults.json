@@ -1,39 +1,41 @@
 {
-  "space": "大贤者",
+  "space": "Sage",
   "partition_num": 10,
   "replica_factor": 1,
   "vid_type": "FIXED_STRING(64)",
   "tags": [
     {
-      "name": "根级标签",
+      "name": "root_tag",
       "properties": [
-        {"name": "描述", "type": "string"},
-        {"name": "置信度", "type": "int", "default": 100000, "comment": "置信度百分比, 范围0-100000，表示0%-100%"},
-        {"name": "创建时间", "type": "timestamp"},
-        {"name": "更新时间", "type": "timestamp"},
-        {"name": "创建者", "type": "string"},
-        {"name": "修改者", "type": "string"},
-        {"name": "原作者", "type": "string"},
-        {"name": "备注", "type": "string"},
-        {"name": "版本", "type": "string"},
-        {"name": "审核状态", "type": "string"}
+        {"name": "name", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "confidence", "type": "int", "default": 100000, "comment": "0-100000 = 0%-100%"},
+        {"name": "created_at", "type": "timestamp"},
+        {"name": "updated_at", "type": "timestamp"},
+        {"name": "created_by", "type": "string"},
+        {"name": "updated_by", "type": "string"},
+        {"name": "owner", "type": "string"},
+        {"name": "remark", "type": "string"},
+        {"name": "version", "type": "string"},
+        {"name": "status", "type": "string"}
       ]
     }
   ],
   "edges": [
     {
-      "name": "根级关系",
+      "name": "root_edge",
       "properties": [
-        {"name": "描述", "type": "string"},
-        {"name": "置信度", "type": "int", "default": 100000, "comment": "置信度百分比, 范围0-100000，表示0%-100%"},
-        {"name": "创建时间", "type": "timestamp"},
-        {"name": "更新时间", "type": "timestamp"},
-        {"name": "创建者", "type": "string"},
-        {"name": "修改者", "type": "string"},
-        {"name": "原作者", "type": "string"},
-        {"name": "备注", "type": "string"},
-        {"name": "版本", "type": "string"},
-        {"name": "审核状态", "type": "string"}
+        {"name": "name", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "confidence", "type": "int", "default": 100000, "comment": "0-100000 = 0%-100%"},
+        {"name": "created_at", "type": "timestamp"},
+        {"name": "updated_at", "type": "timestamp"},
+        {"name": "created_by", "type": "string"},
+        {"name": "updated_by", "type": "string"},
+        {"name": "owner", "type": "string"},
+        {"name": "remark", "type": "string"},
+        {"name": "version", "type": "string"},
+        {"name": "status", "type": "string"}
       ]
     }
   ]

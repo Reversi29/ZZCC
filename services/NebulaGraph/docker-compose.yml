@@ -371,8 +371,8 @@ services:
     image: vesoft/nebula-graph-studio:${NEBULA_STUDIO_VERSION:-latest}
     container_name: nebula-studio
     restart: unless-stopped
-    # depends_on:
-    #   - nebula-graphd
+    depends_on:
+      - graphd
     ports:
       - "7001:7001"   # Nebula Studio web UI
     environment:
