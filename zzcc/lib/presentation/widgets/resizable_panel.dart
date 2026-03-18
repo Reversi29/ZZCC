@@ -92,7 +92,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
             children: [
               GestureDetector(
                 onTap: widget.isLoggedIn
-                    ? () => widget.onIndexChanged(6)
+                    ? () => widget.onIndexChanged(0)
                     : widget.onLoginPressed,
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
@@ -251,7 +251,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
               onTap: () {
-                widget.onIndexChanged(5);
+                widget.onIndexChanged(7);
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -390,19 +390,19 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                       _buildUserAvatar(),
                       const SizedBox(height: 20),
                       _buildMenuButton(
-                          0, Icons.home, appLocalizations.homeMenuItem),
+                          1, Icons.home, appLocalizations.homeMenuItem),
                       _buildMenuButton(
-                          1, Icons.message, appLocalizations.messagesMenuItem),
+                          2, Icons.message, appLocalizations.messagesMenuItem),
                       _buildMenuButton(
-                          2, Icons.work, appLocalizations.workbenchMenuItem),
+                          3, Icons.work, appLocalizations.workbenchMenuItem),
                       _buildMenuButton(
-                          3, Icons.cloud, appLocalizations.sharedMenuItem),
+                          4, Icons.cloud, appLocalizations.sharedMenuItem),
                       _buildMenuButton(
-                          4, Icons.public, appLocalizations.squareMenuItem),
-                      if (kDebugMode) _buildTestButton(appLocalizations),
+                          5, Icons.public, appLocalizations.squareMenuItem),
                       const Divider(height: 20, thickness: 1),
                       _buildMenuButton(
                           6, Icons.settings, appLocalizations.settingsMenuItem),
+                      if (kDebugMode) _buildTestButton(appLocalizations),
                     ],
                   ),
                 ),

@@ -1,64 +1,85 @@
+// lib/presentation/pages/home/widgets/hardware_details_widget.dart
 import 'package:flutter/material.dart';
+import 'package:zzcc/core/services/hardware_info_service.dart';
 
-class HardwareDetailsWidget extends StatelessWidget {
+class HardwareDetailsWidget extends StatefulWidget {
   const HardwareDetailsWidget({super.key});
 
-  TableRow _buildTableRow(String title1, String value1, String title2, String value2) {
-    return TableRow(
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Text(title1, style: const TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Text(value1),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Text(title2, style: const TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Text(value2),
-        ),
-      ],
-    );
+  @override
+  State<HardwareDetailsWidget> createState() => _HardwareDetailsWidgetState();
+}
+
+class _HardwareDetailsWidgetState extends State<HardwareDetailsWidget> {
+  final HardwareInfoService service = HardwareInfoService.instance;
+  late Future<Map<String, String>> _info;
+
+  @override
+  void initState() {
+    super.initState();
+    _info = service.getHardwareInfo();
   }
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      margin: const EdgeInsets.all(16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: 2,
       child: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Row(
               children: [
-                Icon(Icons.info, size: 30),
-                SizedBox(width: 10),
-                Text('硬件详细信息', style: TextStyle(fontSize: 18)),
+                Icon(Icons.computer, color: Colors.blueAccent),
+                SizedBox(width: 8),
+                Text(
+                  "设备硬件信息",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
               ],
             ),
-            const SizedBox(height: 20),
-            Table(
-              columnWidths: const {
-                0: FlexColumnWidth(1.5),
-                1: FlexColumnWidth(2),
-                2: FlexColumnWidth(1.5),
-                3: FlexColumnWidth(2),
+            const Divider(height: 24),
+
+            FutureBuilder<Map<String, String>>(
+              future: _info,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (!snapshot.hasData) {
+                  return const Text("获取信息失败");
+                }
+
+                final data = snapshot.data!;
+                return Column(
+                  children: [
+                    _item("设备型号", data['设备型号']!),
+                    _item("操作系统", data['操作系统']!),
+                    _item("处理器", data['处理器']!),
+                    _item("内存", data['内存']!),
+                    _item("存储", data['存储']!),
+                    _item("显卡", data['显卡']!),
+                    _item("分辨率", data['分辨率']!),
+                  ],
+                );
               },
-              children: [
-                _buildTableRow('设备型号', 'Dell XPS 15 9520', '操作系统', 'Windows 11 Pro'),
-                _buildTableRow('处理器', 'Intel Core i7-12700H', '显卡', 'NVIDIA RTX 3050 Ti'),
-                _buildTableRow('内存', '32GB DDR5 4800MHz', '存储', '1TB NVMe SSD'),
-                _buildTableRow('网络', 'WiFi 6E', '蓝牙', '5.2'),
-                _buildTableRow('分辨率', '3840×2400', '刷新率', '60Hz'),
-              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _item(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Text("$label: ", style: const TextStyle(fontWeight: FontWeight.w500)),
+          Expanded(child: Text(value)),
+        ],
       ),
     );
   }

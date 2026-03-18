@@ -70,13 +70,13 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
     final location = GoRouterState.of(context).uri.toString();
     
     final routeIndexMap = {
-      '${RouteNames.root}${RouteNames.home}': 0,
-      '${RouteNames.root}${RouteNames.messages}': 1,
-      '${RouteNames.root}${RouteNames.workbench}': 2,
-      '${RouteNames.root}${RouteNames.shared}': 3,
-      '${RouteNames.root}${RouteNames.square}': 4,
-      '${RouteNames.root}${RouteNames.settings}': 5,
-      '${RouteNames.root}${RouteNames.profile}': 6,
+      '${RouteNames.root}${RouteNames.profile}': 0,
+      '${RouteNames.root}${RouteNames.home}': 1,
+      '${RouteNames.root}${RouteNames.messages}': 2,
+      '${RouteNames.root}${RouteNames.workbench}': 3,
+      '${RouteNames.root}${RouteNames.shared}': 4,
+      '${RouteNames.root}${RouteNames.square}': 5,
+      '${RouteNames.root}${RouteNames.settings}': 6,
     };
 
     for (final entry in routeIndexMap.entries) {
@@ -131,14 +131,14 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
    void _handleIndexChanged(int index) {
     setState(() => _selectedIndex = index);
     final routes = [
+      RouteNames.profile,
       RouteNames.home,
       RouteNames.messages,
       RouteNames.workbench,
       RouteNames.shared,
       RouteNames.square,
-      RouteNames.test,
       RouteNames.settings,
-      RouteNames.profile,
+      RouteNames.test,
     ];
     if (index < routes.length) {
       context.go('${RouteNames.root}${routes[index]}');
@@ -187,14 +187,14 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
       child: IndexedStack(
         index: _selectedIndex,
         children: [
+          ProfilePage(onAvatarChanged: (file) {}),
           const HomePage(),
           const MessageScreen(),
           const WorkbenchPage(),
           const SharedPage(),
           const SquarePage(),
-          const TestPage(),
           SettingsPage(presetThemes: widget.presetThemes),
-          ProfilePage(onAvatarChanged: (file) {}),
+          const TestPage(),
         ],
       ),
     );
