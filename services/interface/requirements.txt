@@ -4,3 +4,9 @@ fastapi>=0.110.0,<0.115.0
 uvicorn[standard]>=0.23.0,<0.28.0
 pydantic>=2.5.0,<2.8.0
 python-multipart>=0.0.6
+asyncpg
+databases[postgresql]
+aioredis
+psycopg2-binary
+pypdf>=3.0.0
+python-docx>=0.8.11

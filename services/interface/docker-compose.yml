@@ -5,5 +5,36 @@ services:
       dockerfile: Dockerfile
     container_name: nebula-interface
     restart: on-failure
+    env_file:
+      - .env
     ports:
       - "8001:8000"
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:15-alpine
+    container_name: kt-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${KT_DB_USER:-ktuser}
+      POSTGRES_PASSWORD: ${KT_DB_PASSWORD:-ktpass}
+      POSTGRES_DB: ${KT_DB_NAME:-ktdb}
+    volumes:
+      - kt-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: kt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - kt-redis-data:/data
+
+volumes:
+  kt-db-data:
+  kt-redis-data:

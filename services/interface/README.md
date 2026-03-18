@@ -1,6 +1,6 @@
-# Nebula 接口服务使用指南
+# Nebula Interface & KnowledgeTable 服务使用指南
 
-本服务是一个基于 FastAPI 的 Nebula Graph 轻量接口，提供图空间、模式（标签/边类型）及点/边的增删改查，同时支持执行 nGQL 查询。
+本服务是一个基于 FastAPI 的 Nebula Graph 轻量接口，提供图空间、模式（标签/边类型）及点/边的增删改查，同时支持执行 nGQL 查询。集成了 KnowledgeTable 的数据库（Postgres）和缓存（Redis）服务。
 
 - 服务默认连接：`124.223.47.167:9669`，用户：`root`，密码：`nebula`
 - 每次请求可通过请求头覆盖连接：
@@ -9,6 +9,8 @@
   - `X-Nebula-User`
   - `X-Nebula-Password`
 - Swagger 文档：`http://<接口主机>:8001/docs`
+- 数据库：Postgres (localhost:5432)
+- 缓存：Redis (localhost:6379)
 
 ## 启动与健康检查
 
@@ -21,6 +23,14 @@ sudo docker compose up -d
 sudo docker compose ps
 sudo docker compose logs -f nebula-interface
 ```
+
+## 集成服务
+
+本服务集成了 KnowledgeTable 的数据库和缓存：
+- Postgres 数据库：用于存储 KnowledgeTable 数据。
+- Redis 缓存：用于缓存和会话管理。
+
+环境变量配置见 `.env.example`。
 
 健康检查与文档：
 
@@ -233,6 +243,49 @@ curl.exe "http://<接口主机>:8001/spaces" `
   -H "X-Nebula-Port: 9669" `
   -H "X-Nebula-User: root" `
   -H "X-Nebula-Password: nebula"
+```
+
+## 文档导入
+
+支持从 PDF 和 DOCX 文件提取文本并导入到 Nebula 知识库。
+
+- PDF/点导入：`POST /import/pdf/vertices?space=<space>&tag=<tag>`
+- DOCX/点导入：`POST /import/docx/vertices?space=<space>&tag=<tag>`
+- PDF/边导入：`POST /import/pdf/edges?space=<space>&edge=<edge>`
+- DOCX/边导入：`POST /import/docx/edges?space=<space>&edge=<edge>`
+
+点导入：每行文本作为点，属性为 `content`。
+边导入：每行假设为 `src,dst[,relation]` 格式。
+
+## 文档转 CSV
+
+将上传的 PDF/DOCX 转换为 CSV 格式（不导入 Nebula）。
+
+- PDF 转点 CSV：`POST /convert/pdf/to-csv/vertices?space=<space>&tag=<tag>&import_now=<true/false>`
+- DOCX 转点 CSV：`POST /convert/docx/to-csv/vertices?space=<space>&tag=<tag>&import_now=<true/false>`
+- PDF 转边 CSV：`POST /convert/pdf/to-csv/edges?space=<space>&edge=<edge>&import_now=<true/false>`
+- DOCX 转边 CSV：`POST /convert/docx/to-csv/edges?space=<space>&edge=<edge>&import_now=<true/false>`
+
+可选参数 `import_now`（默认 false）：若为 true，则转换后直接导入到 Nebula，返回导入数量；否则返回 CSV 内容。
+
+返回 JSON：`{"csv": "CSV content"}` 或 `{"imported": count}`。
+
+示例（PowerShell 转换 PDF 为点 CSV）：
+
+```pwsh
+$file = Get-Item "./book.pdf"
+$result = Invoke-RestMethod -Uri "http://<接口主机>:8001/convert/pdf/to-csv/vertices?space=my_space&tag=Document" `
+  -Method Post -Form @{ file = $file }
+$result.csv | Out-File "output.csv"
+```
+
+示例（PowerShell 转换并导入 PDF 为点）：
+
+```pwsh
+$file = Get-Item "./book.pdf"
+$result = Invoke-RestMethod -Uri "http://<接口主机>:8001/convert/pdf/to-csv/vertices?space=my_space&tag=Document&import_now=true" `
+  -Method Post -Form @{ file = $file }
+Write-Host "Imported $($result.imported) vertices"
 ```
 
 ## 常见问题

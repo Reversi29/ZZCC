@@ -8,6 +8,8 @@ from typing import Optional, Dict, Any, List
 import re
 from fastapi import Depends, FastAPI, HTTPException, Header, Body, UploadFile, File
 from fastapi.responses import JSONResponse
+from pypdf import PdfReader
+from docx import Document
 from pydantic import BaseModel, Field
 
 from modules.nebula_client import NebulaClient
@@ -240,6 +242,11 @@ def shutdown():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/")
+def index():
+    return {"msg": "Nebula Interface API. See /docs for Swagger UI."}
 
 
 @app.get("/spaces")
@@ -657,6 +664,326 @@ async def import_edges_csv(
                 props[k] = val
             _assert_prop_keys(props)
             client.insert_edge(sess, space=space, src=str(src), dst=str(dst), edge=edge, props=props)
+            count += 1
+
+        return {"space": space, "edge": edge, "imported": count}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# CSV conversion endpoints
+@app.post("/convert/pdf/to-csv/vertices")
+async def convert_pdf_to_csv_vertices(
+    space: str,
+    tag: str,
+    import_now: bool = False,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(tag, "标签名")
+
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        text = extract_pdf_text(file)
+        vertices = parse_text_to_vertices(text, space, tag)
+
+        if import_now:
+            count = 0
+            for v in vertices:
+                _assert_prop_keys(v["props"])
+                client.insert_vertex(sess, space=space, vid=v["vid"], tag=tag, props=v["props"])
+                count += 1
+            return {"imported": count}
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=["vid", "content"])
+        writer.writeheader()
+        for v in vertices:
+            writer.writerow({"vid": v["vid"], "content": v["props"]["content"]})
+
+        return {"csv": output.getvalue()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/convert/docx/to-csv/vertices")
+async def convert_docx_to_csv_vertices(
+    space: str,
+    tag: str,
+    import_now: bool = False,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(tag, "标签名")
+
+        if not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Only DOCX files are supported")
+
+        text = extract_docx_text(file)
+        vertices = parse_text_to_vertices(text, space, tag)
+
+        if import_now:
+            count = 0
+            for v in vertices:
+                _assert_prop_keys(v["props"])
+                client.insert_vertex(sess, space=space, vid=v["vid"], tag=tag, props=v["props"])
+                count += 1
+            return {"imported": count}
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=["vid", "content"])
+        writer.writeheader()
+        for v in vertices:
+            writer.writerow({"vid": v["vid"], "content": v["props"]["content"]})
+
+        return {"csv": output.getvalue()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/convert/pdf/to-csv/edges")
+async def convert_pdf_to_csv_edges(
+    space: str,
+    edge: str,
+    import_now: bool = False,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(edge, "边类型名")
+
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        text = extract_pdf_text(file)
+        edges = parse_text_to_edges(text, space, edge)
+
+        if import_now:
+            count = 0
+            for e in edges:
+                _assert_prop_keys(e["props"])
+                client.insert_edge(sess, space=space, src=e["src"], dst=e["dst"], edge=edge, props=e["props"])
+                count += 1
+            return {"imported": count}
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=["src", "dst", "relation"])
+        writer.writeheader()
+        for e in edges:
+            writer.writerow({"src": e["src"], "dst": e["dst"], "relation": e["props"].get("relation", "")})
+
+        return {"csv": output.getvalue()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/convert/docx/to-csv/edges")
+async def convert_docx_to_csv_edges(
+    space: str,
+    edge: str,
+    import_now: bool = False,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(edge, "边类型名")
+
+        if not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Only DOCX files are supported")
+
+        text = extract_docx_text(file)
+        edges = parse_text_to_edges(text, space, edge)
+
+        if import_now:
+            count = 0
+            for e in edges:
+                _assert_prop_keys(e["props"])
+                client.insert_edge(sess, space=space, src=e["src"], dst=e["dst"], edge=edge, props=e["props"])
+                count += 1
+            return {"imported": count}
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=["src", "dst", "relation"])
+        writer.writeheader()
+        for e in edges:
+            writer.writerow({"src": e["src"], "dst": e["dst"], "relation": e["props"].get("relation", "")})
+
+        return {"csv": output.getvalue()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# Document import helpers
+def extract_pdf_text(file: UploadFile) -> str:
+    reader = PdfReader(file.file)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() + "\n"
+    return text
+
+
+def extract_docx_text(file: UploadFile) -> str:
+    doc = Document(file.file)
+    text = ""
+    for para in doc.paragraphs:
+        text += para.text + "\n"
+    return text
+
+
+def parse_text_to_vertices(text: str, space: str, tag: str) -> List[Dict[str, Any]]:
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    vertices = []
+    for i, line in enumerate(lines):
+        vid = f"{space}_{tag}_{i}"
+        props = {"content": line}
+        vertices.append({"vid": vid, "props": props})
+    return vertices
+
+
+def parse_text_to_edges(text: str, space: str, edge: str) -> List[Dict[str, Any]]:
+    # Simple: assume lines are src,dst pairs
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    edges = []
+    for line in lines:
+        parts = line.split(',')
+        if len(parts) >= 2:
+            src, dst = parts[0].strip(), parts[1].strip()
+            props = {}
+            if len(parts) > 2:
+                props["relation"] = parts[2].strip()
+            edges.append({"src": src, "dst": dst, "props": props})
+    return edges
+
+
+# Document import endpoints
+@app.post("/import/pdf/vertices")
+async def import_pdf_vertices(
+    space: str,
+    tag: str,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(tag, "标签名")
+
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        text = extract_pdf_text(file)
+        vertices = parse_text_to_vertices(text, space, tag)
+
+        count = 0
+        for v in vertices:
+            _assert_prop_keys(v["props"])
+            client.insert_vertex(sess, space=space, vid=v["vid"], tag=tag, props=v["props"])
+            count += 1
+
+        return {"space": space, "tag": tag, "imported": count}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/import/docx/vertices")
+async def import_docx_vertices(
+    space: str,
+    tag: str,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(tag, "标签名")
+
+        if not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Only DOCX files are supported")
+
+        text = extract_docx_text(file)
+        vertices = parse_text_to_vertices(text, space, tag)
+
+        count = 0
+        for v in vertices:
+            _assert_prop_keys(v["props"])
+            client.insert_vertex(sess, space=space, vid=v["vid"], tag=tag, props=v["props"])
+            count += 1
+
+        return {"space": space, "tag": tag, "imported": count}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/import/pdf/edges")
+async def import_pdf_edges(
+    space: str,
+    edge: str,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(edge, "边类型名")
+
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        text = extract_pdf_text(file)
+        edges = parse_text_to_edges(text, space, edge)
+
+        count = 0
+        for e in edges:
+            _assert_prop_keys(e["props"])
+            client.insert_edge(sess, space=space, src=e["src"], dst=e["dst"], edge=edge, props=e["props"])
+            count += 1
+
+        return {"space": space, "edge": edge, "imported": count}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/import/docx/edges")
+async def import_docx_edges(
+    space: str,
+    edge: str,
+    file: UploadFile = File(...),
+    sess=Depends(get_session_with_override),
+):
+    try:
+        _assert_identifier(space, "空间名")
+        _assert_identifier(edge, "边类型名")
+
+        if not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Only DOCX files are supported")
+
+        text = extract_docx_text(file)
+        edges = parse_text_to_edges(text, space, edge)
+
+        count = 0
+        for e in edges:
+            _assert_prop_keys(e["props"])
+            client.insert_edge(sess, space=space, src=e["src"], dst=e["dst"], edge=edge, props=e["props"])
             count += 1
 
         return {"space": space, "edge": edge, "imported": count}
