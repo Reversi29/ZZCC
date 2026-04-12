@@ -37,7 +37,8 @@ class NebulaClient:
     @contextmanager
     def session(self):
         """Session using the default configured host/port/user/password."""
-        yield from self.session_with()
+        with self.session_with() as sess:
+            yield sess
 
     @contextmanager
     def session_with(
