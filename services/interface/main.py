@@ -73,21 +73,25 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request, exc: Exception):
-        """Convert common exceptions to appropriate HTTP responses."""
-        # Unwrap cause
+        """Convert known exceptions to appropriate HTTP responses; log unknown ones."""
+        # Unwrap cause chain
         inner = getattr(exc, '__cause__', None) or exc
-        # Convert ValueError → 400 (validation errors)
+        # ValueError → 400
         if isinstance(inner, ValueError):
             return JSONResponse(status_code=400, content={"detail": str(inner)})
-        # Unwrap HTTPException from cause
+        # HTTPException from cause chain → propagate
         if isinstance(inner, HTTPException):
             return JSONResponse(status_code=inner.status_code, content={"detail": inner.detail})
-        # Unwrap ExceptionGroup
+        # Unwrap ExceptionGroup (Starlette 1.x BaseHTTPMiddleware wrapping)
         if hasattr(inner, 'exceptions'):
-            for sub in inner.exceptions:
+            for sub in getattr(inner, 'exceptions', []):
                 if isinstance(sub, HTTPException):
                     return JSONResponse(status_code=sub.status_code, content={"detail": sub.detail})
-        return JSONResponse(status_code=500, content={"detail": str(inner)})
+                if isinstance(sub, ValueError):
+                    return JSONResponse(status_code=400, content={"detail": str(sub)})
+        # Unknown exception — log full traceback, return generic 500
+        _log.exception("unhandled_exception", exc=str(exc), path=str(request.url.path) if hasattr(request, "url") else None)
+        return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
     setup_middleware(app)
 
@@ -132,20 +136,27 @@ def create_app() -> FastAPI:
                 content={"status": "degraded", "nebula": nebula},
             )
 
-        # DB and Redis are optional — errors return string, not exception
+        # DB and Redis are optional — health_check() returns dict with status
         try:
             from services.db import health_check as pg_health
             pg = await pg_health()
         except Exception as exc:
-            pg = f"error: {exc}"
+            _log.error("health_db_crash", error=str(exc))
+            pg = {"status": "degraded", "detail": str(exc)}
 
         try:
             from services.cache import health_check as redis_health
             redis = await redis_health()
         except Exception as exc:
-            redis = f"error: {exc}"
+            _log.error("health_redis_crash", error=str(exc))
+            redis = {"status": "degraded", "detail": str(exc)}
 
-        return {"status": "ok", "nebula": nebula, "postgres": pg, "redis": redis}
+        return {
+            "status": "ok",
+            "nebula": nebula,
+            "postgres": pg,
+            "redis": redis,
+        }
 
     return app
 

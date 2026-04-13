@@ -57,6 +57,13 @@ class EdgeTypeDrop(BaseModel):
     edge: str = Field(..., description="Edge type name")
 
 
+class EdgeTypeAlter(BaseModel):
+    """Request body for PATCH /edge-types (add properties to existing edge type)."""
+    space: str = Field(..., description="Space name")
+    edge: str = Field(..., description="Edge type name")
+    properties: list[dict[str, str]]
+
+
 class TagDef(BaseModel):
     name: str
     properties: List[PropertyDef] = Field(default_factory=list)

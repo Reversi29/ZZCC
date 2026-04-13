@@ -42,18 +42,19 @@ async def get_redis() -> "redis.Redis":
     return redis.Redis(connection_pool=pool)
 
 
-async def health_check() -> str:
-    """Return 'ok' if Redis is reachable, else error message."""
+async def health_check() -> dict:
+    """Return status dict: {'status': 'ok'|'degraded', 'detail': ...}."""
     if not _REDIS_OK:
-        return "redis package not installed"
+        _log.error("redis_health_check_skipped", reason="redis package not installed")
+        return {"status": "degraded", "detail": "redis package not installed"}
     try:
         client = await get_redis()
         await client.ping()
         await client.aclose()
-        return "ok"
+        return {"status": "ok"}
     except Exception as exc:
-        _log.warning("redis_health_fail", error=str(exc))
-        return f"error: {exc}"
+        _log.error("redis_health_check_failed", reason=str(exc))
+        return {"status": "degraded", "detail": str(exc)}
 
 
 async def cache_get(key: str) -> Optional[Any]:
