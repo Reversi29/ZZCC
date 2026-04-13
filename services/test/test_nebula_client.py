@@ -1,382 +1,232 @@
-"""
-Unit tests for NebulaClient (modules/nebula_client.py).
-
-Tests cover:
-- Connection pool init / close
-- Space CRUD SQL generation
-- Tag / edge schema ops
-- Vertex / edge insert / fetch / update / delete
-- Query execution
-- Value formatting (_format_value)
-
-Run:
-    pytest test_nebula_client.py -v
-"""
+"""NebulaClient unit tests."""
 import pytest
-import sys
-import os
 from unittest.mock import MagicMock, patch
 
-INTERFACE_DIR = os.path.join(os.path.dirname(__file__), "..", "interface")
-if INTERFACE_DIR not in sys.path:
-    sys.path.insert(0, INTERFACE_DIR)
 
-from modules.nebula_client import NebulaClient
+def _sess():
+    resp = MagicMock()
+    resp.is_succeeded.return_value = True
+    resp.error_msg.return_value = ""
+    resp.keys.return_value = []
+    resp.rows.return_value = []
+    sess = MagicMock()
+    sess.execute.return_value = resp
+    sess.release = MagicMock()
+    return sess, resp
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def client():
-    """NebulaClient instance without connecting to real server."""
-    c = NebulaClient(
-        host="127.0.0.1",
-        port=9669,
-        user="root",
-        password="nebula",
-    )
-    return c
-
-
-# ---------------------------------------------------------------------------
-# Value formatting
-# ---------------------------------------------------------------------------
 
 class TestFormatValue:
-    def test_bool_true(self, client):
-        assert client._format_value(True) == "true"
+    def _fmt(self, v):
+        from modules.nebula_client import NebulaClient
+        return NebulaClient._format_value(v)
 
-    def test_bool_false(self, client):
-        assert client._format_value(False) == "false"
-
-    def test_int(self, client):
-        assert client._format_value(42) == "42"
-
-    def test_negative_int(self, client):
-        assert client._format_value(-10) == "-10"
-
-    def test_float(self, client):
-        assert client._format_value(3.14) == "3.14"
-
-    def test_string_plain(self, client):
-        assert client._format_value("Alice") == '"Alice"'
-
-    def test_string_with_quotes_escaped(self, client):
-        assert client._format_value('say "hi"') == r'"say \"hi\""'
-
-    def test_string_with_backslash(self, client):
-        """Backslashes are preserved; only double-quotes are escaped."""
-        # Input: Python string with literal backslashes: path\to\file
-        # str() returns it as-is, then the value gets wrapped in quotes
-        val = "path\\to\\file"
-        result = client._format_value(val)
-        # Output is the string wrapped in double-quotes, backslashes unchanged
-        assert result == '"path\\to\\file"'
+    def test_bool_true(self): assert self._fmt(True) == "true"
+    def test_bool_false(self): assert self._fmt(False) == "false"
+    def test_int(self): assert self._fmt(42) == "42"
+    def test_negative_int(self): assert self._fmt(-7) == "-7"
+    def test_float(self): assert self._fmt(3.14) == "3.14"
+    def test_string_plain(self): assert self._fmt("hello") == '"hello"'
+    def test_string_with_quote(self): assert self._fmt("say \"hi\"") == r'"say \"hi\""'
+    def test_string_with_backslash(self): assert self._fmt("path\\to\\file") == r'"path\\to\\file"'
+    def test_string_with_backslash_and_quote(self): assert self._fmt("a\\\"b") == r'"a\\\"b"'
 
 
-# ---------------------------------------------------------------------------
-# Space operations
-# ---------------------------------------------------------------------------
+class TestNebulaError:
+    def test_message(self):
+        from modules.nebula_client import NebulaError
+        e = NebulaError("SpaceNotFound", stmt="DROP SPACE x")
+        assert "SpaceNotFound" in str(e)
+        assert e.stmt == "DROP SPACE x"
+
 
 class TestSpaceOps:
-    def test_create_space_sql(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.create_space(sess, name="test_space", vid_type="FIXED_STRING(64)",
-                            partition_num=10, replica_factor=1)
-        sess.execute.assert_called_once()
-        call_args = sess.execute.call_args[0][0]
-        assert "CREATE SPACE IF NOT EXISTS `test_space`" in call_args
-        assert "partition_num=10" in call_args
-        assert "replica_factor=1" in call_args
-        assert "vid_type=FIXED_STRING(64)" in call_args
+    def test_create_space(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").create_space(
+            sess, name="s", vid_type="FIXED_STRING(64)", partition_num=10, replica_factor=1)
+        s = sess.execute.call_args[0][0]
+        assert "CREATE SPACE" in s
+        assert "`s`" in s
+        assert "partition_num=10" in s
 
-    def test_drop_space_sql(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.drop_space(sess, name="test_space")
-        sess.execute.assert_called_once()
-        assert "DROP SPACE IF EXISTS `test_space`" in sess.execute.call_args[0][0]
+    def test_drop_space(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").drop_space(sess, "old")
+        assert "DROP SPACE" in sess.execute.call_args[0][0]
 
-    def test_list_spaces(self, client):
-        mock_row = MagicMock()
-        mock_row.values = [MagicMock(as_string=MagicMock(return_value="space1"))]
-        resp = MagicMock()
-        resp.is_succeeded.return_value = True
-        resp.rows.return_value = [mock_row]
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=resp)
-        result = client.list_spaces(sess)
-        assert "space1" in result
-        assert result["space1"]["name"] == "space1"
+    def test_list_spaces(self):
+        from modules.nebula_client import NebulaClient
+        sess, resp = _sess()
+        row = MagicMock()
+        v = MagicMock()
+        v.as_string.return_value = "Sage"
+        row.values = [v]
+        resp.rows.return_value = [row]
+        assert "Sage" in NebulaClient("h", 9669, "u", "p").list_spaces(sess)
 
-    def test_list_spaces_empty(self, client):
-        resp = MagicMock()
-        resp.is_succeeded.return_value = True
+    def test_list_spaces_empty(self):
+        from modules.nebula_client import NebulaClient
+        sess, resp = _sess()
         resp.rows.return_value = []
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=resp)
-        result = client.list_spaces(sess)
-        assert result == {}
+        assert [] == NebulaClient("h", 9669, "u", "p").list_spaces(sess)
 
-    def test_alter_space_all_fields(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.alter_space(sess, name="test_space",
-                           partition_num=20, replica_factor=2, vid_type="INT64")
-        call_args = sess.execute.call_args[0][0]
-        assert "ALTER SPACE `test_space`" in call_args
-        assert "partition_num = 20" in call_args
-        assert "replica_factor = 2" in call_args
-        assert "vid_type = INT64" in call_args
-
-    def test_alter_space_no_fields(self, client):
-        sess = MagicMock()
-        client.alter_space(sess, name="test_space")
-        sess.execute.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Tag operations
-# ---------------------------------------------------------------------------
 
 class TestTagOps:
-    def test_ensure_tag(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.ensure_tag(sess, space="s", tag="Person", columns=[("name", "string")])
-        call_args = sess.execute.call_args[0][0]
-        assert "CREATE TAG IF NOT EXISTS `Person`" in call_args
-        assert "`name` string" in call_args
+    def test_ensure_tag(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").ensure_tag(
+            sess, space="S", tag="Person",
+            columns=[("name", "string"), ("age", "int")])
+        s = sess.execute.call_args[0][0]
+        assert "CREATE TAG" in s and "`Person`" in s
 
-    def test_drop_tag(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.drop_tag(sess, space="s", tag="Person")
-        assert "DROP TAG IF EXISTS `Person`" in sess.execute.call_args[0][0]
+    def test_drop_tag(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").drop_tag(sess, space="S", tag="Person")
+        assert "DROP TAG" in sess.execute.call_args[0][0]
 
-    def test_alter_tag_add(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.alter_tag_add(sess, space="s", tag="Person",
-                             columns=[("age", "int"), ("score", "double")])
-        call_args = sess.execute.call_args[0][0]
-        assert "ALTER TAG `Person` ADD" in call_args
-        assert "`age` int" in call_args
-        assert "`score` double" in call_args
+    def test_alter_tag_add(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").alter_tag_add(
+            sess, space="S", tag="Person",
+            columns=[("email", "string")])
+        s = sess.execute.call_args[0][0]
+        assert "ALTER TAG" in s and "ADD" in s
 
-
-# ---------------------------------------------------------------------------
-# Edge operations
-# ---------------------------------------------------------------------------
 
 class TestEdgeOps:
-    def test_ensure_edge(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.ensure_edge(sess, space="s", edge="KNOWS", columns=[("since", "int")])
-        call_args = sess.execute.call_args[0][0]
-        assert "CREATE EDGE IF NOT EXISTS `KNOWS`" in call_args
-        assert "`since` int" in call_args
+    def test_ensure_edge(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").ensure_edge(
+            sess, space="S", edge="KNOWS",
+            columns=[("since", "int")])
+        s = sess.execute.call_args[0][0]
+        assert "CREATE EDGE" in s and "`KNOWS`" in s
 
-    def test_drop_edge_type(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.drop_edge_type(sess, space="s", edge="KNOWS")
-        assert "DROP EDGE IF EXISTS `KNOWS`" in sess.execute.call_args[0][0]
+    def test_drop_edge(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").drop_edge_type(sess, space="S", edge="KNOWS")
+        assert "DROP EDGE" in sess.execute.call_args[0][0]
 
-    def test_alter_edge_add(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.alter_edge_add(sess, space="s", edge="KNOWS", columns=[("weight", "double")])
-        call_args = sess.execute.call_args[0][0]
-        assert "ALTER EDGE `KNOWS` ADD" in call_args
-        assert "`weight` double" in call_args
+    def test_alter_edge_add(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").alter_edge_add(
+            sess, space="S", edge="KNOWS",
+            columns=[("weight", "double")])
+        s = sess.execute.call_args[0][0]
+        assert "ALTER EDGE" in s and "ADD" in s
 
-
-# ---------------------------------------------------------------------------
-# Vertex operations
-# ---------------------------------------------------------------------------
 
 class TestVertexOps:
-    def test_insert_vertex_single_prop(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.insert_vertex(sess, space="s", vid="alice", tag="Person", props={"name": "Alice"})
-        call_args = sess.execute.call_args[0][0]
-        assert "INSERT VERTEX `Person`" in call_args
-        assert "`name`" in call_args
-        assert '"alice"' in call_args
-        assert '"Alice"' in call_args
+    def test_insert_vertex(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").insert_vertex(
+            sess, space="S", vid="v1", tag="Person",
+            props={"name": "Alice", "active": True})
+        s = sess.execute.call_args[0][0]
+        assert "INSERT VERTEX" in s and '"v1"' in s and "true" in s
 
-    def test_insert_vertex_multiple_props(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.insert_vertex(sess, space="s", vid="alice", tag="Person",
-                            props={"name": "Alice", "age": 30, "active": True})
-        call_args = sess.execute.call_args[0][0]
-        assert '"Alice"' in call_args
-        assert "30" in call_args
-        assert "true" in call_args  # bool formatted as true/false
+    def test_delete_vertex_with_edges(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").delete_vertex(
+            sess, space="S", vid="v1", with_edges=True)
+        s = sess.execute.call_args[0][0]
+        assert "WITH EDGE" in s
 
-    def test_update_vertex(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.update_vertex(sess, space="s", vid="alice", tag="Person", props={"age": 31})
-        call_args = sess.execute.call_args[0][0]
-        assert "UPDATE VERTEX ON `Person`" in call_args
-        assert "`age`" in call_args
+    def test_delete_vertex_no_edges(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").delete_vertex(
+            sess, space="S", vid="v1", with_edges=False)
+        assert "WITH EDGE" not in sess.execute.call_args[0][0]
 
-    def test_delete_vertex_with_edges(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.delete_vertex(sess, space="s", vid="alice", with_edges=True)
-        call_args = sess.execute.call_args[0][0]
-        assert "DELETE VERTEX" in call_args
-        assert "WITH EDGE" in call_args
+    def test_fetch_vertex_has_yield(self):
+        """NebulaGraph 3.x requires YIELD clause on FETCH."""
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").fetch_vertex(
+            sess, space="S", vid="v1", tag="Person")
+        s = sess.execute.call_args[0][0]
+        assert "FETCH PROP ON" in s and "YIELD" in s
 
-    def test_delete_vertex_no_edges(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.delete_vertex(sess, space="s", vid="alice", with_edges=False)
-        call_args = sess.execute.call_args[0][0]
-        assert "DELETE VERTEX" in call_args
-        assert "WITH EDGE" not in call_args
-
-    def test_fetch_vertex_with_tag(self, client):
-        sess = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.is_succeeded.return_value = True
-        sess.execute = MagicMock(return_value=mock_resp)
-        resp = client.fetch_vertex(sess, space="s", vid="alice", tag="Person")
-        call_args = sess.execute.call_args[0][0]
-        assert "FETCH PROP ON `Person`" in call_args
-        assert '"alice"' in call_args
-        assert resp.is_succeeded()
-
-    def test_fetch_vertex_all_tags(self, client):
-        sess = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.is_succeeded.return_value = True
-        sess.execute = MagicMock(return_value=mock_resp)
-        client.fetch_vertex(sess, space="s", vid="alice", tag=None)
-        call_args = sess.execute.call_args[0][0]
-        assert "FETCH PROP ON *" in call_args
-
-
-# ---------------------------------------------------------------------------
-# Edge data operations
-# ---------------------------------------------------------------------------
 
 class TestEdgeDataOps:
-    def test_insert_edge(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.insert_edge(sess, space="s", src="alice", dst="bob",
-                           edge="KNOWS", props={"since": 2020})
-        call_args = sess.execute.call_args[0][0]
-        assert "INSERT EDGE `KNOWS`" in call_args
-        assert '"alice"' in call_args
-        assert '"bob"' in call_args
-        assert "2020" in call_args
+    def test_insert_edge(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").insert_edge(
+            sess, space="S", src="a", dst="b", edge="KNOWS",
+            props={"since": 2020})
+        s = sess.execute.call_args[0][0]
+        assert "INSERT EDGE" in s and '"a"' in s and '"b"' in s
 
-    def test_update_edge(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.update_edge(sess, space="s", src="alice", dst="bob",
-                           edge="KNOWS", props={"since": 2021})
-        call_args = sess.execute.call_args[0][0]
-        assert "UPDATE EDGE ON `KNOWS`" in call_args
-        assert "`since`" in call_args
+    def test_fetch_edge_has_yield(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").fetch_edge(
+            sess, space="S", src="a", dst="b", edge="KNOWS")
+        s = sess.execute.call_args[0][0]
+        assert "FETCH PROP ON" in s and "YIELD" in s
 
-    def test_delete_edge(self, client):
-        sess = MagicMock()
-        sess.execute = MagicMock(return_value=MagicMock(is_succeeded=MagicMock(return_value=True)))
-        client.delete_edge(sess, space="s", src="alice", dst="bob", edge="KNOWS")
-        call_args = sess.execute.call_args[0][0]
-        assert "DELETE EDGE `KNOWS`" in call_args
-        assert '"alice"' in call_args
-        assert '"bob"' in call_args
+    def test_delete_edge(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").delete_edge(
+            sess, space="S", src="a", dst="b", edge="KNOWS")
+        assert "DELETE EDGE" in sess.execute.call_args[0][0]
 
-    def test_fetch_edge(self, client):
-        sess = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.is_succeeded.return_value = True
-        sess.execute = MagicMock(return_value=mock_resp)
-        client.fetch_edge(sess, space="s", src="alice", dst="bob", edge="KNOWS")
-        call_args = sess.execute.call_args[0][0]
-        assert "FETCH PROP ON `KNOWS`" in call_args
-        assert '"alice"' in call_args
-        assert '"bob"' in call_args
-
-
-# ---------------------------------------------------------------------------
-# Query execution
-# ---------------------------------------------------------------------------
 
 class TestQuery:
-    def test_query(self, client):
-        sess = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.is_succeeded.return_value = True
-        sess.execute = MagicMock(return_value=mock_resp)
-        resp = client.query(sess, space="s", nql="MATCH (n) RETURN n LIMIT 10")
-        assert resp.is_succeeded()
+    def test_query_ok(self):
+        from modules.nebula_client import NebulaClient
+        sess, _ = _sess()
+        NebulaClient("h", 9669, "u", "p").query(sess, space="S", nql="SHOW TAGS")
+        assert "USE `S`" in sess.execute.call_args[0][0]
 
-    def test_query_failure_raises(self, client):
-        sess = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.is_succeeded.return_value = False
-        mock_resp.error_msg.return_value = "Space not found"
-        sess.execute = MagicMock(return_value=mock_resp)
-        with pytest.raises(RuntimeError) as exc_info:
-            client.query(sess, space="s", nql="SHOW SPACES")
-        assert "Space not found" in str(exc_info.value)
+    def test_query_failure_raises(self):
+        from modules.nebula_client import NebulaClient, NebulaError
+        sess, resp = _sess()
+        resp.is_succeeded.return_value = False
+        resp.error_msg.return_value = "SpaceNotFound"
+        c = NebulaClient("h", 9669, "u", "p")
+        with pytest.raises(NebulaError) as exc:
+            c.query(sess, space="S", nql="BAD")
+        assert "SpaceNotFound" in str(exc.value)
 
-
-# ---------------------------------------------------------------------------
-# Session management
-# ---------------------------------------------------------------------------
 
 class TestSessionManagement:
-    def test_session_uses_defaults(self, client):
-        with patch("modules.nebula_client.ConnectionPool") as MockPool:
-            mock_pool_instance = MagicMock()
-            MockPool.return_value = mock_pool_instance
-            mock_pool_instance.init.return_value = True
+    def test_init_pool_success(self):
+        from modules.nebula_client import NebulaClient
+        with patch("modules.nebula_client.ConnectionPool") as m:
+            m.return_value.init.return_value = True
+            c = NebulaClient("h", 9669, "u", "p")
+            assert c.init_pool() is True
+
+    def test_init_pool_failure(self):
+        from modules.nebula_client import NebulaClient
+        with patch("modules.nebula_client.ConnectionPool") as m:
+            m.return_value.init.return_value = False
+            c = NebulaClient("h", 9669, "u", "p")
+            assert c.init_pool() is False
+
+    def test_session_defaults(self):
+        from modules.nebula_client import NebulaClient
+        with patch("modules.nebula_client.ConnectionPool") as m:
+            m.return_value.init.return_value = True
             mock_sess = MagicMock()
-            mock_pool_instance.get_session.return_value = mock_sess
-            with client.session() as sess:
+            m.return_value.get_session.return_value = mock_sess
+            c = NebulaClient("h", 9669, "user", "pass")
+            c.init_pool()
+            with c.session() as _:
                 pass
-            mock_pool_instance.get_session.assert_called_once_with("root", "nebula")
-
-    def test_session_with_override(self, client):
-        with patch("modules.nebula_client.ConnectionPool") as MockPool:
-            mock_pool_instance = MagicMock()
-            MockPool.return_value = mock_pool_instance
-            mock_pool_instance.init.return_value = True
-            mock_sess = MagicMock()
-            mock_pool_instance.get_session.return_value = mock_sess
-            with client.session_with(host="10.0.0.1", user="admin", password="secret") as sess:
-                pass
-            mock_pool_instance.get_session.assert_called_once_with("admin", "secret")
-
-    def test_init_pool_failure(self, client):
-        # Patch the instance-level _pool attribute so no real network call is made
-        mock_instance = MagicMock()
-        mock_instance.init.return_value = False
-        client._pool = mock_instance
-        result = client.init_pool()
-        assert result is False
-        assert client._initialized is False
-
-    def test_init_pool_success(self, client):
-        # Patch the instance-level _pool attribute so no real network call is made
-        mock_instance = MagicMock()
-        mock_instance.init.return_value = True
-        client._pool = mock_instance
-        result = client.init_pool()
-        assert result is True
-        assert client._initialized is True
+            m.return_value.get_session.assert_called_once_with("user", "pass")

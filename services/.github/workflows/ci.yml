@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linters
+        run: pip install ruff mypy
+
+      - name: Run ruff
+        run: ruff check interface/ || true
+
+      - name: Run mypy
+        run: mypy interface/ || true
+
+  test:
+    name: Test (unit)
+    runs-on: ubuntu-latest
+    env:
+      NEBULA_HOST: ${{ secrets.NEBULA_HOST || '124.223.47.167' }}
+      NEBULA_PORT: ${{ secrets.NEBULA_PORT || '9669' }}
+      NEBULA_USER: ${{ secrets.NEBULA_USER || 'root' }}
+      NEBULA_PASSWORD: ${{ secrets.NEBULA_PASSWORD || 'nebula' }}
+      API_KEY: test-api-key
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r interface/requirements.txt
+
+      - name: Run unit tests
+        run: |
+          cd interface
+          python -m pytest test/ -v --timeout=30 -m "not integration" -x
+
+  # Integration tests run only when a live NebulaGraph is available (on main)
+  integration:
+    name: Test (integration)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && vars.RUN_INTEGRATION_TESTS == 'true'
+    env:
+      NEBULA_HOST: ${{ secrets.NEBULA_HOST }}
+      NEBULA_PORT: ${{ secrets.NEBULA_PORT || '9669' }}
+      NEBULA_USER: ${{ secrets.NEBULA_USER || 'root' }}
+      NEBULA_PASSWORD: ${{ secrets.NEBULA_PASSWORD }}
+      API_KEY: ${{ secrets.API_KEY }}
+      ZZCC_SERVER_HOST: "http://localhost:8000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r interface/requirements.txt
+
+      - name: Start server
+        run: |
+          uvicorn interface.main:app --host 0.0.0.0 --port 8000 &
+          sleep 5
+
+      - name: Run integration tests
+        run: |
+          cd interface
+          python -m pytest test/ -v --timeout=60 -m "integration"

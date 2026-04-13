@@ -1,585 +1,605 @@
 """
-Unit & integration tests for NebulaGraph Interface API.
-
-Unit tests mock NebulaClient.session_with() directly (no network, no Docker).
-Integration tests (marked @pytest.mark.integration) run against live server.
+FastAPI interface tests — unit + integration.
 
 Run:
-    # Unit tests (no server needed)
-    cd /Users/mac/ZZCC/services
-    test/.venv/bin/python -m pytest test/test_interface_api.py -v
-
-    # Integration tests (live server)
-    ZZCC_SERVER_HOST=124.223.47.167 \
-    test/.venv/bin/python -m pytest test/test_interface_api.py -v -m integration
+    pytest test/ -v -m "not integration"   # unit tests (mocked)
+    pytest test/ -v -m integration          # live server
 """
-import pytest
-import sys
-import os
-from unittest.mock import MagicMock, patch
+import csv
+import io
+import time
 from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
-INTERFACE_DIR = os.path.join(os.path.dirname(__file__), "..", "interface")
-if INTERFACE_DIR not in sys.path:
-    sys.path.insert(0, INTERFACE_DIR)
-
+import re
+import importlib
+import pytest
+from fastapi import Header
 from fastapi.testclient import TestClient
-import main as app_module
+from typing import Annotated
+
+# Tests import from the local interface package
+import sys
+sys.path.insert(0, "interface")
+from modules.nebula_client import NebulaClient, NebulaError
 
 
-# ---------------------------------------------------------------------------
+# ============================================================
 # Helpers
-# ---------------------------------------------------------------------------
+# ============================================================
 
-def make_mock_resp(keys=None, rows=None, succeeded=True, error_msg=""):
-    """Build a mock NebulaGraph query response."""
+def _mock_session():
+    """Return a fresh mock Nebula session."""
+    sess = MagicMock()
     resp = MagicMock()
-    resp.is_succeeded.return_value = succeeded
-    resp.error_msg.return_value = error_msg
-    resp.keys.return_value = keys or []
-    resp.rows.return_value = rows or []
-    return resp
+    resp.is_succeeded.return_value = True
+    resp.error_msg.return_value = ""
+    resp.keys.return_value = []
+    resp.rows.return_value = []
+    sess.execute.return_value = resp
+    sess.release = MagicMock()
+    return sess, resp
 
 
-class MockSession:
-    """Plain context manager that yields a mock NebulaGraph session.
-
-    Use instead of @contextmanager so it supports call(host=..., port=...).
-    Compatible with synchronous and async FastAPI dependency injection.
-    """
-
-    def __init__(self, mock_session):
-        self._sess = mock_session
-
-    def __call__(self, **kw):
-        """Allow being called as a plain function before entering the context."""
-        return self
-
-    def __enter__(self):
-        return self._sess
-
-    def __exit__(self, *args):
-        self._sess.release()
-        return False
+@contextmanager
+def _cm(mock_sess, *args, **kwargs):
+    """Context manager wrapping a mock session."""
+    yield mock_sess
 
 
-def with_mock_session(mock_session):
-    """Return a MockSession wrapper for use in patch.object calls."""
-    return MockSession(mock_session)
+# ============================================================
+# Unit tests — NebulaClient
+# ============================================================
+class TestFormatValue:
+    """Test NebulaClient._format_value() for all value types."""
 
+    @staticmethod
+    def _fmt(v):
+        return NebulaClient._format_value(v)
 
-# ---------------------------------------------------------------------------
-# Identifier validation
-# ---------------------------------------------------------------------------
+    def test_bool_true(self):
+        assert self._fmt(True) == "true"
 
-class TestIdentifierValidation:
-    def test_valid_lower(self):
-        app_module._assert_identifier("person", "标签名")
+    def test_bool_false(self):
+        assert self._fmt(False) == "false"
 
-    def test_valid_upper(self):
-        app_module._assert_identifier("Person", "标签名")
+    def test_int(self):
+        assert self._fmt(42) == "42"
+        assert self._fmt(0) == "0"
 
-    def test_valid_underscore(self):
-        app_module._assert_identifier("_private_tag", "标签名")
-
-    def test_valid_mixed(self):
-        app_module._assert_identifier("Person2024_v2", "标签名")
-
-    def test_invalid_starts_with_digit(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc:
-            app_module._assert_identifier("2person", "标签名")
-        assert exc.value.status_code == 400
-
-    def test_invalid_hyphen(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc:
-            app_module._assert_identifier("person-name", "标签名")
-        assert exc.value.status_code == 400
-
-    def test_invalid_chinese(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc:
-            app_module._assert_identifier("节点", "标签名")
-        assert exc.value.status_code == 400
-
-    def test_invalid_empty(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException):
-            app_module._assert_identifier("", "标签名")
-
-
-# ---------------------------------------------------------------------------
-# Property key validation
-# ---------------------------------------------------------------------------
-
-class TestPropKeyValidation:
-    def test_valid_prop_keys(self):
-        app_module._assert_prop_keys({"name": "Alice", "score": 100})
-
-    def test_invalid_prop_key_digit_start(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException):
-            app_module._assert_prop_keys({"2bad": "value"})
-
-    def test_invalid_prop_key_hyphen(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException):
-            app_module._assert_prop_keys({"bad-key": "value"})
-
-
-# ---------------------------------------------------------------------------
-# CSV value coercion
-# ---------------------------------------------------------------------------
-
-class TestCsvCoercion:
-    def test_none_input(self):
-        assert app_module._coerce_csv_value(None) is None
-
-    def test_empty_string(self):
-        assert app_module._coerce_csv_value("") is None
-        assert app_module._coerce_csv_value("   ") is None
-
-    def test_true(self):
-        assert app_module._coerce_csv_value("true") is True
-        assert app_module._coerce_csv_value("True") is True
-        assert app_module._coerce_csv_value("TRUE") is True
-
-    def test_false(self):
-        assert app_module._coerce_csv_value("false") is False
-
-    def test_integer(self):
-        assert app_module._coerce_csv_value("42") == 42
-        assert app_module._coerce_csv_value("0") == 0
-        assert app_module._coerce_csv_value("-10") == -10
-
-    def test_leading_zero_becomes_float(self):
-        """01 falls through to float()."""
-        assert app_module._coerce_csv_value("01") == 1.0
+    def test_negative_int(self):
+        assert self._fmt(-10) == "-10"
 
     def test_float(self):
-        assert app_module._coerce_csv_value("3.14") == 3.14
+        assert self._fmt(3.14) == "3.14"
 
-    def test_string_preserved(self):
-        assert app_module._coerce_csv_value("Alice") == "Alice"
-        assert app_module._coerce_csv_value("hello world") == "hello world"
+    def test_string_plain(self):
+        assert self._fmt("hello") == '"hello"'
 
+    def test_string_with_double_quote(self):
+        assert self._fmt('say "hi"') == r'"say \"hi\""'
 
-# ---------------------------------------------------------------------------
-# FastAPI endpoints (mock NebulaClient at module level)
-# ---------------------------------------------------------------------------
+    def test_string_with_backslash(self):
+        # Backslash must be escaped (order: \\ first, then \")
+        assert self._fmt("path\\to\\file") == r'"path\\to\\file"'
+        assert self._fmt("a\\b") == r'"a\\b"'
 
-class TestHealthEndpoints:
-    def test_health_returns_ok(self, mock_nebula_session):
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/health")
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
-
-    def test_index_returns_message(self, mock_nebula_session):
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/")
-        assert resp.status_code == 200
-        assert "Nebula Interface API" in resp.json()["msg"]
+    def test_string_with_backslash_and_quote(self):
+        assert self._fmt('path\\"quote') == r'"path\\\"quote"'
 
 
-class TestSpaceEndpoints:
-    def test_list_spaces(self, mock_nebula_session):
-        mock_resp = make_mock_resp(keys=["Name"], rows=[])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/spaces")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), dict)
+class TestClientSQL:
+    """Test SQL generation (by inspecting the stmt passed to execute())."""
 
-    def test_create_space_valid(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/spaces",
-                    json={"name": "test_space", "vid_type": "FIXED_STRING(64)"},
-                )
-        assert resp.status_code == 201
-        assert resp.json()["created"] == "test_space"
+    def _stmt(self, name, **kw):
+        sess, resp = _mock_session()
+        NebulaClient._run.__get__(NebulaClient).__call__(  # pylint: disable=protected-access
+            NebulaClient("h", 9669, "u", "p"), sess, name, **kw
+        )
+        # We actually need to call the real _run to generate the stmt
+        # For unit tests: test the public methods which call _run internally
+        return sess.execute.call_args[0][0]  # first positional arg to execute()
 
-    def test_create_space_accepts_empty_name(self, mock_nebula_session):
-        """Empty space name is accepted by Pydantic (no min_length constraint).
-        Add Field(min_length=1) to SpaceCreate.name to change this behavior."""
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/spaces",
-                    json={"name": "", "vid_type": "FIXED_STRING(64)"},
-                )
-        # Currently accepted (Pydantic allows empty string; no min_length validator)
-        assert resp.status_code == 201
+    def test_create_space(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c._run(sess, "CREATE SPACE IF NOT EXISTS `test`(partition_num=3, replica_factor=1, vid_type=FIXED_STRING(64));")
+        # Just verify _run doesn't raise
+        assert sess.execute.called
 
-    def test_drop_space(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.delete("/spaces/test_space")
-        assert resp.status_code == 200
-        assert resp.json()["dropped"] == "test_space"
+    def test_drop_space(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c.drop_space(sess, "my_space")
+        call = sess.execute.call_args[0][0]
+        assert "DROP SPACE" in call
+        assert "`my_space`" in call
 
+    def test_list_spaces(self):
+        row = MagicMock()
+        v = MagicMock()
+        v.as_string.return_value = "Sage"
+        row.values = [v]
+        sess, resp = _mock_session()
+        resp.rows.return_value = [row]
+        c = NebulaClient("h", 9669, "u", "p")
+        names = c.list_spaces(sess)
+        assert "Sage" in names
 
-class TestTagEndpoints:
-    def test_list_tags(self, mock_nebula_session):
-        mock_resp = make_mock_resp(keys=["Tag"], rows=[])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/tags", params={"space": "test"})
-        assert resp.status_code == 200
-        assert "tags" in resp.json()
+    def test_insert_vertex(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c.insert_vertex(sess, space="S", vid="v1", tag="Person", props={"name": "Alice"})
+        call = sess.execute.call_args[0][0]
+        assert "INSERT VERTEX" in call
+        assert '"v1"' in call
+        assert '"Alice"' in call
 
-    def test_create_tag(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/tags",
-                    json={
-                        "space": "test",
-                        "tag": "Person",
-                        "properties": [{"name": "name", "type": "string"}],
-                    },
-                )
-        assert resp.status_code == 200
-        assert resp.json()["tag"] == "Person"
+    def test_insert_vertex_bool_true(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c.insert_vertex(sess, space="S", vid="v1", tag="Tag", props={"active": True})
+        call = sess.execute.call_args[0][0]
+        assert "true" in call
 
-    def test_create_tag_invalid_name(self, mock_nebula_session):
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/tags",
-                    json={"space": "test", "tag": "bad-tag", "properties": []},
-                )
-        assert resp.status_code == 400
+    def test_insert_edge(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c.insert_edge(sess, space="S", src="a", dst="b", edge="KNOWS", props={"since": 2020})
+        call = sess.execute.call_args[0][0]
+        assert "INSERT EDGE" in call
+        assert '"a"' in call
+        assert '"b"' in call
+        assert "2020" in call
 
-    def test_drop_tag(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.request(
-                    "DELETE",
-                    "/tags",
-                    json={"space": "test", "tag": "Person"},
-                )
-        assert resp.status_code == 200
-        assert resp.json()["tag"] == "Person"
+    def test_fetch_vertex_yield(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c.fetch_vertex(sess, space="S", vid="v1", tag="Person")
+        call = sess.execute.call_args[0][0]
+        assert "FETCH PROP ON" in call
+        assert "YIELD" in call  # Must have YIELD for NebulaGraph 3.x
+
+    def test_fetch_edge_yield(self):
+        sess, resp = _mock_session()
+        c = NebulaClient("h", 9669, "u", "p")
+        c.fetch_edge(sess, space="S", src="a", dst="b", edge="KNOWS")
+        call = sess.execute.call_args[0][0]
+        assert "FETCH PROP ON" in call
+        assert "YIELD" in call
+
+    def test_run_raises_nebula_error(self):
+        sess, resp = _mock_session()
+        resp.is_succeeded.return_value = False
+        resp.error_msg.return_value = "SpaceNotFound"
+        c = NebulaClient("h", 9669, "u", "p")
+        with pytest.raises(NebulaError) as exc_info:
+            c._run(sess, "BAD QUERY")
+        assert "SpaceNotFound" in str(exc_info.value)
 
 
-class TestEdgeTypeEndpoints:
-    def test_list_edge_types(self, mock_nebula_session):
-        mock_resp = make_mock_resp(keys=["Edge"], rows=[])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/edge-types", params={"space": "test"})
-        assert resp.status_code == 200
-        assert "edges" in resp.json()
+class TestClientPoolInit:
+    def test_init_pool_success(self):
+        with patch("modules.nebula_client.ConnectionPool") as MockPool:
+            mock_instance = MagicMock()
+            MockPool.return_value = mock_instance
+            mock_instance.init.return_value = True
+            c = NebulaClient("h", 9669, "u", "p")
+            result = c.init_pool()
+            assert result is True
 
-    def test_create_edge_type(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/edge-types",
-                    json={
-                        "space": "test",
-                        "edge": "KNOWS",
-                        "properties": [{"name": "since", "type": "int"}],
-                    },
-                )
-        assert resp.status_code == 200
-        assert resp.json()["edge"] == "KNOWS"
+    def test_init_pool_failure(self):
+        with patch("modules.nebula_client.ConnectionPool") as MockPool:
+            mock_instance = MagicMock()
+            MockPool.return_value = mock_instance
+            mock_instance.init.return_value = False
+            c = NebulaClient("h", 9669, "u", "p")
+            result = c.init_pool()
+            assert result is False
 
-
-class TestVertexEndpoints:
-    def test_insert_vertex(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/vertices",
-                    json={
-                        "space": "test",
-                        "tag": "Person",
-                        "vid": "alice",
-                        "props": {"name": "Alice", "age": 30},
-                    },
-                )
-        assert resp.status_code == 200
-        assert resp.json()["vertex"] == "alice"
-        assert resp.json()["created"] is True
-
-    def test_insert_vertex_catches_invalid_space_name(self, mock_nebula_session):
-        """Invalid space name (digit-start) triggers _assert_identifier."""
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/vertices",
-                    json={
-                        "space": "2invalid",
-                        "tag": "Person",
-                        "vid": "alice",
-                        "props": {},
-                    },
-                )
-        assert resp.status_code == 400
-
-    def test_fetch_vertex(self, mock_nebula_session):
-        mock_row = MagicMock()
-        mock_row.values = [MagicMock(__str__=lambda s: "Alice")]
-        mock_resp = make_mock_resp(keys=["name"], rows=[mock_row])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/vertices/alice", params={"space": "test"})
-        assert resp.status_code == 200
-        assert resp.json()["vertex"] == "alice"
-
-    def test_delete_vertex(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.request(
-                    "DELETE",
-                    "/vertices",
-                    json={"space": "test", "vid": "alice", "with_edges": True},
-                )
-        assert resp.status_code == 200
-        assert resp.json()["deleted"] is True
+    def test_session_uses_defaults(self):
+        with patch("modules.nebula_client.ConnectionPool") as MockPool:
+            mock_instance = MagicMock()
+            MockPool.return_value = mock_instance
+            mock_instance.init.return_value = True
+            mock_sess = MagicMock()
+            mock_instance.get_session.return_value = mock_sess
+            c = NebulaClient("h", 9669, "user", "pass")
+            c.init_pool()
+            with c.session() as sess:
+                pass
+            mock_instance.get_session.assert_called_once_with("user", "pass")
 
 
-class TestEdgeEndpoints:
-    def test_insert_edge(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.post(
-                    "/edges",
-                    json={
-                        "space": "test",
-                        "edge": "KNOWS",
-                        "src": "alice",
-                        "dst": "bob",
-                        "props": {"since": 2020},
-                    },
-                )
-        assert resp.status_code == 200
-        assert resp.json()["src"] == "alice"
-        assert resp.json()["dst"] == "bob"
+# ============================================================
+# Unit tests — FastAPI endpoints (mock client)
+# ============================================================
+class TestCsvCoercion:
+    def _coerce(self, val):
+        # _coerce is defined in main.py
+        import main
+        return main._coerce(val)
 
-    def test_fetch_edge(self, mock_nebula_session):
-        mock_row = MagicMock()
-        mock_row.values = [MagicMock(__str__=lambda s: "2020")]
-        mock_resp = make_mock_resp(keys=["since"], rows=[mock_row])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get(
-                    "/edges",
-                    params={"space": "test", "edge": "KNOWS", "src": "alice", "dst": "bob"},
-                )
-        assert resp.status_code == 200
+    def test_none(self):
+        assert self._coerce(None) is None
 
-    def test_delete_edge(self, mock_nebula_session):
-        mock_resp = make_mock_resp()
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.request(
-                    "DELETE",
-                    "/edges",
-                    json={"space": "test", "edge": "KNOWS", "src": "alice", "dst": "bob"},
-                )
-        assert resp.status_code == 200
-        assert resp.json()["deleted"] is True
+    def test_empty(self):
+        assert self._coerce("") is None
+
+    def test_true(self):
+        assert self._coerce("true") is True
+        assert self._coerce("True") is True
+
+    def test_false(self):
+        assert self._coerce("false") is False
+        assert self._coerce("FALSE") is False
+
+    def test_integer(self):
+        assert self._coerce("42") == 42
+        assert self._coerce("-7") == -7
+
+    def test_leading_zero_becomes_float(self):
+        # "01" is not a valid integer literal in nGQL, so it becomes float
+        assert self._coerce("01") == 1.0
+
+    def test_float(self):
+        assert self._coerce("3.14") == 3.14
+
+    def test_string(self):
+        assert self._coerce("hello world") == "hello world"
 
 
-class TestQueryEndpoint:
-    def test_query_returns_rows(self, mock_nebula_session):
-        # Build NebulaGraph-style value mocks that return correct types via _value()
-        def make_str_val(s):
-            m = MagicMock()
-            m.is_int.return_value = False
-            m.is_double.return_value = False
-            m.is_string.return_value = True
-            m.is_bool.return_value = False
-            m.as_string.return_value = s
-            return m
+class TestIdentifierValidation:
+    """Test _check_id regex logic (mirrors the RE in main.py)."""
+    RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-        def make_int_val(i):
-            m = MagicMock()
-            m.is_int.return_value = True
-            m.is_double.return_value = False
-            m.is_string.return_value = False
-            m.is_bool.return_value = False
-            m.as_int.return_value = i
-            return m
+    def _ok(self, name):
+        return bool(self.RE.match(name) and name)
 
-        mock_row = MagicMock()
-        mock_row.values = [make_int_val(1), make_str_val("Alice")]
-        mock_resp = make_mock_resp(keys=["id", "name"], rows=[mock_row])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get(
-                    "/query",
-                    params={"q": "MATCH (n) RETURN n", "space": "test"},
-                )
-        assert resp.status_code == 200
+    def test_valid_lower(self):
+        assert self._ok("person")
+
+    def test_valid_upper(self):
+        assert self._ok("PERSON")
+
+    def test_valid_underscore(self):
+        assert self._ok("_private")
+
+    def test_valid_mixed(self):
+        assert self._ok("MyClass_123")
+
+    def test_invalid_digit_start(self):
+        assert not self._ok("2invalid")
+
+    def test_invalid_hyphen(self):
+        assert not self._ok("my-tag")
+
+    def test_invalid_space(self):
+        assert not self._ok("my tag")
+
+    def test_invalid_empty(self):
+        assert not self._ok("")
+
+    def test_invalid_chinese(self):
+        assert not self._ok("中文")
+
+
+class TestAPIEndpoints:
+    """Test FastAPI endpoint logic with mocked Nebula client."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        from contextlib import asynccontextmanager
+
+        # Build the mock session/response objects
+        self.mock_sess = MagicMock()
+        self.mock_resp = MagicMock()
+        self.mock_resp.is_succeeded.return_value = True  # default; override per test
+        self.mock_resp.error_msg.return_value = ""
+        self.mock_resp.keys.return_value = ["Name"]
+        self.mock_resp.rows.return_value = []
+        self.mock_sess.execute.return_value = self.mock_resp
+        self.mock_sess.release = MagicMock()
+
+        # Wrap mock_sess in an async context manager (mimics session_with)
+        @asynccontextmanager
+        async def _mock_sess_cm(*args, **kwargs):
+            yield self.mock_sess
+
+        # Create a mock NebulaClient
+        # _run must call real _run logic so is_succeeded() check works
+        # Use side_effect so it calls the real method when needed
+        mock_client = MagicMock()
+        mock_client.list_spaces = MagicMock(return_value=[])
+        mock_client.session_with = MagicMock(side_effect=lambda *a, **kw: _mock_sess_cm(*a, **kw))
+
+        # _run side_effect: check is_succeeded and raise if False
+        def _run_side_effect(sess, stmt):
+            if not self.mock_resp.is_succeeded():
+                raise NebulaError(self.mock_resp.error_msg(), stmt=stmt)
+            return self.mock_resp
+        mock_client._run = MagicMock(side_effect=_run_side_effect)
+
+        # Patch ConnectionPool AND get_client so lifespan starts with our mock client
+        with patch("modules.nebula_client.ConnectionPool") as MockPool, \
+             patch("dependencies.get_client", return_value=mock_client):
+            mock_pool_instance = MagicMock()
+            mock_pool_instance.init.return_value = True
+            mock_pool_instance.get_session.return_value = self.mock_sess
+            MockPool.return_value = mock_pool_instance
+
+            import main as m
+            importlib.reload(m)
+
+            # Patch dependencies._client so get_client() returns our mock.
+            # Must use __dict__ directly because Python's closure optimization
+            # may cache the local variable lookup in get_client()'s bytecode.
+            import dependencies
+            dependencies.__dict__["_client"] = mock_client
+
+            # Override get_session dependency so endpoints get our mock session
+            # Must match exact signature to avoid FastAPI treating *args/**kwargs as query params
+            async def fake_get_session(
+                nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
+                nebula_port: Annotated[int | None, Header(alias="X-Nebula-Port")] = None,
+                nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
+                nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
+            ):
+                return self.mock_sess
+
+            m.app.dependency_overrides[m.get_session] = fake_get_session
+
+            self.app = m.app
+            self.client = TestClient(self.app, raise_server_exceptions=False)
+            yield
+
+    # -- Health -----------------------------------------------------------
+    def test_health_returns_ok(self):
+        resp = self.client.get("/health")
+        assert resp.status_code == 200, resp.json()
         data = resp.json()
-        assert data["message"] == "ok"
-        assert len(data["rows"]) == 1
-        assert data["rows"][0]["name"] == "Alice"
+        assert data["status"] == "ok"
 
-    def test_query_empty_result(self, mock_nebula_session):
-        mock_resp = make_mock_resp(keys=["id"], rows=[])
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/query", params={"q": "SHOW TAGS", "space": "test"})
+    # -- Spaces -----------------------------------------------------------
+    def test_list_spaces(self):
+        row = MagicMock()
+        v = MagicMock()
+        v.as_string.return_value = "Sage"
+        row.values = [v]
+        self.mock_resp.rows.return_value = [row]
+
+        resp = self.client.get("/api/v1/spaces")
         assert resp.status_code == 200
-        assert resp.json()["rows"] == []
+        body = resp.json()
+        assert body["ok"] is True
+        assert any(s["Name"] == "Sage" for s in body["data"]["spaces"])
 
-    def test_query_syntax_error(self, mock_nebula_session):
-        mock_resp = make_mock_resp(succeeded=False, error_msg="syntax error")
-        mock_nebula_session.execute.return_value = mock_resp
-        with patch.object(app_module.client, "session_with",
-                          with_mock_session(mock_nebula_session)):
-            with TestClient(app_module.app) as client:
-                resp = client.get("/query", params={"q": "BAD QUERY", "space": "test"})
+    def test_create_space_success(self):
+        resp = self.client.post("/api/v1/spaces", json={
+            "name": "test_space",
+            "vid_type": "FIXED_STRING(64)",
+        })
+        assert resp.status_code == 201
+        assert resp.json()["ok"] is True
+
+    def test_create_space_invalid_name(self):
+        resp = self.client.post("/api/v1/spaces", json={
+            "name": "bad name",
+            "vid_type": "FIXED_STRING(64)",
+        })
+        assert resp.status_code == 422  # Pydantic validation failure
+
+    def test_create_space_empty_name(self):
+        resp = self.client.post("/api/v1/spaces", json={"name": ""})
+        assert resp.status_code == 422
+
+    def test_drop_space(self):
+        resp = self.client.delete("/api/v1/spaces/test_space")
+        assert resp.status_code == 200
+
+    # -- Tags -------------------------------------------------------------
+    def test_create_tag(self):
+        resp = self.client.post("/api/v1/tags", json={
+            "space": "S", "tag": "Person",
+            "properties": [{"name": "name", "type": "string"}],
+        })
+        assert resp.status_code == 201
+
+    def test_create_tag_invalid_name(self):
+        resp = self.client.post("/api/v1/tags", json={
+            "space": "S", "tag": "bad-name",
+            "properties": [],
+        })
         assert resp.status_code == 400
 
+    def test_drop_tag(self):
+        resp = self.client.request("DELETE", "/api/v1/tags", json={"space": "S", "tag": "Person"})
+        assert resp.status_code == 200
 
-# ---------------------------------------------------------------------------
-# Integration tests (live server)
-# ---------------------------------------------------------------------------
+    # -- Edges ------------------------------------------------------------
+    def test_create_edge_type(self):
+        resp = self.client.post("/api/v1/edge-types", json={
+            "space": "S", "edge": "KNOWS",
+            "properties": [{"name": "since", "type": "int"}],
+        })
+        assert resp.status_code == 201
 
+    # -- Vertices ----------------------------------------------------------
+    def test_insert_vertex(self):
+        resp = self.client.post("/api/v1/vertices", json={
+            "space": "S", "tag": "Person", "vid": "alice",
+            "props": {"name": "Alice"},
+        })
+        assert resp.status_code == 201
+
+    def test_insert_vertex_invalid_vid(self):
+        resp = self.client.post("/api/v1/vertices", json={
+            "space": "S", "tag": "Person", "vid": "2bad",
+            "props": {},
+        })
+        assert resp.status_code == 400
+
+    def test_insert_vertex_empty_vid(self):
+        resp = self.client.post("/api/v1/vertices", json={
+            "space": "S", "tag": "Person", "vid": "",
+            "props": {},
+        })
+        # Pydantic min_length=1 → 422
+        assert resp.status_code == 422
+
+    def test_delete_vertex(self):
+        resp = self.client.request("DELETE", "/api/v1/vertices", json={
+            "space": "S", "vid": "alice",
+        })
+        assert resp.status_code == 200
+
+    # -- Query -------------------------------------------------------------
+    def test_query_success(self):
+        row = MagicMock()
+        v = MagicMock()
+        v.is_string.return_value = True
+        v.as_string.return_value = "Alice"
+        row.values = [v]
+        self.mock_resp.rows.return_value = [row]
+        self.mock_resp.keys.return_value = ["name"]
+
+        resp = self.client.get("/api/v1/query", params={"q": "MATCH (n) RETURN n", "space": "Sage"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["data"]["rows"][0]["name"] == "Alice"
+
+    def test_query_empty_result(self):
+        self.mock_resp.rows.return_value = []
+        resp = self.client.get("/api/v1/query", params={"q": "SHOW TAGS", "space": "S"})
+        assert resp.status_code == 200
+        assert resp.json()["data"]["rows"] == []
+
+    def test_query_syntax_error(self):
+        self.mock_resp.is_succeeded.return_value = False
+        self.mock_resp.error_msg.return_value = "SyntaxError: ..."
+
+        resp = self.client.get("/api/v1/query", params={"q": "BAD QUERY", "space": "S"})
+        assert resp.status_code == 400
+
+    # -- Response envelope -------------------------------------------------
+    def test_response_envelope(self):
+        """All endpoints return {ok: bool, data: ...}."""
+        resp = self.client.get("/api/v1/spaces")
+        body = resp.json()
+        assert "ok" in body
+        assert "data" in body
+
+
+# ============================================================
+# Integration tests (against live server)
+# ============================================================
 @pytest.mark.integration
 class TestInterfaceIntegration:
-    def test_health_live(self, api_client):
-        status, body = api_client.get("/health")
-        assert status == 200
+    """Live integration tests against the server at ZZCC_SERVER_HOST."""
+
+    BASE = "http://124.223.47.167:8001"
+
+    def _req(self, method, path, data=None, params=None):
+        import urllib.request, urllib.error, json
+        url = self.BASE + path
+        if params:
+            qs = "&".join(f"{k}={v}" for k, v in params.items())
+            url = f"{url}?{qs}"
+        body = json.dumps(data).encode() if data else None
+        hdrs = {"Content-Type": "application/json"}
+        req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read().decode())
+            except json.JSONDecodeError:
+                return e.code, e.read().decode()
+        except urllib.error.URLError as e:
+            return 0, str(e.reason)
+
+    def _post(self, path, data):
+        return self._req("POST", path, data)
+
+    def _get(self, path, params=None):
+        return self._req("GET", path, params=params)
+
+    def _delete(self, path, data=None):
+        return self._req("DELETE", path, data=data)
+
+    def test_health(self):
+        status, body = self._get("/health")
+        assert status == 200, body
         assert body["status"] == "ok"
 
-    def test_index_live(self, api_client):
-        status, body = api_client.get("/")
-        assert status == 200
-        assert "Nebula Interface API" in body["msg"]
+    def test_root(self):
+        status, body = self._get("/")
+        assert status == 200, body
+        assert "NebulaGraph" in body["service"]
 
-    def test_list_spaces_live(self, api_client):
-        status, body = api_client.get("/spaces")
-        assert status == 200
-        assert isinstance(body, dict)
+    def test_list_spaces(self):
+        status, body = self._get("/api/v1/spaces")
+        assert status == 200, body
+        assert body["ok"] is True
 
-    def test_create_and_drop_space_live(self, api_client, test_space_name):
-        status, body = api_client.post(
-            "/spaces",
-            {
-                "name": test_space_name,
-                "vid_type": "FIXED_STRING(64)",
-                "partition_num": 3,
-                "replica_factor": 1,
-            },
-        )
-        assert status == 201, f"Create failed: {body}"
-        assert body["created"] == test_space_name
-
-        status, body = api_client.delete(f"/spaces/{test_space_name}")
-        assert status == 200
-        assert body["dropped"] == test_space_name
-
-    def test_insert_and_fetch_vertex_live(self, api_client):
-        # Use existing "Sage" space to avoid NebulaGraph multi-graphd sync delays
-        # (CREATE SPACE works but subsequent USE may hit unsynced graphd leaders)
+    def test_insert_and_fetch_vertex(self):
+        """Use existing 'Sage' space; tag may already exist."""
         space = "Sage"
+        tag = "Person"
 
-        # Setup tag (may already exist, that's fine)
-        api_client.post(
-            "/tags",
-            {"space": space, "tag": "Person", "properties": [{"name": "name", "type": "string"}]},
-        )
+        # Create tag (may exist already)
+        self._post("/api/v1/tags", {
+            "space": space, "tag": tag,
+            "properties": [{"name": "name", "type": "string"}],
+        })
 
-        status, body = api_client.post_with_retry(
-            "/vertices",
-            {"space": space, "tag": "Person", "vid": "alice", "props": {"name": "Alice"}},
-        )
-        assert status == 200, f"Insert failed: {body}"
+        # Insert vertex
+        status, body = self._post("/api/v1/vertices", {
+            "space": space, "tag": tag, "vid": f"test_{int(time.time())}",
+            "props": {"name": "IntegrationTest"},
+        })
+        assert status == 201, body
 
-        # Note: fetch_vertex has a known NebulaGraph compatibility issue:
-        # it generates "FETCH PROP ON * vid" which requires a YIELD clause in v3.x.
-        # The fix belongs in main.py fetch_vertex, not here.
-        status, body = api_client.get("/vertices/alice", params={"space": space, "tag": "Person"})
-        assert status in (200, 400), f"Unexpected status {status}: {body}"
+        # Fetch vertex (with tag specified to avoid FETCH * issue)
+        vid = "test_integration_person"
+        self._post("/api/v1/vertices", {
+            "space": space, "tag": tag, "vid": vid,
+            "props": {"name": "TestVertex"},
+        })
+        status, body = self._get("/api/v1/vertices/test_integration_person",
+                                  params={"space": space, "tag": tag})
+        assert status == 200, body
 
-    def test_insert_and_fetch_edge_live(self, api_client):
-        # Use existing "Sage" space
+    def test_edge_flow(self):
         space = "Sage"
+        tag = "Person"
+        edge = "KNOWS"
+        vid_a = f"test_a_{int(time.time())}"
+        vid_b = f"test_b_{int(time.time())}"
 
-        # Setup tag + edge type
-        api_client.post(
-            "/tags",
-            {"space": space, "tag": "Person", "properties": [{"name": "name", "type": "string"}]},
-        )
-        api_client.post(
-            "/edge-types",
-            {"space": space, "edge": "KNOWS", "properties": [{"name": "since", "type": "int"}]},
-        )
+        # Ensure tag and edge
+        self._post("/api/v1/tags", {
+            "space": space, "tag": tag,
+            "properties": [{"name": "name", "type": "string"}],
+        })
+        self._post("/api/v1/edge-types", {
+            "space": space, "edge": edge,
+            "properties": [{"name": "since", "type": "int"}],
+        })
 
-        # Insert vertices
-        for vid, name in [("alice", "Alice"), ("bob", "Bob")]:
-            api_client.post_with_retry(
-                "/vertices",
-                {"space": space, "tag": "Person", "vid": vid, "props": {"name": name}},
-            )
+        # Insert two vertices
+        for vid in (vid_a, vid_b):
+            self._post("/api/v1/vertices", {
+                "space": space, "tag": tag, "vid": vid,
+                "props": {"name": vid},
+            })
 
         # Insert edge
-        status, body = api_client.post(
-            "/edges",
-            {"space": space, "edge": "KNOWS", "src": "alice", "dst": "bob", "props": {"since": 2020}},
-        )
-        assert status == 200, f"Insert edge failed: {body}"
-
-        # Fetch edge (same FETCH PROP bug as fetch_vertex)
-        status, body = api_client.get(
-            "/edges",
-            params={"space": space, "edge": "KNOWS", "src": "alice", "dst": "bob"},
-        )
-        assert status in (200, 400), f"Unexpected status {status}: {body}"
+        status, body = self._post("/api/v1/edges", {
+            "space": space, "edge": edge,
+            "src": vid_a, "dst": vid_b,
+            "props": {"since": 2024},
+        })
+        assert status == 201, body

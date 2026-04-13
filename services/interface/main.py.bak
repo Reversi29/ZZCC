@@ -1,0 +1,770 @@
+"""
+NebulaGraph Interface — FastAPI service.
+
+Architectural principles:
+- Config from env / .env via python-dotenv
+- Lifespan: init pool on startup, close on shutdown
+- NebulaError → HTTP 400, internal errors → HTTP 500
+- Consistent response: {ok: bool, data: ...}
+- API version prefix /api/v1
+- Optional API-key auth (X-API-Key header, enabled via API_KEY env var)
+"""
+from __future__ import annotations
+
+import csv
+import io
+import logging
+import os
+import re
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Annotated, Any, Dict, List, Optional
+
+import structlog
+from dotenv import load_dotenv
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
+from pypdf import PdfReader
+from docx import Document
+
+from modules.nebula_client import NebulaClient, NebulaError
+
+# ============================================================
+# Config
+# ============================================================
+load_dotenv()
+
+NEBULA_HOST = os.getenv("NEBULA_HOST", "124.223.47.167")
+NEBULA_PORT = int(os.getenv("NEBULA_PORT", "9669"))
+NEBULA_USER = os.getenv("NEBULA_USER", "root")
+NEBULA_PASSWORD = os.getenv("NEBULA_PASSWORD", "nebula")
+API_KEY = os.getenv("API_KEY", "")   # empty = auth disabled
+API_VERSION = os.getenv("API_VERSION", "1")
+
+_log = structlog.get_logger()
+
+# ============================================================
+# Client singleton
+# ============================================================
+_client: NebulaClient | None = None
+
+
+def get_client() -> NebulaClient:
+    if _client is None:
+        raise RuntimeError("Nebula client not initialized")
+    return _client
+
+
+# ============================================================
+# Lifespan
+# ============================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _client
+    _log.info("nebula_connect", host=NEBULA_HOST, port=NEBULA_PORT)
+    _client = NebulaClient(
+        host=NEBULA_HOST,
+        port=NEBULA_PORT,
+        user=NEBULA_USER,
+        password=NEBULA_PASSWORD,
+    )
+    if not _client.init_pool():
+        _log.error("nebula_pool_init_failed")
+        raise RuntimeError(f"NebulaGraph connection failed: {NEBULA_HOST}:{NEBULA_PORT}")
+    _log.info("nebula_pool_ready")
+    yield
+    _client.close()
+    _log.info("nebula_pool_closed")
+
+
+# ============================================================
+# App
+# ============================================================
+app = FastAPI(
+    title="NebulaGraph Interface",
+    version=API_VERSION,
+    lifespan=lifespan,
+)
+v1 = APIRouter(prefix="/api/v1")
+
+
+# ============================================================
+# Auth
+# ============================================================
+async def require_api_key(
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> str:
+    if not API_KEY:
+        return ""
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+    return x_api_key
+
+
+async def get_session(
+    nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
+    nebula_port: Annotated[int | None, Header(alias="X-Nebula-Port")] = None,
+    nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
+    nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
+):
+    client = get_client()
+    return client.session_with(
+        host=nebula_host,
+        port=nebula_port,
+        user=nebula_user,
+        password=nebula_password,
+    )
+
+
+# ============================================================
+# Shared helpers
+# ============================================================
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_id(name: str, kind: str) -> None:
+    if not IDENTIFIER_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{kind} '{name}' 非法。"
+                "标识符必须匹配 ^[A-Za-z_][A-Za-z0-9_]*$，"
+                "以字母或下划线开头，仅含字母、数字、下划线。"
+            ),
+        )
+
+
+def _check_props(props: Dict[str, Any]) -> None:
+    for k in props:
+        _check_id(str(k), "属性名")
+
+
+def _run(sess, stmt: str):
+    """Execute nGQL; NebulaError → 400, internal → 500."""
+    try:
+        return get_client()._run(sess, stmt)
+    except NebulaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.error("nebula_internal_error", stmt=stmt[:80], error=str(exc))
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+
+def _rows_to_dicts(resp) -> List[Dict[str, Any]]:
+    if not resp.rows():
+        return []
+    keys = list(resp.keys())
+    out = []
+    for row in resp.rows():
+        obj = {}
+        for idx, col in enumerate(keys):
+            v = row.values[idx]
+            try:
+                if v.is_string():
+                    obj[col] = v.as_string()
+                elif v.is_int():
+                    obj[col] = v.as_int()
+                elif v.is_double():
+                    obj[col] = v.as_double()
+                elif v.is_bool():
+                    obj[col] = v.as_bool()
+                else:
+                    obj[col] = str(v)
+            except AttributeError:
+                obj[col] = str(v)
+        out.append(obj)
+    return out
+
+
+def _wait_space(sess, space: str, timeout: int = 60) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            get_client()._run(sess, f"USE `{space}`; YIELD 1;")
+            return
+        except NebulaError:
+            time.sleep(1)
+    raise HTTPException(status_code=503, detail=f"Space '{space}' did not become ready within {timeout}s")
+
+
+# ============================================================
+# Pydantic models
+# ============================================================
+class SpaceCreate(BaseModel):
+    name: str
+    partition_num: int = Field(3, ge=1)
+    replica_factor: int = Field(1, ge=1)
+    vid_type: str = Field("FIXED_STRING(64)")
+
+    @field_validator("name")
+    @classmethod
+    def name_ok(cls, v: str) -> str:
+        if not IDENTIFIER_RE.match(v):
+            raise ValueError("非法标识符")
+        return v
+
+
+class TagCreate(BaseModel):
+    space: str
+    tag: str
+    properties: List["PropertyDef"] = Field(default_factory=list)
+
+
+class TagDrop(BaseModel):
+    space: str
+    tag: str
+
+
+class EdgeTypeCreate(BaseModel):
+    space: str
+    edge: str
+    properties: List["PropertyDef"] = Field(default_factory=list)
+
+
+class EdgeTypeDrop(BaseModel):
+    space: str
+    edge: str
+
+
+class PropertyDef(BaseModel):
+    name: str
+    type: str
+
+
+class TagDef(BaseModel):
+    name: str
+    properties: List[PropertyDef] = Field(default_factory=list)
+
+
+class EdgeDef(BaseModel):
+    name: str
+    properties: List[PropertyDef] = Field(default_factory=list)
+
+
+class DeployRequest(BaseModel):
+    space: str
+    partition_num: int = Field(3, ge=1)
+    replica_factor: int = Field(1, ge=1)
+    vid_type: str = Field("FIXED_STRING(64)")
+    tags: List[TagDef] = Field(default_factory=list)
+    edges: List[EdgeDef] = Field(default_factory=list)
+
+
+class VertexCreate(BaseModel):
+    space: str
+    tag: str
+    vid: str = Field(..., min_length=1)
+    props: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VertexDelete(BaseModel):
+    space: str
+    vid: str
+    with_edges: bool = True
+
+
+class EdgeCreate(BaseModel):
+    space: str
+    edge: str
+    src: str = Field(..., min_length=1)
+    dst: str = Field(..., min_length=1)
+    props: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EdgeDelete(BaseModel):
+    space: str
+    edge: str
+    src: str
+    dst: str
+
+
+class TagListResp(BaseModel):
+    ok: bool
+    data: Dict[str, List[Dict[str, Any]]]
+
+
+class EdgeListResp(BaseModel):
+    ok: bool
+    data: Dict[str, List[Dict[str, Any]]]
+
+
+class VertexResp(BaseModel):
+    ok: bool
+    data: Dict[str, Any]
+
+
+class EdgeResp(BaseModel):
+    ok: bool
+    data: Dict[str, Any]
+
+
+# ============================================================
+# Root endpoints
+# ============================================================
+@app.get("/")
+async def root():
+    return {"service": "NebulaGraph Interface", "version": API_VERSION, "docs": "/docs"}
+
+
+@app.get("/health")
+async def health():
+    try:
+        with get_client().session() as sess:
+            get_client()._run(sess, "SHOW HOSTS;")
+        return {"status": "ok", "nebula": "connected"}
+    except Exception as e:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "degraded", "nebula": str(e)},
+        )
+
+
+# ============================================================
+# Space endpoints
+# ============================================================
+@v1.post("/spaces", status_code=201)
+async def create_space(
+    payload: SpaceCreate,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    try:
+        get_client().create_space(
+            sess,
+            name=payload.name,
+            vid_type=payload.vid_type,
+            partition_num=payload.partition_num,
+            replica_factor=payload.replica_factor,
+        )
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _wait_space(sess, payload.name)
+    _log.info("space_created", space=payload.name)
+    return {"ok": True, "data": {"space": payload.name}}
+
+
+@v1.get("/spaces")
+async def list_spaces(
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    resp = _run(sess, "SHOW SPACES;")
+    spaces = []
+    for row in resp.rows():
+        vals = row.values
+        if vals:
+            try:
+                spaces.append({"Name": vals[0].as_string()})
+            except AttributeError:
+                spaces.append({"Name": str(vals[0]).strip()})
+    return {"ok": True, "data": {"spaces": spaces}}
+
+
+@v1.delete("/spaces/{name}")
+async def drop_space(
+    name: str,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(name, "空间名")
+    try:
+        get_client().drop_space(sess, name)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _log.info("space_dropped", space=name)
+    return {"ok": True, "data": {"space": name}}
+
+
+# ============================================================
+# Query
+# ============================================================
+@v1.get("/query")
+async def run_query(
+    q: str = Query(..., description="nGQL statement"),
+    space: str = Query(..., description="Target space name"),
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    resp = _run(sess, f"USE `{space}`; {q}")
+    return {"ok": True, "data": {"rows": _rows_to_dicts(resp), "columns": list(resp.keys()) if resp.rows() else []}}
+
+
+# ============================================================
+# Tags
+# ============================================================
+@v1.get("/tags", response_model=TagListResp)
+async def list_tags(
+    space: str,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    resp = _run(sess, f"USE `{space}`; SHOW TAGS;")
+    tags = []
+    for row in resp.rows():
+        vals = row.values
+        if vals:
+            try:
+                tags.append({"Name": vals[0].as_string()})
+            except AttributeError:
+                tags.append({"Name": str(vals[0])})
+    return {"ok": True, "data": {"tags": tags}}
+
+
+@v1.post("/tags", status_code=201)
+async def create_tag(
+    payload: TagCreate,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.tag, "标签名")
+    for p in payload.properties:
+        _check_id(p.name, "属性名")
+    cols = [(p.name, p.type) for p in payload.properties]
+    try:
+        get_client().ensure_tag(sess, space=payload.space, tag=payload.tag, columns=cols)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"tag": payload.tag}}
+
+
+@v1.delete("/tags")
+async def drop_tag(
+    payload: TagDrop,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.tag, "标签名")
+    try:
+        get_client().drop_tag(sess, space=payload.space, tag=payload.tag)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"tag": payload.tag}}
+
+
+# ============================================================
+# Edge types
+# ============================================================
+@v1.get("/edge-types", response_model=EdgeListResp)
+async def list_edge_types(
+    space: str,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    resp = _run(sess, f"USE `{space}`; SHOW EDGES;")
+    edges = []
+    for row in resp.rows():
+        vals = row.values
+        if vals:
+            try:
+                edges.append({"Name": vals[0].as_string()})
+            except AttributeError:
+                edges.append({"Name": str(vals[0])})
+    return {"ok": True, "data": {"edges": edges}}
+
+
+@v1.post("/edge-types", status_code=201)
+async def create_edge_type(
+    payload: EdgeTypeCreate,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.edge, "边类型名")
+    for p in payload.properties:
+        _check_id(p.name, "属性名")
+    cols = [(p.name, p.type) for p in payload.properties]
+    try:
+        get_client().ensure_edge(sess, space=payload.space, edge=payload.edge, columns=cols)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"edge": payload.edge}}
+
+
+@v1.delete("/edge-types")
+async def drop_edge_type(
+    payload: EdgeTypeDrop,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.edge, "边类型名")
+    try:
+        get_client().drop_edge_type(sess, space=payload.space, edge=payload.edge)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"edge": payload.edge}}
+
+
+# ============================================================
+# Vertices
+# ============================================================
+@v1.post("/vertices", status_code=201)
+async def insert_vertex(
+    payload: VertexCreate,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.tag, "标签名")
+    _check_id(payload.vid, "VID")
+    _check_props(payload.props)
+    try:
+        get_client().insert_vertex(
+            sess, space=payload.space, vid=payload.vid,
+            tag=payload.tag, props=payload.props,
+        )
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"vid": payload.vid, "tag": payload.tag}}
+
+
+@v1.get("/vertices/{vid}", response_model=VertexResp)
+async def fetch_vertex(
+    vid: str,
+    space: str = Query(...),
+    tag: str | None = None,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    if tag:
+        _check_id(tag, "标签名")
+    try:
+        resp = get_client().fetch_vertex(sess, space=space, vid=vid, tag=tag)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"vid": vid, "tag": tag, "rows": _rows_to_dicts(resp)}}
+
+
+@v1.delete("/vertices")
+async def delete_vertex(
+    payload: VertexDelete,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    try:
+        get_client().delete_vertex(
+            sess, space=payload.space, vid=payload.vid, with_edges=payload.with_edges,
+        )
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"vid": payload.vid}}
+
+
+# ============================================================
+# Edges
+# ============================================================
+@v1.post("/edges", status_code=201)
+async def insert_edge(
+    payload: EdgeCreate,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.edge, "边类型名")
+    _check_id(payload.src, "SRC VID")
+    _check_id(payload.dst, "DST VID")
+    _check_props(payload.props)
+    try:
+        get_client().insert_edge(
+            sess, space=payload.space, src=payload.src,
+            dst=payload.dst, edge=payload.edge, props=payload.props,
+        )
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"edge": payload.edge, "src": payload.src, "dst": payload.dst}}
+
+
+@v1.get("/edges", response_model=EdgeResp)
+async def fetch_edge(
+    space: str,
+    edge: str,
+    src: str,
+    dst: str,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    _check_id(edge, "边类型名")
+    try:
+        resp = get_client().fetch_edge(sess, space=space, src=src, dst=dst, edge=edge)
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"edge": edge, "src": src, "dst": dst, "rows": _rows_to_dicts(resp)}}
+
+
+@v1.delete("/edges")
+async def delete_edge(
+    payload: EdgeDelete,
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(payload.space, "空间名")
+    _check_id(payload.edge, "边类型名")
+    try:
+        get_client().delete_edge(
+            sess, space=payload.space, src=payload.src, dst=payload.dst, edge=payload.edge,
+        )
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "data": {"edge": payload.edge, "src": payload.src, "dst": payload.dst}}
+
+
+# ============================================================
+# Deploy (one-shot schema)
+# ============================================================
+@v1.post("/deploy")
+async def deploy_schema(
+    payload: DeployRequest | None = Body(default=None),
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    if payload is None:
+        defaults = Path(__file__).with_name("deploy_defaults.json")
+        if not defaults.exists():
+            raise HTTPException(status_code=500, detail="deploy_defaults.json not found")
+        payload = DeployRequest.model_validate_json(defaults.read_text())
+
+    _check_id(payload.space, "空间名")
+    for tag in payload.tags:
+        _check_id(tag.name, "标签名")
+    for edge in payload.edges:
+        _check_id(edge.name, "边类型名")
+
+    steps: List[str] = []
+    try:
+        get_client().create_space(
+            sess, name=payload.space,
+            vid_type=payload.vid_type,
+            partition_num=payload.partition_num,
+            replica_factor=payload.replica_factor,
+        )
+        steps.append(f"space:{payload.space}")
+        _wait_space(sess, payload.space)
+        steps.append(f"space-ready:{payload.space}")
+        for tag in payload.tags:
+            cols = [(p.name, p.type) for p in tag.properties]
+            get_client().ensure_tag(sess, space=payload.space, tag=tag.name, columns=cols)
+            steps.append(f"tag:{tag.name}")
+        for edge in payload.edges:
+            cols = [(p.name, p.type) for p in edge.properties]
+            get_client().ensure_edge(sess, space=payload.space, edge=edge.name, columns=cols)
+            steps.append(f"edge:{edge.name}")
+    except NebulaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _log.info("deployed", space=payload.space, steps=steps)
+    return {"ok": True, "data": {"space": payload.space, "steps": steps}}
+
+
+# ============================================================
+# CSV import
+# ============================================================
+def _coerce(raw: str | None) -> Any:
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        if s.startswith("0") and len(s) > 1:
+            raise ValueError
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        return s
+
+
+@v1.post("/import/csv/vertices")
+async def import_vertices_csv(
+    space: str,
+    tag: str,
+    file: UploadFile = File(...),
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    _check_id(tag, "标签名")
+    reader = csv.DictReader(io.TextIOWrapper(file.file, encoding="utf-8"))
+    if not reader.fieldnames or "vid" not in reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV must have 'vid' column")
+    count, errors = 0, []
+    for i, row in enumerate(reader, 1):
+        vid = (row.get("vid") or "").strip()
+        if not vid:
+            continue
+        props = {k: _coerce(v) for k, v in row.items() if k != "vid" and v}
+        try:
+            _check_props(props)
+            get_client().insert_vertex(sess, space=space, vid=vid, tag=tag, props=props)
+            count += 1
+        except NebulaError as e:
+            errors.append(f"row {i} ({vid}): {e}")
+    return {"ok": True, "data": {"imported": count, "errors": errors[:50]}}
+
+
+@v1.post("/import/csv/edges")
+async def import_edges_csv(
+    space: str,
+    edge: str,
+    file: UploadFile = File(...),
+    sess=Depends(get_session),
+    auth: str | None = Depends(require_api_key),
+):
+    _check_id(space, "空间名")
+    _check_id(edge, "边类型名")
+    reader = csv.DictReader(io.TextIOWrapper(file.file, encoding="utf-8"))
+    if not reader.fieldnames or "src" not in reader.fieldnames or "dst" not in reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV must have 'src' and 'dst' columns")
+    count, errors = 0, []
+    for i, row in enumerate(reader, 1):
+        src = (row.get("src") or "").strip()
+        dst = (row.get("dst") or "").strip()
+        if not src or not dst:
+            continue
+        props = {k: _coerce(v) for k, v in row.items() if k not in ("src", "dst") and v}
+        try:
+            _check_props(props)
+            get_client().insert_edge(sess, space=space, src=src, dst=dst, edge=edge, props=props)
+            count += 1
+        except NebulaError as e:
+            errors.append(f"row {i} ({src}->{dst}): {e}")
+    return {"ok": True, "data": {"imported": count, "errors": errors[:50]}}
+
+
+# ============================================================
+# Mount routers
+# ============================================================
+app.include_router(v1)
+
+
+# ============================================================
+# Resolve forward-ref models
+# ============================================================
+TagCreate.model_rebuild()
+DeployRequest.model_rebuild()
