@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>知识图谱 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; }
+    #chart { width: 100%; height: 100%; }
+
+    #panel {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(10, 10, 30, 0.82);
+      border: 1px solid rgba(0, 212, 255, 0.3);
+      border-radius: 10px;
+      padding: 12px 14px;
+      min-width: 200px;
+      font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      color: #cce8ff;
+      font-size: 13px;
+      backdrop-filter: blur(6px);
+    }
+    #panel h3 {
+      margin: 0 0 8px 0; font-size: 14px; font-weight: 600;
+      color: #00d4ff;
+      border-bottom: 1px solid rgba(0,212,255,0.2);
+      padding-bottom: 6px;
+    }
+    #panel .stat-row {
+      display: flex; justify-content: space-between; margin: 4px 0;
+    }
+    #panel .stat-val { color: #ffffff; font-weight: 600; }
+
+    #tooltip {
+      position: absolute; z-index: 20;
+      background: rgba(10, 10, 30, 0.9);
+      border: 1px solid rgba(0,212,255,0.5);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: -apple-system, 'PingFang SC', sans-serif;
+      color: #e0f0ff;
+      font-size: 13px;
+      max-width: 260px;
+      pointer-events: none;
+      display: none;
+      line-height: 1.5;
+    }
+    #tooltip .tip-title { color: #00d4ff; font-weight: 600; margin-bottom: 4px; }
+    #tooltip .tip-tag { display: inline-block; background: rgba(0,212,255,0.15); border-radius: 4px; padding: 1px 6px; margin: 2px 3px 2px 0; font-size: 11px; }
+
+    #loading {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: #00d4ff; font-family: -apple-system, sans-serif;
+      font-size: 16px; z-index: 5; text-align: center;
+    }
+    #loading.hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div id="panel">
+  <h3>📊 图谱概览</h3>
+  <div class="stat-row"><span>节点</span><span class="stat-val" id="stat-nodes">—</span></div>
+  <div class="stat-row"><span>边</span><span class="stat-val" id="stat-links">—</span></div>
+  <div class="stat-row"><span>空间</span><span class="stat-val" id="stat-space">—</span></div>
+  <div id="legend" style="margin-top:8px;"></div>
+</div>
+
+<div id="tooltip">
+  <div class="tip-title" id="tip-title"></div>
+  <div id="tip-tag" style="margin-top:4px;"></div>
+  <div id="tip-props" style="margin-top:4px; font-size:12px; color:#9dc8e8;"></div>
+</div>
+
+<div id="loading">
+  <div id="loading-spinner">⏳ 加载中...</div>
+</div>
+
+<div id="chart"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js"></script>
+<script>
+(function () {
+  var chart = echarts.init(document.getElementById('chart'));
+  var is3D = true;
+  var currentSpace = '';
+  var rawData = { nodes: [], links: [], categories: [] };
+
+  var option = {
+    backgroundColor: '#0a0a1a',
+    animation: true,
+    animationDurationUpdate: 800,
+    progressive: 400,
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: 'transparent',
+      borderWidth: 0,
+      padding: 0,
+      textStyle: { color: 'transparent' },
+      formatter: function (params) {
+        if (params.dataType === 'node') {
+          var d = params.data;
+          document.getElementById('tip-title').textContent = d.label || d.id;
+          var tagHtml = (d.tags || []).map(function (t) {
+            return '<span class="tip-tag">' + t + '</span>';
+          }).join('');
+          document.getElementById('tip-tag').innerHTML = tagHtml;
+          var propsHtml = Object.keys(d.props || {}).slice(0, 4).map(function (k) {
+            return k + ': ' + (d.props[k] || '');
+          }).join('<br>');
+          document.getElementById('tip-props').innerHTML = propsHtml;
+          var tipEl = document.getElementById('tooltip');
+          tipEl.style.display = 'block';
+          return '';
+        }
+        return '';
+      }
+    },
+    xAxis3D: { show: false, min: -100, max: 100 },
+    yAxis3D: { show: false, min: -100, max: 100 },
+    zAxis3D: { show: false, min: -100, max: 100 },
+    grid3D: { show: false, width: '100%', height: '100%', viewControl: { beta: 40, alpha: 30, rotateSpeed: 30, zoomSensitivity: 1.2, autoRotate: true, autoRotateAfterInitialAnimationDelay: 2000 } },
+    series: [{
+      type: 'graphGL',
+      name: 'knowledge_graph',
+      coordinateSystem: 'cartesian3D',
+      symbolSize: function (d) { return Math.min(60, 18 + (d.symbolSize || 1) * 4); },
+      nodeScaleRatio: 0.8,
+      roam: true,
+      focusNodeAdjacency: true,
+      lineStyle: { width: 1.2, color: 'rgba(0,212,255,0.55)', curveness: 0.2, opacity: 0.7 },
+      itemStyle: { borderWidth: 2, borderColor: '#fff', shadowBlur: 12, shadowColor: 'rgba(0,212,255,0.4)' },
+      label: { show: true, formatter: '{b}', fontSize: 12, color: '#fff', fontFamily: '-apple-system, PingFang SC, sans-serif', textShadowColor: '#000', textShadowBlur: 4 },
+      emphasis: { lineStyle: { width: 2.5, color: '#00d4ff', curveness: 0.1 }, itemStyle: { shadowBlur: 20, shadowColor: '#00d4ff' } },
+      categories: [],
+      data: [],
+      links: [],
+      force: {
+        repulsion: 120,
+        gravity: 0.05,
+        edgeLength: [50, 200],
+        layoutAnimation: true,
+        initLayout: 'circular'
+      }
+    }]
+  };
+
+  chart.setOption(option);
+
+  // Follow mouse for tooltip
+  document.addEventListener('mousemove', function (e) {
+    var tip = document.getElementById('tooltip');
+    if (tip.style.display === 'block') {
+      tip.style.left = (e.clientX + 14) + 'px';
+      tip.style.top = (e.clientY - 10) + 'px';
+    }
+  });
+  document.addEventListener('click', function () {
+    document.getElementById('tooltip').style.display = 'none';
+  });
+
+  function buildOption(nodes, links, categories) {
+    var catNames = categories || [];
+    var catColors = ['#00d4ff', '#ff6b6b', '#ffd93d', '#6bcb77', '#c77dff', '#ff9a3c', '#4cc9f0', '#f72585'];
+    chart.setOption({
+      series: [{
+        name: 'knowledge_graph',
+        categories: catNames.map(function (c, i) {
+          return { name: c, itemStyle: { color: catColors[i % catColors.length] } };
+        }),
+        data: nodes.map(function (n) {
+          return {
+            id: n.id,
+            name: n.label || n.id,
+            label: n.label || n.id,
+            value: [n.x || 0, n.y || 0, n.z || 0],
+            symbolSize: n.symbolSize || 20,
+            category: n.category || 0,
+            tags: n.tags || [],
+            props: n.props || {},
+            itemStyle: { color: catColors[(n.category || 0) % catColors.length] }
+          };
+        }),
+        links: links.map(function (l) {
+          return { source: l.source, target: l.target, name: l.label || '' };
+        })
+      }]
+    }, { notMerge: true });
+  }
+
+  function updateStats(nodes, links, space) {
+    document.getElementById('stat-nodes').textContent = nodes.length;
+    document.getElementById('stat-links').textContent = links.length;
+    document.getElementById('stat-space').textContent = space || '—';
+  }
+
+  window.updateGraph = function (data) {
+    var nodes = data.nodes || [];
+    var links = data.links || [];
+    var categories = data.categories || [];
+    var space = data.space || '';
+
+    if (nodes.length === 0) {
+      document.getElementById('loading-spinner').textContent = '⚠️ 暂无图谱数据';
+      return;
+    }
+
+    document.getElementById('loading').classList.add('hidden');
+    rawData = { nodes: nodes, links: links, categories: categories };
+    currentSpace = space;
+
+    buildOption(nodes, links, categories);
+    updateStats(nodes, links, space);
+  };
+
+  window.addEventListener('resize', function () { chart.resize(); });
+
+  // 3D / 2D 切换
+  window.toggleView = function () {
+    is3D = !is3D;
+    if (is3D) {
+      chart.setOption({
+        grid3D: { show: false, viewControl: { beta: 40, alpha: 30, rotateSpeed: 30, zoomSensitivity: 1.2, autoRotate: true, autoRotateAfterInitialAnimationDelay: 2000 } }
+      });
+    } else {
+      chart.setOption({
+        grid3D: { show: false, viewControl: { projection: 'orthographic', beta: 0, alpha: 0, rotateSpeed: 0, zoomSensitivity: 0.8 } }
+      });
+    }
+  };
+
+})();
+</script>
+</body>
+</html>

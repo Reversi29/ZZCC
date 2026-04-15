@@ -41,12 +41,20 @@ class SquarePage extends StatefulWidget {
   State<SquarePage> createState() => _SquarePageState();
 }
 
-class _SquarePageState extends State<SquarePage> with SingleTickerProviderStateMixin {
+class _SquarePageState extends State<SquarePage>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final List<String> categories = [
-    '知识库', '推荐', '视频', '音频', '图文', '应用', '项目', '直播'
+    '知识图谱',
+    '推荐',
+    '视频',
+    '音频',
+    '图文',
+    '应用',
+    '项目',
+    '直播'
   ];
-  
+
   final List<Project> projects = [
     Project(
       id: '1',
@@ -94,7 +102,7 @@ class _SquarePageState extends State<SquarePage> with SingleTickerProviderStateM
             child: TabBarView(
               controller: _tabController,
               children: categories.map((category) {
-                if (category == '知识库') {
+                if (category == '知识图谱') {
                   return const KnowledgeGraphView();
                 }
                 return GridView.builder(
@@ -134,16 +142,19 @@ class ProjectCard extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () {
-          Navigator.push(context, MaterialPageRoute(
-            builder: (context) => ProjectDetailPage(project: project),
-          ));
+          Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ProjectDetailPage(project: project),
+              ));
         },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // 封面图片
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
               child: CachedNetworkImage(
                 imageUrl: project.coverImage,
                 height: 150,
@@ -156,7 +167,7 @@ class ProjectCard extends StatelessWidget {
                 errorWidget: (context, url, error) => const Icon(Icons.error),
               ),
             ),
-            
+
             // 项目信息
             Padding(
               padding: const EdgeInsets.all(12),
@@ -183,24 +194,27 @@ class ProjectCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 8),
-                  
+
                   // 标签
                   Wrap(
                     spacing: 8,
                     runSpacing: 4,
-                    children: project.tags.map((tag) => Chip(
-                      label: Text(tag),
-                      backgroundColor: Colors.blue[50],
-                    )).toList(),
+                    children: project.tags
+                        .map((tag) => Chip(
+                              label: Text(tag),
+                              backgroundColor: Colors.blue[50],
+                            ))
+                        .toList(),
                   ),
                   const SizedBox(height: 12),
-                  
+
                   // 作者信息
                   Row(
                     children: [
                       CircleAvatar(
                         radius: 16,
-                        backgroundImage: CachedNetworkImageProvider(project.authorAvatar),
+                        backgroundImage:
+                            CachedNetworkImageProvider(project.authorAvatar),
                       ),
                       const SizedBox(width: 8),
                       Text(project.author),
@@ -212,7 +226,7 @@ class ProjectCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  
+
                   // 互动按钮
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -272,7 +286,7 @@ class ProjectDetailPage extends StatelessWidget {
               ),
               errorWidget: (context, url, error) => const Icon(Icons.error),
             ),
-            
+
             // 项目详情
             Padding(
               padding: const EdgeInsets.all(24),
@@ -283,7 +297,8 @@ class ProjectDetailPage extends StatelessWidget {
                     children: [
                       CircleAvatar(
                         radius: 24,
-                        backgroundImage: CachedNetworkImageProvider(project.authorAvatar),
+                        backgroundImage:
+                            CachedNetworkImageProvider(project.authorAvatar),
                       ),
                       const SizedBox(width: 16),
                       Column(
@@ -311,35 +326,40 @@ class ProjectDetailPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 24),
-                  
+
                   Text(
                     project.description,
                     style: const TextStyle(fontSize: 16, height: 1.6),
                   ),
                   const SizedBox(height: 24),
-                  
+
                   // 标签
                   Wrap(
                     spacing: 12,
                     runSpacing: 8,
-                    children: project.tags.map((tag) => Chip(
-                      label: Text(tag),
-                      backgroundColor: Colors.blue[50],
-                    )).toList(),
+                    children: project.tags
+                        .map((tag) => Chip(
+                              label: Text(tag),
+                              backgroundColor: Colors.blue[50],
+                            ))
+                        .toList(),
                   ),
                   const SizedBox(height: 32),
-                  
+
                   // 互动统计
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      _buildStatItem(Icons.favorite, project.likes.toString(), '点赞'),
-                      _buildStatItem(Icons.comment, project.comments.toString(), '评论'),
-                      _buildStatItem(Icons.attach_money, project.donations.toString(), '打赏'),
+                      _buildStatItem(
+                          Icons.favorite, project.likes.toString(), '点赞'),
+                      _buildStatItem(
+                          Icons.comment, project.comments.toString(), '评论'),
+                      _buildStatItem(Icons.attach_money,
+                          project.donations.toString(), '打赏'),
                     ],
                   ),
                   const SizedBox(height: 32),
-                  
+
                   // 互动按钮
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -363,7 +383,7 @@ class ProjectDetailPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 32),
-                  
+
                   // 评论区域
                   const Text(
                     '评论',
@@ -387,7 +407,8 @@ class ProjectDetailPage extends StatelessWidget {
       children: [
         Icon(icon, color: Colors.blue, size: 32),
         const SizedBox(height: 8),
-        Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(value,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         Text(label, style: TextStyle(color: Colors.grey[600])),
       ],
     );
@@ -408,7 +429,8 @@ class ProjectDetailPage extends StatelessWidget {
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(24),
               ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.send),
                 onPressed: () {},
@@ -427,43 +449,46 @@ class ProjectDetailPage extends StatelessWidget {
       {'author': '用户B', 'content': '代码结构很清晰，学习到了很多', 'time': '5小时前'},
       {'author': '用户C', 'content': '有考虑加入XXX功能吗？', 'time': '1天前'},
     ];
-    
+
     return Column(
-      children: comments.map((comment) => Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const CircleAvatar(
-              radius: 20,
-              child: Icon(Icons.person),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    comment['author']!,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(comment['content']!),
-                  const SizedBox(height: 4),
-                  Text(
-                    comment['time']!,
-                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.favorite_border, size: 18),
-              onPressed: () {},
-            ),
-          ],
-        ),
-      )).toList(),
+      children: comments
+          .map((comment) => Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const CircleAvatar(
+                      radius: 20,
+                      child: Icon(Icons.person),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            comment['author']!,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(comment['content']!),
+                          const SizedBox(height: 4),
+                          Text(
+                            comment['time']!,
+                            style: TextStyle(
+                                color: Colors.grey[600], fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.favorite_border, size: 18),
+                      onPressed: () {},
+                    ),
+                  ],
+                ),
+              ))
+          .toList(),
     );
   }
 }
