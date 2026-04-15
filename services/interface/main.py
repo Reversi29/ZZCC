@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 
 from config import get_settings
-from dependencies import set_client
+from dependencies import get_client
 from middleware.rate_limit import setup_middleware
 from modules.nebula_client import NebulaClient
 
@@ -164,5 +164,5 @@ def create_app() -> FastAPI:
 app = create_app()
 
 # Re-export for backwards compatibility (tests, etc.)
-from dependencies import get_client, get_session, require_api_key  # noqa: F401
+from dependencies import get_client, get_session, verify_api_key  # noqa: F401
 from routers.import_csv import _coerce  # noqa: F401

@@ -341,3 +341,18 @@ class NebulaClient:
         s = s.replace("\\", "\\\\")   # literal backslash → \\
         s = s.replace('"', '\\"')      # double-quote → \"
         return f'"{s}"'
+
+
+# -------------------------------------------------------------------------
+# Module-level singleton
+# -------------------------------------------------------------------------
+_client: NebulaClient | None = None
+
+
+def get_client() -> NebulaClient:
+    """Return the singleton NebulaClient instance (lazy init)."""
+    global _client
+    if _client is None:
+        from interface.config import get_settings
+        _client = NebulaClient.from_env()
+    return _client

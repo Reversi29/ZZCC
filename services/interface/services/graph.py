@@ -136,21 +136,92 @@ def _rows_to_dicts(resp) -> List[Dict[str, Any]]:
         obj = {}
         for idx, col in enumerate(keys):
             v = row.values[idx]
-            try:
-                if v.is_string():
-                    obj[col] = v.as_string()
-                elif v.is_int():
-                    obj[col] = v.as_int()
-                elif v.is_double():
-                    obj[col] = v.as_double()
-                elif v.is_bool():
-                    obj[col] = v.as_bool()
-                else:
-                    obj[col] = str(v)
-            except AttributeError:
-                obj[col] = str(v)
+            obj[col] = _unwrap_value(v)
         out.append(obj)
     return out
+
+
+def _unwrap_value(v) -> Any:
+    """Recursively unwrap a NebulaGraph Value into a plain Python object."""
+    try:
+        if isinstance(v.is_empty(), bool) and v.is_empty():
+            return None
+        if isinstance(v.is_null(), bool) and v.is_null():
+            return None
+        if isinstance(v.is_string(), bool) and v.is_string():
+            return v.as_string()
+        if isinstance(v.is_int(), bool) and v.is_int():
+            return v.as_int()
+        if isinstance(v.is_double(), bool) and v.is_double():
+            return v.as_double()
+        if isinstance(v.is_bool(), bool) and v.is_bool():
+            return v.as_bool()
+    except (AttributeError, TypeError):
+        pass
+
+    # Nested: Vertex, Edge, List, Map, Set, Path
+    try:
+        if v.is_vertex():
+            vtx = v.as_node()
+            vid = _unwrap_value(vtx.get_id()) if hasattr(vtx, "get_id") else str(vtx.get_id())
+            tags = {}
+            for tag_name in vtx.tag_names():
+                tag_props = vtx.properties(tag_name)
+                tags[tag_name.decode() if isinstance(tag_name, bytes) else tag_name] = {
+                    k.decode() if isinstance(k, bytes) else k: _unwrap_value(pv)
+                    for k, pv in tag_props.items()
+                }
+            return {"vid": vid, "tags": tags}
+    except (AttributeError, TypeError):
+        pass
+
+    try:
+        if v.is_edge():
+            e = v.as_relationship()
+            src = _unwrap_value(e.src_id()) if hasattr(e, "src_id") else str(e.src_id())
+            dst = _unwrap_value(e.dst_id()) if hasattr(e, "dst_id") else str(e.dst_id())
+            edge_name = e.edge_name()
+            if isinstance(edge_name, bytes):
+                edge_name = edge_name.decode()
+            props = {
+                k.decode() if isinstance(k, bytes) else k: _unwrap_value(pv)
+                for k, pv in e.properties().items()
+            }
+            return {"src": src, "dst": dst, "edge": edge_name, "props": props}
+    except (AttributeError, TypeError):
+        pass
+
+    try:
+        if v.is_list():
+            return [_unwrap_value(item) for item in v.as_list()]
+    except (AttributeError, TypeError):
+        pass
+
+    try:
+        if v.is_map():
+            m = v.as_map()
+            return {
+                k.decode() if isinstance(k, bytes) else k: _unwrap_value(val)
+                for k, val in m.items()
+            }
+    except (AttributeError, TypeError):
+        pass
+
+    try:
+        if v.is_set():
+            return [_unwrap_value(item) for item in v.as_set()]
+    except (AttributeError, TypeError):
+        pass
+
+    try:
+        if v.is_path():
+            p = v.as_path()
+            return {"steps": str(p)}
+    except (AttributeError, TypeError):
+        pass
+
+    # Fallback: string representation
+    return str(v)
 
 def alter_tag(client: NebulaClient, sess, space: str, tag: str, columns: List[Tuple[str, str]]) -> None:
     client.alter_tag_add(sess, space=space, tag=tag, columns=columns)

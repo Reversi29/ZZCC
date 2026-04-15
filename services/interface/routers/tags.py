@@ -3,7 +3,7 @@ Router: /api/v1/tags
 """
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import SpaceResp, TagCreate, TagDrop, TagListResp, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import create_tag, drop_tag, list_tags
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/tags", tags=["tags"])
 async def list_tags_endpoint(
     space: str,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     tags = list_tags(get_client(), sess, space)
@@ -26,7 +26,7 @@ async def list_tags_endpoint(
 async def create_tag_endpoint(
     payload: TagCreate,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.tag, "标签名")
@@ -48,7 +48,7 @@ async def create_tag_endpoint(
 async def drop_tag_endpoint(
     payload: TagDrop,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.tag, "标签名")
@@ -66,7 +66,7 @@ async def drop_tag_endpoint(
 async def alter_tag_endpoint(
     payload: TagCreate,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.tag, "标签名")

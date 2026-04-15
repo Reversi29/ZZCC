@@ -3,7 +3,7 @@ Router: /api/v1/spaces
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import SpaceCreate, SpaceListResp, SpaceResp
 from modules.nebula_client import NebulaError
 from services.graph import create_space, drop_space, list_spaces, wait_space
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/spaces", tags=["spaces"])
 async def create_space_endpoint(
     payload: SpaceCreate,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     try:
         create_space(
@@ -36,7 +36,7 @@ async def create_space_endpoint(
 @router.get("", response_model=SpaceListResp)
 async def list_spaces_endpoint(
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     spaces = list_spaces(get_client(), sess)
     return {"ok": True, "data": {"spaces": spaces}}
@@ -46,7 +46,7 @@ async def list_spaces_endpoint(
 async def drop_space_endpoint(
     name: str,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     from models.schemas import check_identifier
     check_identifier(name, "空间名")

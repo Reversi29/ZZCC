@@ -1,4 +1,7 @@
 """NebulaClient unit tests."""
+import sys
+sys.path.insert(0, "interface")
+
 import pytest
 from unittest.mock import MagicMock, patch
 

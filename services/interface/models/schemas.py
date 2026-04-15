@@ -96,6 +96,22 @@ class VertexDelete(BaseModel):
     with_edges: bool = Field(default=True, description="Delete connected edges")
 
 
+class VertexPatch(BaseModel):
+    """Request body for PATCH /vertices/{vid} (vid comes from path, not body)."""
+    space: str = Field(..., description="Target space name")
+    tag: str = Field(..., description="Tag name")
+    props: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EdgePatch(BaseModel):
+    """Request body for PATCH /edges (partial update)."""
+    space: str = Field(..., description="Target space name")
+    edge: str = Field(..., description="Edge type name")
+    src: str = Field(..., min_length=1, description="Source vertex ID")
+    dst: str = Field(..., min_length=1, description="Destination vertex ID")
+    props: Dict[str, Any] = Field(default_factory=dict)
+
+
 class EdgeCreate(BaseModel):
     space: str = Field(..., description="Target space name")
     edge: str = Field(..., description="Edge type name")

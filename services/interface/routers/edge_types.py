@@ -4,7 +4,7 @@ Router: /api/v1/edge-types — edge type schema management.
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import EdgeListResp, EdgeTypeAlter, SpaceResp, check_identifier
 from modules.nebula_client import NebulaError
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/edge-types", tags=["edge-types"])
 async def list_edge_types_endpoint(
     space: str = Query(..., description="Space name"),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     try:
@@ -35,7 +35,7 @@ async def create_edge_type_endpoint(
     space: str | None = Query(default=None),
     edge: str | None = Query(default=None),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     # Accept either body or query params
     if body is not None:
@@ -69,7 +69,7 @@ async def create_edge_type_endpoint(
 async def alter_edge_type_endpoint(
     payload: EdgeTypeAlter,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     """Add properties to an existing edge type (ALTER EDGE ... ADD)."""
     check_identifier(payload.space, "空间名")
@@ -92,7 +92,7 @@ async def drop_edge_type_endpoint(
     space: str = Query(..., description="Space name"),
     edge: str = Query(..., description="Edge type name"),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")

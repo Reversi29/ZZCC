@@ -120,7 +120,3 @@ app.*.symbols
 
 资源/
 devlepoment/
-zzcc/native/windows/
-zzcc/windows/vcpkg/
-
-services/Dify/volumes/

@@ -4,8 +4,8 @@ Router: /api/v1/vertices — vertex CRUD.
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from typing import Annotated, Any
 
-from dependencies import get_client, get_session, require_api_key
-from models.schemas import VertexResp, VertexCreate, VertexDelete, check_identifier
+from dependencies import get_client, get_session, verify_api_key
+from models.schemas import VertexResp, VertexCreate, VertexDelete, VertexPatch, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import delete_vertex, fetch_vertex, insert_vertex
 
@@ -18,7 +18,7 @@ async def get_vertex_endpoint(
     space: str = Query(..., description="Space name"),
     tag: str | None = Query(default=None),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(vid, "VID")
@@ -28,7 +28,7 @@ async def get_vertex_endpoint(
         rows = fetch_vertex(get_client(), sess, space=space, vid=vid, tag=tag)
         if not rows:
             raise HTTPException(status_code=404, detail=f"Vertex '{vid}' not found")
-        return {"ok": True, "data": rows}
+        return {"ok": True, "data": {"vid": vid, "vertices": rows}}
     except NebulaError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
@@ -39,7 +39,7 @@ async def get_vertex_endpoint(
 async def create_vertex_endpoint(
     payload: VertexCreate,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.vid, "VID")
@@ -62,9 +62,9 @@ async def create_vertex_endpoint(
 @router.patch("/{vid}", response_model=VertexResp)
 async def update_vertex_endpoint(
     vid: str,
-    payload: VertexCreate,
+    payload: VertexPatch,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     """
     Partial update — fetch existing props, merge, delete+re-insert.
@@ -82,13 +82,20 @@ async def update_vertex_endpoint(
         if not existing:
             raise HTTPException(status_code=404, detail=f"Vertex '{vid}' not found in space '{payload.space}'")
 
-        # Merge: existing props + new props (new props take precedence)
-        base: dict[str, Any] = dict(existing[0])
-        base.update(payload.props)
+        # Extract existing props from nested vertex structure
+        merged_props: dict[str, Any] = {}
+        for row in existing:
+            for col_val in row.values():
+                if isinstance(col_val, dict) and "tags" in col_val:
+                    tag_info = col_val["tags"].get(payload.tag, {})
+                    merged_props.update(tag_info)
+                    break
+        # Merge: new props take precedence
+        merged_props.update(payload.props)
 
         # Delete then re-insert with merged props
         delete_vertex(client, sess, space=payload.space, vid=vid, with_edges=False)
-        insert_vertex(client, sess, space=payload.space, vid=vid, tag=payload.tag, props=base)
+        insert_vertex(client, sess, space=payload.space, vid=vid, tag=payload.tag, props=merged_props)
 
     except HTTPException:
         raise
@@ -104,7 +111,7 @@ async def update_vertex_endpoint(
 async def delete_vertex_by_body(
     payload: VertexDelete,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     """DELETE with body: {"space": "...", "vid": "...", "with_edges": true}"""
     check_identifier(payload.space, "空间名")
@@ -125,7 +132,7 @@ async def delete_vertex_endpoint(
     space: str = Query(...),
     with_edges: bool = Query(True),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.vid, "VID")

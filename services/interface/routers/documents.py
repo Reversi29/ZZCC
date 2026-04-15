@@ -10,7 +10,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import ImportResp, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import insert_edge, insert_vertex
@@ -73,7 +73,7 @@ async def import_pdf_vertices(
     tag: str,
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(tag, "标签名")
@@ -100,7 +100,7 @@ async def import_docx_vertices(
     tag: str,
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(tag, "标签名")
@@ -127,7 +127,7 @@ async def import_pdf_edges(
     edge: str,
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")
@@ -161,7 +161,7 @@ async def import_docx_edges(
     edge: str,
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")
@@ -193,7 +193,7 @@ async def convert_pdf_vertices_csv(
     import_now: bool = Query(False),
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(tag, "标签名")
@@ -228,7 +228,7 @@ async def convert_pdf_edges_csv(
     import_now: bool = Query(False),
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")
@@ -282,7 +282,7 @@ async def convert_docx_vertices_csv(
     import_now: bool = Query(False),
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(tag, "标签名")
@@ -316,7 +316,7 @@ async def convert_docx_edges_csv(
     import_now: bool = Query(False),
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")

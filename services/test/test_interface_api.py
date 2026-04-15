@@ -22,6 +22,7 @@ from typing import Annotated
 import sys
 sys.path.insert(0, "interface")
 from modules.nebula_client import NebulaClient, NebulaError
+import modules.nebula_client as nb_mod
 
 
 # ============================================================
@@ -289,8 +290,8 @@ class TestAPIEndpoints:
 
     @pytest.fixture(autouse=True)
     def setup(self, monkeypatch):
-        from contextlib import asynccontextmanager
-
+        from contextlib import contextmanager
+        
         # Build the mock session/response objects
         self.mock_sess = MagicMock()
         self.mock_resp = MagicMock()
@@ -299,19 +300,31 @@ class TestAPIEndpoints:
         self.mock_resp.keys.return_value = ["Name"]
         self.mock_resp.rows.return_value = []
         self.mock_sess.execute.return_value = self.mock_resp
-        self.mock_sess.release = MagicMock()
-
-        # Wrap mock_sess in an async context manager (mimics session_with)
-        @asynccontextmanager
-        async def _mock_sess_cm(*args, **kwargs):
-            yield self.mock_sess
+        class _MockSession:
+            def __init__(self, real):
+                self._real = real
+            async def __aenter__(self):
+                return self._real
+            async def __aexit__(self, *a):
+                pass
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+        _mock_sess_cm = lambda *a, **kw: _MockSession(self.mock_sess)
 
         # Create a mock NebulaClient
         # _run must call real _run logic so is_succeeded() check works
         # Use side_effect so it calls the real method when needed
         mock_client = MagicMock()
         mock_client.list_spaces = MagicMock(return_value=[])
-        mock_client.session_with = MagicMock(side_effect=lambda *a, **kw: _mock_sess_cm(*a, **kw))
+        # Return a simple sync context manager that yields mock_sess
+        class _SyncCM:
+            def __init__(self, sess):
+                self._sess = sess
+            def __enter__(self):
+                return self._sess
+            def __exit__(self, *a):
+                pass
+        mock_client.session_with = MagicMock(side_effect=lambda *a, **kw: _SyncCM(self.mock_sess))
 
         # _run side_effect: check is_succeeded and raise if False
         def _run_side_effect(sess, stmt):
@@ -320,9 +333,10 @@ class TestAPIEndpoints:
             return self.mock_resp
         mock_client._run = MagicMock(side_effect=_run_side_effect)
 
-        # Patch ConnectionPool AND get_client so lifespan starts with our mock client
+        import modules.nebula_client as nb_mod
+        import dependencies
         with patch("modules.nebula_client.ConnectionPool") as MockPool, \
-             patch("dependencies.get_client", return_value=mock_client):
+             patch.object(nb_mod, "get_client", return_value=mock_client):
             mock_pool_instance = MagicMock()
             mock_pool_instance.init.return_value = True
             mock_pool_instance.get_session.return_value = self.mock_sess
@@ -331,23 +345,22 @@ class TestAPIEndpoints:
             import main as m
             importlib.reload(m)
 
-            # Patch dependencies._client so get_client() returns our mock.
-            # Must use __dict__ directly because Python's closure optimization
-            # may cache the local variable lookup in get_client()'s bytecode.
-            import dependencies
-            dependencies.__dict__["_client"] = mock_client
+            # Patch _client so get_client() returns our mock.
+            nb_mod._client = mock_client
 
             # Override get_session dependency so endpoints get our mock session
             # Must match exact signature to avoid FastAPI treating *args/**kwargs as query params
-            async def fake_get_session(
-                nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
+            async def fake_get_session(                nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
                 nebula_port: Annotated[int | None, Header(alias="X-Nebula-Port")] = None,
                 nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
                 nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
             ):
-                return self.mock_sess
+                yield self.mock_sess
 
-            m.app.dependency_overrides[m.get_session] = fake_get_session
+            m.app.dependency_overrides[dependencies.get_session] = fake_get_session
+
+            # Override verify_api_key to bypass API key check in tests
+            m.app.dependency_overrides[dependencies.verify_api_key] = lambda x=None: "test-key"
 
             self.app = m.app
             self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -492,6 +505,365 @@ class TestAPIEndpoints:
 
 
 # ============================================================
+# ============================================================
+# PATCH endpoints — partial update (fetch-merge-delete-reinsert)
+# ============================================================
+class TestPatchEndpoints:
+    """PATCH /vertices/{vid}, /edges, /tags, /edge-types."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        import sys
+        # Import at fixture level so they live beyond the `with` block scope
+        import routers.vertices as rv_mod
+        import routers.edges as re_mod
+
+        def fetch_v(client, sess, space, vid, tag=None):
+            return [] if vid == "ghost" else [{"Name": "Alice", "Age": 30}]
+
+        def fetch_e(client, sess, space, src, dst, edge):
+            return [{"_src": src, "_dst": dst, "since": 2020}]
+
+        def ins_v(client, sess, space, vid, tag, props):
+            mr = MagicMock()
+            mr.is_succeeded.return_value = True
+            mr.error_msg.return_value = ""
+            return mr
+
+        def del_v(client, sess, space, vid, with_edges):
+            mr = MagicMock()
+            mr.is_succeeded.return_value = True
+            mr.error_msg.return_value = ""
+            return mr
+
+        def ins_e(client, sess, space, src, dst, edge, props):
+            mr = MagicMock()
+            mr.is_succeeded.return_value = True
+            mr.error_msg.return_value = ""
+            return mr
+
+        def del_e(client, sess, space, src, dst, edge):
+            mr = MagicMock()
+            mr.is_succeeded.return_value = True
+            mr.error_msg.return_value = ""
+            return mr
+
+        # Save originals for cleanup
+        origs = {
+            "fv": rv_mod.fetch_vertex,
+            "iv": rv_mod.insert_vertex,
+            "dv": rv_mod.delete_vertex,
+            "fe": re_mod.fetch_edge,
+            "ie": re_mod.insert_edge,
+            "de": re_mod.delete_edge,
+        }
+
+        # Apply patches to router module namespaces
+        rv_mod.fetch_vertex = fetch_v
+        rv_mod.insert_vertex = ins_v
+        rv_mod.delete_vertex = del_v
+        re_mod.fetch_edge = fetch_e
+        re_mod.insert_edge = ins_e
+        re_mod.delete_edge = del_e
+
+        # Build mock client
+        sys.path.insert(0, "interface")
+        self.mock_sess = MagicMock()
+        self.mock_resp = MagicMock()
+        self.mock_resp.is_succeeded.return_value = True
+        self.mock_resp.error_msg.return_value = ""
+        self.mock_resp.keys.return_value = ["Name"]
+        self.mock_resp.rows.return_value = []
+        self.mock_sess.execute.return_value = self.mock_resp
+        mock_client = MagicMock()
+        mock_client.list_spaces = MagicMock(return_value=[])
+
+        with patch("modules.nebula_client.ConnectionPool") as MockPool, \
+                 patch.object(nb_mod, "get_client", return_value=mock_client):
+            MockPool.return_value.init.return_value = True
+            MockPool.return_value.get_session.return_value = self.mock_sess
+
+            import main as m
+            importlib.reload(m)
+            import dependencies
+            import modules.nebula_client as nb_mod
+            nb_mod._client = mock_client
+
+            async def fake_sess(
+                nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
+                nebula_port: Annotated[int | None, Header(alias="X-Nebula-Port")] = None,
+                nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
+                nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
+            ):
+                return self.mock_sess
+
+            m.app.dependency_overrides[m.get_session] = fake_sess
+            self.client = TestClient(m.app, raise_server_exceptions=False)
+
+        yield
+        # Restore original functions
+        rv_mod.fetch_vertex = origs["fv"]
+        rv_mod.insert_vertex = origs["iv"]
+        rv_mod.delete_vertex = origs["dv"]
+        re_mod.fetch_edge = origs["fe"]
+        re_mod.insert_edge = origs["ie"]
+        re_mod.delete_edge = origs["de"]
+        m.app.dependency_overrides.clear()
+
+    # Vertex PATCH
+    def test_patch_vertex_partial_update(self):
+        resp = self.client.patch("/api/v1/vertices/alice",
+                                 json={"space": "S", "tag": "Person",
+                                       "props": {"Age": 31}})
+        assert resp.status_code == 200, resp.text
+
+    def test_patch_vertex_not_found(self):
+        resp = self.client.patch("/api/v1/vertices/ghost",
+                                 json={"space": "S", "tag": "Person",
+                                       "props": {"Age": 31}})
+        assert resp.status_code == 404, resp.text
+
+    def test_patch_vertex_invalid_vid(self):
+        resp = self.client.patch("/api/v1/vertices/2bad",
+                                 json={"space": "S", "tag": "Person", "props": {}})
+        assert resp.status_code == 400  # check_identifier
+
+    # Edge PATCH
+    def test_patch_edge_partial_update(self):
+        resp = self.client.patch("/api/v1/edges",
+                                 json={"space": "S", "edge": "KNOWS",
+                                       "src": "alice", "dst": "bob",
+                                       "props": {"since": 2021}})
+        assert resp.status_code == 200, resp.text
+
+    # Tag PATCH
+    def test_patch_tag_add_properties(self):
+        resp = self.client.patch("/api/v1/tags",
+                                 json={"space": "S", "tag": "Person",
+                                       "properties": [{"name": "email", "type": "string"}]})
+        assert resp.status_code == 200
+
+    def test_patch_tag_invalid_name(self):
+        resp = self.client.patch("/api/v1/tags",
+                                 json={"space": "S", "tag": "bad-name", "properties": []})
+        assert resp.status_code == 400
+
+    # Edge-type PATCH
+    def test_patch_edge_type_add_properties(self):
+        resp = self.client.patch("/api/v1/edge-types",
+                                 json={"space": "S", "edge": "KNOWS",
+                                       "properties": [{"name": "weight", "type": "double"}]})
+        assert resp.status_code == 200
+
+    def test_patch_edge_type_invalid_name(self):
+        resp = self.client.patch("/api/v1/edge-types",
+                                 json={"space": "S", "edge": "bad-edge", "properties": []})
+        assert resp.status_code == 400
+
+
+
+class TestDocumentConvert:
+    """POST /convert/pdf/to-csv/* and /convert/docx/to-csv/*."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        sys.path.insert(0, "interface")
+        self.mock_sess = MagicMock()
+        self.mock_resp = MagicMock()
+        self.mock_resp.is_succeeded.return_value = True
+        self.mock_resp.error_msg.return_value = ""
+        self.mock_sess.execute.return_value = self.mock_resp
+
+        mock_client = MagicMock()
+        mock_client.list_spaces = MagicMock(return_value=[])
+
+        @contextmanager
+        def _scm(*args, **kw):
+            yield self.mock_sess
+        mock_client.session_with = MagicMock(side_effect=lambda *a, **kw: _scm(*a, **kw))
+        mock_client._run = MagicMock(return_value=self.mock_resp)
+
+        with patch("modules.nebula_client.ConnectionPool") as MockPool, \
+                 patch.object(nb_mod, "get_client", return_value=mock_client):
+            MockPool.return_value.init.return_value = True
+            MockPool.return_value.get_session.return_value = self.mock_sess
+
+            import main as m
+            importlib.reload(m)
+            import dependencies
+            import modules.nebula_client as nb_mod
+            nb_mod._client = mock_client
+
+            async def fake_sess(
+                nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
+                nebula_port: Annotated[int | None, Header(alias="X-Nebula-Port")] = None,
+                nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
+                nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
+            ):
+                return self.mock_sess
+
+            m.app.dependency_overrides[m.get_session] = fake_sess
+            self.client = TestClient(m.app, raise_server_exceptions=False)
+
+        yield
+        m.app.dependency_overrides.clear()
+
+    def test_convert_pdf_vertices_csv(self):
+        # Patch the text extractor at the router module level
+        with patch("routers.documents._extract_pdf_text",
+                   return_value=[(1, "Alice"), (2, "Bob")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/convert/pdf/to-csv/vertices",
+                params={"space": "S", "tag": "Doc"},
+                files={"file": ("doc.pdf", BytesIO(b"x"), "application/pdf")},
+            )
+        assert resp.status_code == 200, resp.text
+        csv_text = resp.json()["data"]["csv"]
+        assert "vid" in csv_text
+        assert "Alice" in csv_text
+
+    def test_convert_pdf_vertices_import_now(self):
+        with patch("routers.documents._extract_pdf_text",
+                   return_value=[(1, "Line1")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/convert/pdf/to-csv/vertices",
+                params={"space": "S", "tag": "Doc", "import_now": "true"},
+                files={"file": ("doc.pdf", BytesIO(b"x"), "application/pdf")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert "imported" in resp.json()["data"]
+        assert "csv" not in resp.json()["data"]
+
+    def test_convert_docx_vertices_csv(self):
+        with patch("routers.documents._extract_docx_text",
+                   return_value=[(1, "Para one")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/convert/docx/to-csv/vertices",
+                params={"space": "S", "tag": "Doc"},
+                files={"file": ("doc.docx", BytesIO(b"x"),
+                               "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert "csv" in resp.json()["data"]
+
+    def test_convert_pdf_edges_csv(self):
+        with patch("routers.documents._extract_pdf_text",
+                   return_value=[(1, "alice,bob,FRIEND")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/convert/pdf/to-csv/edges",
+                params={"space": "S", "edge": "REL"},
+                files={"file": ("e.pdf", BytesIO(b"x"), "application/pdf")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert "alice" in resp.json()["data"]["csv"]
+
+
+# ============================================================
+# PDF / DOCX — import into Nebula
+# ============================================================
+class TestDocumentImport:
+    """POST /import/pdf/* and /import/docx/* (direct to Nebula)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        sys.path.insert(0, "interface")
+        self.mock_sess = MagicMock()
+        self.mock_resp = MagicMock()
+        self.mock_resp.is_succeeded.return_value = True
+        self.mock_resp.error_msg.return_value = ""
+        self.mock_sess.execute.return_value = self.mock_resp
+
+        mock_client = MagicMock()
+        mock_client.list_spaces = MagicMock(return_value=[])
+        mock_client.insert_vertex = MagicMock(return_value=None)
+        mock_client.insert_edge = MagicMock(return_value=None)
+
+        @contextmanager
+        def _scm(*args, **kw):
+            yield self.mock_sess
+        mock_client.session_with = MagicMock(side_effect=lambda *a, **kw: _scm(*a, **kw))
+
+        with patch("modules.nebula_client.ConnectionPool") as MockPool, \
+                 patch.object(nb_mod, "get_client", return_value=mock_client):
+            MockPool.return_value.init.return_value = True
+            MockPool.return_value.get_session.return_value = self.mock_sess
+
+            import main as m
+            importlib.reload(m)
+            import dependencies
+            import modules.nebula_client as nb_mod
+            nb_mod._client = mock_client
+
+            async def fake_sess(
+                nebula_host: Annotated[str | None, Header(alias="X-Nebula-Host")] = None,
+                nebula_port: Annotated[int | None, Header(alias="X-Nebula-Port")] = None,
+                nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
+                nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
+            ):
+                return self.mock_sess
+
+            m.app.dependency_overrides[m.get_session] = fake_sess
+            self.client = TestClient(m.app, raise_server_exceptions=False)
+
+        yield
+        m.app.dependency_overrides.clear()
+
+    def test_import_pdf_vertices(self):
+        with patch("routers.documents._extract_pdf_text",
+                   return_value=[(1, "P1"), (2, "P2")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/import/pdf/vertices",
+                params={"space": "S", "tag": "Doc"},
+                files={"file": ("doc.pdf", BytesIO(b"x"), "application/pdf")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["imported"] == 2
+
+    def test_import_docx_vertices(self):
+        with patch("routers.documents._extract_docx_text",
+                   return_value=[(1, "Para one")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/import/docx/vertices",
+                params={"space": "S", "tag": "Doc"},
+                files={"file": ("doc.docx", BytesIO(b"x"),
+                               "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["imported"] == 1
+
+    def test_import_pdf_edges(self):
+        with patch("routers.documents._extract_pdf_text",
+                   return_value=[(1, "alice,bob,F1"), (2, "charlie,dave,F2")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/import/pdf/edges",
+                params={"space": "S", "edge": "REL"},
+                files={"file": ("e.pdf", BytesIO(b"x"), "application/pdf")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["imported"] == 2
+
+    def test_import_docx_edges(self):
+        with patch("routers.documents._extract_docx_text",
+                   return_value=[(1, "alice,bob")]):
+            from io import BytesIO
+            resp = self.client.post(
+                "/api/v1/import/docx/edges",
+                params={"space": "S", "edge": "REL"},
+                files={"file": ("e.docx", BytesIO(b"x"),
+                               "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["imported"] == 1
+
+
+
 # Integration tests (against live server)
 # ============================================================
 @pytest.mark.integration

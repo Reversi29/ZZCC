@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import ImportResp, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import insert_edge, insert_vertex
@@ -42,7 +42,7 @@ async def import_vertices_csv(
     tag: str,
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(tag, "标签名")
@@ -74,7 +74,7 @@ async def import_edges_csv(
     edge: str,
     file: UploadFile = File(...),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")

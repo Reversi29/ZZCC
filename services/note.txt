@@ -1,0 +1,9 @@
+传文件
+rsync -av --exclude='Dify/volumes' --exclude='test' /Users/mac/ZZCC/services ubuntu@124.223.47.167:/home/ubuntu/
+
+Docker 重建镜像
+sudo docker compose up -d --build
+
+测试
+NEBULA_HOST=124.223.47.167 python3 -m pytest test/ -v --timeout=30
+NEBULA_HOST=124.223.47.167 python3 -m pytest test/ -v --timeout=30 -m "integration"

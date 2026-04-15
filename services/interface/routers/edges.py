@@ -4,8 +4,8 @@ Router: /api/v1/edges — edge CRUD.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Annotated, Any
 
-from dependencies import get_client, get_session, require_api_key
-from models.schemas import EdgeResp, EdgeCreate, EdgeDelete, check_identifier
+from dependencies import get_client, get_session, verify_api_key
+from models.schemas import EdgeResp, EdgeCreate, EdgeDelete, EdgePatch, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import delete_edge, fetch_edge, insert_edge
 
@@ -19,7 +19,7 @@ async def get_edge_endpoint(
     src: str = Query(..., description="Source vertex ID"),
     dst: str = Query(..., description="Destination vertex ID"),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
     check_identifier(edge, "边类型名")
@@ -29,7 +29,7 @@ async def get_edge_endpoint(
         rows = fetch_edge(get_client(), sess, space=space, src=src, dst=dst, edge=edge)
         if not rows:
             raise HTTPException(status_code=404, detail=f"Edge {src}->{dst} not found")
-        return {"ok": True, "data": rows}
+        return {"ok": True, "data": {"src": src, "dst": dst, "edge": edge, "edges": rows}}
     except NebulaError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
@@ -40,7 +40,7 @@ async def get_edge_endpoint(
 async def create_edge_endpoint(
     payload: EdgeCreate,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.edge, "边类型名")
@@ -62,9 +62,9 @@ async def create_edge_endpoint(
 
 @router.patch("", response_model=EdgeResp)
 async def update_edge_endpoint(
-    payload: EdgeCreate,
+    payload: EdgePatch,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     """
     Partial update: fetch existing props, merge, delete+re-insert.
@@ -84,13 +84,20 @@ async def update_edge_endpoint(
         if not existing:
             raise HTTPException(status_code=404, detail=f"Edge {payload.src}->{payload.dst} not found")
 
-        base: dict[str, Any] = dict(existing[0])
-        base.update(payload.props)
+        # Extract existing props from nested edge structure
+        merged_props: dict[str, Any] = {}
+        for row in existing:
+            for col_val in row.values():
+                if isinstance(col_val, dict) and "props" in col_val:
+                    merged_props.update(col_val["props"])
+                    break
+        # Merge: new props take precedence
+        merged_props.update(payload.props)
 
         delete_edge(client, sess, space=payload.space,
                     src=payload.src, dst=payload.dst, edge=payload.edge)
         insert_edge(client, sess, space=payload.space,
-                   src=payload.src, dst=payload.dst, edge=payload.edge, props=base)
+                   src=payload.src, dst=payload.dst, edge=payload.edge, props=merged_props)
 
     except HTTPException:
         raise
@@ -107,7 +114,7 @@ async def update_edge_endpoint(
 async def delete_edge_endpoint(
     payload: EdgeDelete,
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(payload.space, "空间名")
     check_identifier(payload.edge, "边类型名")

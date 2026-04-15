@@ -3,7 +3,7 @@ Router: /api/v1/query — raw nGQL execution with basic safety gate.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import QueryResp, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import run_query
@@ -23,7 +23,7 @@ async def run_query_endpoint(
     q: str = Query(..., description="nGQL statement (URL-encode the query string)"),
     space: str = Query(..., description="Target space name"),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     check_identifier(space, "空间名")
 

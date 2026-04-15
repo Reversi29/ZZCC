@@ -1,51 +1,23 @@
-"""
-Shared FastAPI dependencies.
-Both main.py and routers import from here to avoid circular imports.
-
-Provides:
-- get_client()     — NebulaClient singleton accessor
-- get_session()    — FastAPI Depends() for NebulaGraph session
-- require_api_key()— FastAPI Depends() for API-key auth
-"""
+"""FastAPI dependency injection functions (avoids circular imports)."""
 from __future__ import annotations
 
-from typing import Annotated
+import asyncio
+from typing import Annotated, Any
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Header, HTTPException
 
-from config import get_settings
-from modules.nebula_client import NebulaClient
-
-# ============================================================
-# Client singleton (initialized by main.py lifespan)
-# ============================================================
-_client: NebulaClient | None = None
-
-
-def get_client() -> NebulaClient:
-    if _client is None:
-        raise RuntimeError("Nebula client not initialized")
-    return _client
-
-
-def set_client(client: NebulaClient) -> None:
-    """Called by main.py lifespan to publish the singleton."""
-    global _client
-    _client = client
-
+from modules.nebula_client import get_client
 
 # ============================================================
 # Auth
 # ============================================================
-async def require_api_key(
-    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
-) -> str:
-    """Return empty string if auth disabled, else raise 401."""
-    settings = get_settings()
-    if not settings.api_key_set:
-        return ""
-    if x_api_key != settings.api.api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+API_KEY = "secret-key-change-me"
+
+
+def verify_api_key(x_api_key: Annotated[str | None, Header()] = None) -> str:
+    """Raise 403 if the X-API-Key header doesn't match."""
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
     return x_api_key
 
 
@@ -58,10 +30,16 @@ async def get_session(
     nebula_user: Annotated[str | None, Header(alias="X-Nebula-User")] = None,
     nebula_password: Annotated[str | None, Header(alias="X-Nebula-Password")] = None,
 ):
-    """FastAPI Depends — returns a NebulaGraph session."""
-    return get_client().session_with(
+    """FastAPI Depends — yields a NebulaGraph session (cleanup after request)."""
+    client = get_client()
+    cm = client.session_with(
         host=nebula_host,
         port=nebula_port,
         user=nebula_user,
         password=nebula_password,
     )
+    sess = await asyncio.to_thread(cm.__enter__)
+    try:
+        yield sess
+    finally:
+        await asyncio.to_thread(cm.__exit__, None, None, None)

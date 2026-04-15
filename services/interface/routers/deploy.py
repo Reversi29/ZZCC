@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from dependencies import get_client, get_session, require_api_key
+from dependencies import get_client, get_session, verify_api_key
 from models.schemas import DeployRequest, SpaceResp, check_identifier
 from modules.nebula_client import NebulaError
 from services.graph import (
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/deploy", tags=["deploy"])
 async def deploy_schema_endpoint(
     payload: DeployRequest | None = Body(default=None),
     sess=Depends(get_session),
-    auth: str = Depends(require_api_key),
+    auth: str = Depends(verify_api_key),
 ):
     if payload is None:
         defaults = Path(__file__).parent.parent / "deploy_defaults.json"
