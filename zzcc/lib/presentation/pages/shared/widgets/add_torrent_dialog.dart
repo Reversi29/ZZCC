@@ -453,19 +453,19 @@ class _AddTorrentDialogState extends State<AddTorrentDialog> {
                         const SizedBox(height: 8),
                         Row(
                           children: [
-                            Radio<bool>(
-                              value: true,
+                            RadioGroup<bool>(
                               groupValue: _isManualMode,
                               onChanged: (value) => setState(() => _isManualMode = value!),
+                              child: Row(
+                                children: [
+                                  const Radio<bool>(value: true),
+                                  const Text('手动模式'),
+                                  const SizedBox(width: 24),
+                                  const Radio<bool>(value: false),
+                                  const Text('自动模式'),
+                                ],
+                              ),
                             ),
-                            const Text('手动模式'),
-                            const SizedBox(width: 24),
-                            Radio<bool>(
-                              value: false,
-                              groupValue: _isManualMode,
-                              onChanged: (value) => setState(() => _isManualMode = value!),
-                            ),
-                            const Text('自动模式'),
                           ],
                         ),
                         const Divider(height: 24),
@@ -557,7 +557,7 @@ class _AddTorrentDialogState extends State<AddTorrentDialog> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: DropdownButtonFormField<String>(
-                                value: _selectedCategory,
+                                initialValue: _selectedCategory,
                                 items: _categories
                                     .map((category) => DropdownMenuItem(
                                           value: category,
@@ -608,7 +608,7 @@ class _AddTorrentDialogState extends State<AddTorrentDialog> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: DropdownButtonFormField<String>(
-                                value: _stopCondition,
+                                initialValue: _stopCondition,
                                 items: _stopConditions
                                     .map((condition) => DropdownMenuItem(
                                           value: condition,
@@ -645,7 +645,7 @@ class _AddTorrentDialogState extends State<AddTorrentDialog> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: DropdownButtonFormField<String>(
-                                value: _contentLayout,
+                                initialValue: _contentLayout,
                                 items: _contentLayouts
                                     .map((layout) => DropdownMenuItem(
                                           value: layout,

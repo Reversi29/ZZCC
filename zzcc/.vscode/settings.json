@@ -1,4 +1,8 @@
 {
     "cmake.sourceDirectory": "F:/GitHub/ZZCC/zzcc/linux",
-    "C_Cpp.errorSquiggles": "disabled"
+    "C_Cpp.errorSquiggles": "disabled",
+    "dart.flutterSdkPaths": [
+        "/opt/homebrew/share/flutter"
+    ],
+    "dart.flutterSdkPath": "/opt/homebrew/share/flutter"
 }

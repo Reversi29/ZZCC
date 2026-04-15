@@ -38,10 +38,16 @@ class ConfigService {
 
   Future<void> init() async {
     try {
-      // 获取应用程序运行目录
-      final executablePath = Platform.resolvedExecutable;
-      final appDir = File(executablePath).parent.path;
-      _configPath = '$appDir/$_configFileName';
+      if (Platform.isMacOS) {
+        // macOS app bundle 内不可写，使用 Application Support 目录
+        final supportDir = await getApplicationSupportDirectory();
+        _configPath = '${supportDir.path}/$_configFileName';
+      } else {
+        // 其他平台：放在可执行文件同级目录
+        final executablePath = Platform.resolvedExecutable;
+        final appDir = File(executablePath).parent.path;
+        _configPath = '$appDir/$_configFileName';
+      }
 
       getIt<LoggerService>().debug('配置文件路径: $_configPath');
       
