@@ -14,7 +14,6 @@ import 'package:zzcc/data/repositories/graph_repository.dart';
 import 'package:zzcc/data/sources/nebula_remote_source.dart';
 import 'package:zzcc/data/repositories/chat_repository.dart';
 import 'package:zzcc/domain/services/sync_service.dart';
-
 final getIt = GetIt.instance;
 
 Future<void> setupServiceLocator() async {
@@ -46,5 +45,5 @@ Future<void> setupServiceLocator() async {
   getIt.registerLazySingleton<ChatRepository>(
     () => ChatRepositoryImpl(remoteSource: ChatRemoteSource()),
   );
-  getIt.registerLazySingleton<ChatSyncService>(() => ChatSyncService(getIt<ChatRepository>()));
+  getIt.registerLazySingleton<SyncService>(() => SyncService(repository: getIt<ChatRepository>()));
 }

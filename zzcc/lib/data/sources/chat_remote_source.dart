@@ -26,7 +26,7 @@ class ChatApiException implements Exception {
 class ChatRemoteSource {
   late final Dio _dio;
   final Logger _log = Logger('ChatRemoteSource');
-  final ConfigService _config;
+  late final ConfigService _config;
   
   String? _accessToken;
   
