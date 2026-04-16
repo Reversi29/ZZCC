@@ -8,6 +8,8 @@ import 'package:logging/logging.dart';
 import '../models/chat_message.dart';
 import '../models/chat_room.dart';
 import '../models/chat_user.dart';
+import 'package:zzcc/core/services/config_service.dart';
+import 'package:zzcc/core/di/service_locator.dart';
 
 /// Chat API exception
 class ChatApiException implements Exception {
@@ -22,12 +24,29 @@ class ChatApiException implements Exception {
 
 /// Chat remote data source
 class ChatRemoteSource {
-  final Dio _dio;
+  late final Dio _dio;
   final Logger _log = Logger('ChatRemoteSource');
+  final ConfigService _config;
   
   String? _accessToken;
   
-  ChatRemoteSource({required Dio dio}) : _dio = dio;
+  ChatRemoteSource({Dio? dio, ConfigService? config}) {
+    _config = config ?? getIt<ConfigService>();
+    _dio = dio ?? Dio(BaseOptions(
+      baseUrl: _config.nebulaApiBaseUrl,  // Chat shares same base URL
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 60),  // Longer for long-poll
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': _config.nebulaApiKey,
+      },
+    ));
+    
+    // Restore persisted token on init
+    if (_config.chatAccessToken != null) {
+      setAccessToken(_config.chatAccessToken);
+    }
+  }
   
   /// Set access token for authenticated requests
   void setAccessToken(String? token) {
@@ -87,6 +106,11 @@ class ChatRemoteSource {
       final data = response.data['data'] as Map<String, dynamic>;
       final user = ChatUser.fromAuthResponse(data);
       setAccessToken(user.accessToken);
+      await _config.saveChatAuth(
+        accessToken: user.accessToken,
+        userId: user.userId,
+        displayName: user.displayName,
+      );
       _log.info('Registered: ${user.userId}');
       return user;
     } catch (e) {
@@ -112,6 +136,11 @@ class ChatRemoteSource {
       final data = response.data['data'] as Map<String, dynamic>;
       final user = ChatUser.fromAuthResponse(data);
       setAccessToken(user.accessToken);
+      await _config.saveChatAuth(
+        accessToken: user.accessToken,
+        userId: user.userId,
+        displayName: user.displayName,
+      );
       _log.info('Logged in: ${user.userId}');
       return user;
     } catch (e) {
@@ -130,6 +159,7 @@ class ChatRemoteSource {
       _log.warning('Logout error (ignored): $e');
     } finally {
       setAccessToken(null);
+      await _config.clearChatAuth();
     }
   }
   

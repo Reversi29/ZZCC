@@ -248,4 +248,32 @@ class ConfigService {
     _config['enableSplashAnimation'] = enable;
     await _saveConfig();
   }
+
+  // ── Chat/Matrix 认证配置 ───────────────────────────────
+  /// Chat access token (persisted for auto-login)
+  String? get chatAccessToken => _config['chatAccessToken'] as String?;
+  
+  /// Chat user ID (e.g. @username:server)
+  String? get chatUserId => _config['chatUserId'] as String?;
+  
+  /// Chat display name
+  String? get chatDisplayName => _config['chatDisplayName'] as String?;
+  
+  Future<void> saveChatAuth({
+    required String accessToken,
+    required String userId,
+    String? displayName,
+  }) async {
+    _config['chatAccessToken'] = accessToken;
+    _config['chatUserId'] = userId;
+    _config['chatDisplayName'] = displayName;
+    await _saveConfig();
+  }
+  
+  Future<void> clearChatAuth() async {
+    _config.remove('chatAccessToken');
+    _config.remove('chatUserId');
+    _config.remove('chatDisplayName');
+    await _saveConfig();
+  }
 }
