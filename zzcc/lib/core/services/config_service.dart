@@ -260,8 +260,8 @@ class ConfigService {
   String? get chatDisplayName => _config['chatDisplayName'] as String?;
   
   Future<void> saveChatAuth({
-    required String accessToken,
-    required String userId,
+    required String? accessToken,
+    required String? userId,
     String? displayName,
   }) async {
     _config['chatAccessToken'] = accessToken;

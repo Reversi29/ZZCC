@@ -13,6 +13,7 @@ import 'package:zzcc/core/services/torrent_metadata_service.dart';
 import 'package:zzcc/data/repositories/graph_repository.dart';
 import 'package:zzcc/data/sources/nebula_remote_source.dart';
 import 'package:zzcc/data/repositories/chat_repository.dart';
+import 'package:zzcc/data/sources/chat_remote_source.dart';
 import 'package:zzcc/domain/services/sync_service.dart';
 final getIt = GetIt.instance;
 
