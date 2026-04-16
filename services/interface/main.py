@@ -15,7 +15,7 @@ from starlette import status
 from config import get_settings
 from dependencies import get_client
 from middleware.rate_limit import setup_middleware
-from modules.nebula_client import NebulaClient
+from modules.nebula_client import NebulaClient, set_client
 
 _log = structlog.get_logger()
 
@@ -96,7 +96,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -109,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(import_csv.router, prefix=v1)
     app.include_router(documents.router, prefix=v1)
     app.include_router(documents.convert_router, prefix=v1)
+    app.include_router(chat.router, prefix=v1)
 
     # Root
     @app.get("/")

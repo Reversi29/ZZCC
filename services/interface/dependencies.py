@@ -11,12 +11,16 @@ from modules.nebula_client import get_client
 # ============================================================
 # Auth
 # ============================================================
-API_KEY = "secret-key-change-me"
 
 
 def verify_api_key(x_api_key: Annotated[str | None, Header()] = None) -> str:
-    """Raise 403 if the X-API-Key header doesn't match."""
-    if x_api_key != API_KEY:
+    """Raise 403 if the X-API-Key header doesn't match config.
+    If api_key is empty in config, auth is disabled (any key passes)."""
+    from config import get_settings
+    settings = get_settings()
+    if not settings.api_key_set:
+        return x_api_key or ""
+    if x_api_key != settings.api.api_key:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
     return x_api_key
 

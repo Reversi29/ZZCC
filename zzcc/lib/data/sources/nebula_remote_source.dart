@@ -1,27 +1,28 @@
 // ZZCC NebulaGraph 后端 API 调用层
-// Base URL: http://124.223.47.167:8001/api/v1/
+// Base URL 和 API Key 从 ConfigService 读取
 
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:logging/logging.dart';
 import '../models/graph_model.dart';
-
-const _zzccBaseUrl = 'http://124.223.47.167:8001/api/v1/';
+import 'package:zzcc/core/services/config_service.dart';
+import 'package:zzcc/core/di/service_locator.dart';
 
 class NebulaRemoteSource {
   final Dio _dio;
   final Logger _log = Logger('NebulaRemote');
 
-  NebulaRemoteSource({Dio? dio})
+  NebulaRemoteSource({Dio? dio, ConfigService? config})
       : _dio = dio ??
             Dio(BaseOptions(
-              baseUrl: _zzccBaseUrl,
+              baseUrl: config?.nebulaApiBaseUrl ??
+                  getIt<ConfigService>().nebulaApiBaseUrl,
               connectTimeout: const Duration(seconds: 8),
               receiveTimeout: const Duration(seconds: 15),
               headers: {
                 'Content-Type': 'application/json',
-                // API key 由 config_service 注入，或硬编码在这里
-                'X-API-Key': 'zzcc-secret-key-2025',
+                'X-API-Key': config?.nebulaApiKey ??
+                    getIt<ConfigService>().nebulaApiKey,
               },
             ));
 
@@ -31,14 +32,21 @@ class NebulaRemoteSource {
   Future<List<GraphSpace>> listSpaces() async {
     try {
       final resp = await _dio.get('/spaces');
+      _log.info('listSpaces resp: ${resp.statusCode} data=${resp.data}');
       final data = resp.data;
+      if (data == null) { _log.warning('listSpaces: resp.data is null'); return []; }
+      if (data['ok'] != true) { _log.warning('listSpaces: ok=false detail=${data['detail']}'); return []; }
       final spaces = (data['data']['spaces'] as List<dynamic>?)
               ?.map((s) => GraphSpace.fromJson(s as Map<String, dynamic>))
               .toList() ??
           [];
+      _log.info('listSpaces parsed ${spaces.length} spaces');
       return spaces;
     } on DioException catch (e) {
-      _log.warning('listSpaces failed: ${e.message}');
+      _log.warning('listSpaces failed: ${e.message} status=${e.response?.statusCode} body=${e.response?.data}');
+      return [];
+    } catch (e, st) {
+      _log.warning('listSpaces unexpected: $e $st');
       return [];
     }
   }
@@ -321,7 +329,7 @@ class NebulaRemoteSource {
     try {
       final resp = await _dio.get('/query', queryParameters: {
         'space': space,
-        'stmt': nGQL,
+        'q': nGQL,
       });
       if (resp.data['ok'] == true) {
         return resp.data['data'] as Map<String, dynamic>?;
@@ -399,41 +407,58 @@ class NebulaRemoteSource {
       final bData = row['b'] as Map<String, dynamic>?;
 
       if (aData != null) {
-        final vid = aData['_id']?.toString() ?? aData['id']?.toString() ?? '';
-        if (vid.isNotEmpty && !seen.contains('src:$vid')) {
-          seen.add('src:$vid');
+        final vid = aData['vid']?.toString() ?? '';
+        if (vid.isNotEmpty && !seen.contains('node:$vid')) {
+          seen.add('node:$vid');
+          // Extract label: first tag's first property
+          String label = vid;
+          final tags = aData['tags'] as Map<String, dynamic>?;
+          if (tags != null && tags.isNotEmpty) {
+            final firstTag = tags.values.first as Map<String, dynamic>?;
+            if (firstTag != null && firstTag.isNotEmpty) {
+              label = firstTag.values.first.toString();
+            }
+          }
           nodes.add(EChartNode(
             id: vid,
-            label: aData['name']?.toString() ?? aData['title']?.toString() ?? vid,
+            label: label,
             symbolSize: 28,
-            tags: [(aData['_tag']?.toString() ?? '')],
-            props: Map<String, dynamic>.from(aData)..remove('_id')..remove('id'),
+            tags: tags?.keys.toList() ?? [],
+            props: Map<String, dynamic>.from(aData)..remove('vid')..remove('tags'),
           ));
         }
       }
 
       if (bData != null) {
-        final vid = bData['_id']?.toString() ?? bData['id']?.toString() ?? '';
-        if (vid.isNotEmpty && !seen.contains('dst:$vid')) {
-          seen.add('dst:$vid');
+        final vid = bData['vid']?.toString() ?? '';
+        if (vid.isNotEmpty && !seen.contains('node:$vid')) {
+          seen.add('node:$vid');
+          String label = vid;
+          final tags = bData['tags'] as Map<String, dynamic>?;
+          if (tags != null && tags.isNotEmpty) {
+            final firstTag = tags.values.first as Map<String, dynamic>?;
+            if (firstTag != null && firstTag.isNotEmpty) {
+              label = firstTag.values.first.toString();
+            }
+          }
           nodes.add(EChartNode(
             id: vid,
-            label: bData['name']?.toString() ?? bData['title']?.toString() ?? vid,
+            label: label,
             symbolSize: 28,
-            tags: [(bData['_tag']?.toString() ?? '')],
-            props: Map<String, dynamic>.from(bData)..remove('_id')..remove('id'),
+            tags: tags?.keys.toList() ?? [],
+            props: Map<String, dynamic>.from(bData)..remove('vid')..remove('tags'),
           ));
         }
       }
 
       if (aData != null && bData != null && rData != null) {
-        final src = aData['_id']?.toString() ?? '';
-        final dst = bData['_id']?.toString() ?? '';
+        final src = aData['vid']?.toString() ?? '';
+        final dst = bData['vid']?.toString() ?? '';
         if (src.isNotEmpty && dst.isNotEmpty) {
           links.add(EChartLink(
             source: src,
             target: dst,
-            label: rData['_edge']?.toString() ?? '',
+            label: rData['edge']?.toString() ?? '',
           ));
         }
       }

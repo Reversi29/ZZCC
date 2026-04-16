@@ -349,10 +349,15 @@ class NebulaClient:
 _client: NebulaClient | None = None
 
 
+def set_client(client: NebulaClient) -> None:
+    """Set the singleton NebulaClient instance (called from lifespan)."""
+    global _client
+    _client = client
+
+
 def get_client() -> NebulaClient:
-    """Return the singleton NebulaClient instance (lazy init)."""
+    """Return the singleton NebulaClient instance (must be set by lifespan)."""
     global _client
     if _client is None:
-        from interface.config import get_settings
-        _client = NebulaClient.from_env()
+        raise RuntimeError("NebulaClient not initialized — lifespan must call set_client() first")
     return _client

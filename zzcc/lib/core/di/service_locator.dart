@@ -10,6 +10,8 @@ import 'package:zzcc/core/services/storage_service.dart';
 import 'package:event_bus/event_bus.dart';
 import 'package:zzcc/core/services/config_service.dart';
 import 'package:zzcc/core/services/torrent_metadata_service.dart';
+import 'package:zzcc/data/repositories/graph_repository.dart';
+import 'package:zzcc/data/sources/nebula_remote_source.dart';
 
 final getIt = GetIt.instance;
 
@@ -33,4 +35,8 @@ Future<void> setupServiceLocator() async {
   final storageService = StorageService();
   await storageService.init(configService.appDataPath);
   getIt.registerSingleton<StorageService>(storageService);
+  
+  // 注册 NebulaGraph 数据层
+  getIt.registerLazySingleton<NebulaRemoteSource>(() => NebulaRemoteSource());
+  getIt.registerLazySingleton<GraphRepository>(() => GraphRepository());
 }

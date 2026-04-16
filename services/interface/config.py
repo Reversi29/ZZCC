@@ -55,6 +55,20 @@ class RedisSettings(BaseSettings):
         return f"redis://{auth}{self.host}:{self.port}/{self.db}"
 
 
+class MatrixSettings(BaseSettings):
+    """Matrix Synapse connection settings."""
+    model_config = SettingsConfigDict(env_prefix="MATRIX_")
+
+    base_url: str = Field(
+        default="http://124.223.47.167:8008",
+        description="Matrix Synapse homeserver URL",
+    )
+    server_name: str = Field(
+        default="matrix.local",
+        description="Matrix server name (domain part of user IDs)",
+    )
+
+
 class APISettings(BaseSettings):
     """API-level settings."""
     model_config = SettingsConfigDict(env_prefix="")
@@ -113,6 +127,7 @@ class AppSettings(BaseSettings):
     nebula: NebulaSettings = Field(default_factory=NebulaSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
+    matrix: MatrixSettings = Field(default_factory=MatrixSettings)
     api: APISettings = Field(default_factory=APISettings)
 
     # App metadata

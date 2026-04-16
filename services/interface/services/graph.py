@@ -143,84 +143,135 @@ def _rows_to_dicts(resp) -> List[Dict[str, Any]]:
 
 def _unwrap_value(v) -> Any:
     """Recursively unwrap a NebulaGraph Value into a plain Python object."""
-    try:
-        if isinstance(v.is_empty(), bool) and v.is_empty():
-            return None
-        if isinstance(v.is_null(), bool) and v.is_null():
-            return None
-        if isinstance(v.is_string(), bool) and v.is_string():
-            return v.as_string()
-        if isinstance(v.is_int(), bool) and v.is_int():
-            return v.as_int()
-        if isinstance(v.is_double(), bool) and v.is_double():
-            return v.as_double()
-        if isinstance(v.is_bool(), bool) and v.is_bool():
-            return v.as_bool()
-    except (AttributeError, TypeError):
-        pass
+    # nebula3-python thrift Union: v.field is type tag, v.__dict__['value'] holds raw data
+    # field IDs: nVal=1, bVal=2, iVal=3, fVal=4, sVal=5, dVal=6, tVal=7, dtVal=8,
+    #            vVal=9, eVal=10, pVal=11, lVal=12, mVal=13, uVal=14, gVal=15, ggVal=16, duVal=17
+    _FIELD_NULL = 1
+    _FIELD_BOOL = 2
+    _FIELD_INT = 3
+    _FIELD_FLOAT = 4
+    _FIELD_STRING = 5
+    _FIELD_DATE = 6
+    _FIELD_TIME = 7
+    _FIELD_DATETIME = 8
+    _FIELD_VERTEX = 9
+    _FIELD_EDGE = 10
+    _FIELD_PATH = 11
+    _FIELD_LIST = 12
+    _FIELD_MAP = 13
+    _FIELD_SET = 14
 
-    # Nested: Vertex, Edge, List, Map, Set, Path
-    try:
-        if v.is_vertex():
-            vtx = v.as_node()
-            vid = _unwrap_value(vtx.get_id()) if hasattr(vtx, "get_id") else str(vtx.get_id())
-            tags = {}
-            for tag_name in vtx.tag_names():
-                tag_props = vtx.properties(tag_name)
-                tags[tag_name.decode() if isinstance(tag_name, bytes) else tag_name] = {
-                    k.decode() if isinstance(k, bytes) else k: _unwrap_value(pv)
-                    for k, pv in tag_props.items()
+    raw = v.__dict__ if hasattr(v, '__dict__') else {}
+    field = raw.get('field')
+    value = raw.get('value')
+
+    # Primary: direct field+value lookup (all nebula3-python Value types)
+    if field is not None and value is not None:
+        if field == _FIELD_NULL:
+            return None
+        if field == _FIELD_BOOL:
+            return bool(value)
+        if field == _FIELD_INT:
+            return int(value)
+        if field == _FIELD_FLOAT:
+            return float(value)
+        if field == _FIELD_STRING:
+            return value.decode() if isinstance(value, bytes) else str(value)
+        if field == _FIELD_DATE:
+            return str(value) if value else None
+        if field == _FIELD_TIME:
+            return str(value) if value else None
+        if field == _FIELD_DATETIME:
+            return str(value) if value else None
+
+        if field == _FIELD_VERTEX:
+            try:
+                vtx = v.value  # Value.v -> Vertex
+                vid_raw = vtx.__dict__.get('vid')
+                tags_list = vtx.__dict__.get('tags', [])
+                vid = _unwrap_value(vid_raw) if vid_raw is not None else str(vid_raw)
+                tags = {}
+                for tag in tags_list:
+                    key = tag.name.decode() if isinstance(tag.name, bytes) else str(tag.name)
+                    props = {}
+                    if hasattr(tag, 'props') and tag.props:
+                        for k, pv in tag.props.items():
+                            k_str = k.decode() if isinstance(k, bytes) else str(k)
+                            props[k_str] = _unwrap_value(pv)
+                    tags[key] = props
+                return {"vid": vid, "tags": tags}
+            except Exception:
+                return str(v)
+        if field == _FIELD_EDGE:
+            try:
+                edge_obj = v.value  # Value.e -> Edge
+                src_raw = edge_obj.__dict__.get('src')
+                dst_raw = edge_obj.__dict__.get('dst')
+                type_ = edge_obj.__dict__.get('type', 0)
+                rank = edge_obj.__dict__.get('ranking', 0)
+                props_data = edge_obj.__dict__.get('props', {})
+                name_raw = edge_obj.__dict__.get('name', b'')
+                edge_name = name_raw.decode() if isinstance(name_raw, bytes) else str(name_raw)
+                # type > 0 means outgoing, < 0 means incoming
+                if type_ < 0:
+                    src, dst = _unwrap_value(dst_raw), _unwrap_value(src_raw)
+                else:
+                    src, dst = _unwrap_value(src_raw), _unwrap_value(dst_raw)
+                return {
+                    "src": src, "dst": dst, "edge": edge_name, "rank": rank,
+                    "props": {
+                        k.decode() if isinstance(k, bytes) else k: _unwrap_value(pv)
+                        for k, pv in props_data.items()
+                    }
                 }
-            return {"vid": vid, "tags": tags}
-    except (AttributeError, TypeError):
-        pass
+            except Exception:
+                return str(v)
+        if field == _FIELD_LIST:
+            try:
+                return [_unwrap_value(item) for item in v.as_list()]
+            except Exception:
+                return str(v)
+        if field == _FIELD_MAP:
+            try:
+                m = v.as_map()
+                return {
+                    k.decode() if isinstance(k, bytes) else k: _unwrap_value(val)
+                    for k, val in m.items()
+                }
+            except Exception:
+                return str(v)
+        if field == _FIELD_SET:
+            try:
+                return [_unwrap_value(item) for item in v.as_set()]
+            except Exception:
+                return str(v)
+        if field == _FIELD_PATH:
+            try:
+                return {"path": str(v.as_path())}
+            except Exception:
+                return str(v)
 
+    # Fallback: getter methods (for non-field-based Values)
     try:
-        if v.is_edge():
-            e = v.as_relationship()
-            src = _unwrap_value(e.src_id()) if hasattr(e, "src_id") else str(e.src_id())
-            dst = _unwrap_value(e.dst_id()) if hasattr(e, "dst_id") else str(e.dst_id())
-            edge_name = e.edge_name()
-            if isinstance(edge_name, bytes):
-                edge_name = edge_name.decode()
-            props = {
-                k.decode() if isinstance(k, bytes) else k: _unwrap_value(pv)
-                for k, pv in e.properties().items()
-            }
-            return {"src": src, "dst": dst, "edge": edge_name, "props": props}
-    except (AttributeError, TypeError):
+        getters = [
+            ('get_sVal', lambda x: x.decode() if isinstance(x, bytes) else str(x)),
+            ('get_iVal', int),
+            ('get_fVal', float),
+            ('get_bVal', bool),
+            ('get_lVal', list),
+            ('get_mVal', dict),
+        ]
+        for getter, decoder in getters:
+            if hasattr(v, getter):
+                try:
+                    result = getattr(v, getter)()
+                    if result is not None and result is not False:
+                        return decoder(result)
+                except (AssertionError, AttributeError, TypeError):
+                    pass
+    except Exception:
         pass
 
-    try:
-        if v.is_list():
-            return [_unwrap_value(item) for item in v.as_list()]
-    except (AttributeError, TypeError):
-        pass
-
-    try:
-        if v.is_map():
-            m = v.as_map()
-            return {
-                k.decode() if isinstance(k, bytes) else k: _unwrap_value(val)
-                for k, val in m.items()
-            }
-    except (AttributeError, TypeError):
-        pass
-
-    try:
-        if v.is_set():
-            return [_unwrap_value(item) for item in v.as_set()]
-    except (AttributeError, TypeError):
-        pass
-
-    try:
-        if v.is_path():
-            p = v.as_path()
-            return {"steps": str(p)}
-    except (AttributeError, TypeError):
-        pass
-
-    # Fallback: string representation
     return str(v)
 
 def alter_tag(client: NebulaClient, sess, space: str, tag: str, columns: List[Tuple[str, str]]) -> None:

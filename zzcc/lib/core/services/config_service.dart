@@ -18,6 +18,18 @@ class ConfigService {
 
   bool get keepLoggedIn => _config['keepLoggedIn'] ?? false;
 
+  // ── 后端 API 配置 ──────────────────────────────────────
+  String get nebulaApiBaseUrl =>
+      _config['nebulaApiBaseUrl'] ?? 'http://124.223.47.167:8001/api/v1/';
+  String get nebulaApiKey =>
+      _config['nebulaApiKey'] ?? 'zzcc-secret-key-2025';
+
+  Future<void> updateNebulaApiConfig(String baseUrl, String apiKey) async {
+    _config['nebulaApiBaseUrl'] = baseUrl;
+    _config['nebulaApiKey'] = apiKey;
+    await _saveConfig();
+  }
+
   Future<void> updateKeepLoggedIn(bool value) async {
     _config['keepLoggedIn'] = value;
     await _saveConfig();
