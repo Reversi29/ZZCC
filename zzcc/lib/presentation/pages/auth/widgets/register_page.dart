@@ -8,18 +8,10 @@ import 'package:zzcc/core/services/logger_service.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 import 'package:zzcc/core/utils/color_utils.dart';
 import 'package:zzcc/core/utils/encrypt_utils.dart';
-import 'dart:convert';
+import 'package:zzcc/data/repositories/chat_repository.dart';
 import 'dart:io';
 import 'dart:math';
-import 'package:ntp/ntp.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:path/path.dart' as path;
-// import 'package:crypto/crypto.dart';
-// import 'dart:typed_data';
-
-// const String _customBaseChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789·~!@#%^&()_+-=[]{};,.';
-const String _customBaseChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-const int _customBase = _customBaseChars.length;
 
 class RegisterPage extends ConsumerStatefulWidget {
   const RegisterPage({super.key});
@@ -273,195 +265,13 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     });
   }
 
-  Future<String> _getDeviceIdentifier() async {
-    final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-    
-    try {
-      if (Platform.isAndroid) {
-        final androidInfo = await deviceInfo.androidInfo;
-        return androidInfo.id; // Android ID
-      } else if (Platform.isIOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        return iosInfo.identifierForVendor ?? 'ios_unknown';
-      } else if (Platform.isWindows) {
-        final windowsInfo = await deviceInfo.windowsInfo;
-        return windowsInfo.deviceId; // Windows 设备ID
-      } else if (Platform.isMacOS) {
-        final macInfo = await deviceInfo.macOsInfo;
-        return macInfo.computerName; // macOS 计算机名
-      } else if (Platform.isLinux) {
-        final linuxInfo = await deviceInfo.linuxInfo;
-        return linuxInfo.name; // Linux 主机名（正确字段名）
-      }
-    } catch (e) {
-      loggerService.error('获取设备信息失败', e.toString());
-    }
-    
-    // 其他未知平台使用混合标识符
-    return '${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1<<16)}';
-  }
-
-  Future<Map<String, dynamic>> _generateUID() async {
-    DateTime trustedTime;
-    
-    try {
-      // 使用SNTP
-      trustedTime = await _getSNTPTime();
-      loggerService.debug('使用SNTP时间: $trustedTime');
-    } catch (apiError) {
-      try {
-        // 尝试多个免费授时API
-        trustedTime = await _getTimeFromAPIs();
-        loggerService.debug('使用授时API时间: $trustedTime');
-      } catch (sntpError) {
-        loggerService.error('所有时间源均失败');
-        throw Exception('无法获取可信时间源');
-      }
-    }
-    
-    final deviceId = await _getDeviceIdentifier();
-    final random = Random().nextInt(1 << 8);
-    final input = '$trustedTime$deviceId$random'.replaceAll(RegExp(r'[^a-fA-F0-9]'), '');
-    loggerService.debug(input);
-    final inputBytes = _hexStringToBytes(input);
-    
-    // 返回base64编码的压缩数据
-    return {
-      'uid': _customBaseEncode(inputBytes),
-      'trustedTime': trustedTime
-    };
-  }
-
-  List<int> _hexStringToBytes(String hexString) {
-    if (hexString.isEmpty) return [];
-    
-    // 确保长度为偶数
-    if (hexString.length % 2 != 0) {
-      hexString = '0$hexString';
-    }
-    
-    final bytes = <int>[];
-    for (int i = 0; i < hexString.length; i += 2) {
-      final hex = hexString.substring(i, i + 2);
-      bytes.add(int.parse(hex, radix: 16));
-    }
-    return bytes;
-  }
-
-  String _customBaseEncode(List<int> bytes) {
-    if (bytes.isEmpty) return '';
-
-    // 将字节数组转换为大整数
-    BigInt big = BigInt.zero;
-    for (var byte in bytes) {
-      big = (big << 8) | BigInt.from(byte);
-    }
-
-    // 处理特殊情况：输入为0
-    if (big == BigInt.zero) {
-      return _customBaseChars[0];
-    }
-
-    // 使用BigInt进行base83转换
-    final base = BigInt.from(_customBase);
-    final buffer = StringBuffer();
-    
-    while (big > BigInt.zero) {
-      final result = big ~/ base;
-      final remainder = big.remainder(base);
-      buffer.write(_customBaseChars[remainder.toInt()]);
-      big = result;
-    }
-    
-    // 反转字符串得到正确顺序
-    return buffer.toString().split('').reversed.join();
-  }
-
-  Future<DateTime> _getSNTPTime() async {
-    final sntpServers = [
-      'time.cloudflare.com',
-      'time.google.com',
-      'time.windows.com',
-      'time.apple.com',
-      'pool.ntp.org',
-    ];
-    
-    for (final server in sntpServers) {
-      try {
-        final sntpResponse = await NTP.now(
-          lookUpAddress: server,
-          timeout: const Duration(seconds: 2),
-        );
-        return sntpResponse;
-      } catch (e) {
-        loggerService.debug('SNTP服务器($server)失败: ${e.toString()}');
-      }
-    }
-    
-    throw Exception('所有SNTP服务器请求失败');
-  }
-
-  Future<DateTime> _getTimeFromAPIs() async {
-    final apis = [
-      {
-        'url': 'http://worldtimeapi.org/api/ip',
-        'parser': (data) => DateTime.parse(data['utc_datetime'] as String)
-      },
-      {
-        'url': 'https://time.akamai.com/',
-        'parser': (response) => DateTime.parse((response as HttpClientResponse).headers.value('date')!)
-      },
-      {
-        'url': 'https://time.cloudflare.com/',
-        'parser': (response) => DateTime.parse((response as HttpClientResponse).headers.value('date')!)
-      },
-      {
-        'url': 'http://api.timezonedb.com/v2/get-time-zone?key=YOUR_KEY&format=json&by=zone&zone=UTC',
-        'parser': (data) => DateTime.parse(data['formatted'] as String)
-      },
-      {
-        'url': 'https://www.timeapi.io/api/Time/current/zone?timeZone=UTC',
-        'parser': (data) => DateTime.parse(data['dateTime'] as String)
-      },
-      {
-        'url': 'https://timeapi.io/api/Time/current/ip',
-        'parser': (data) => DateTime.parse(data['dateTime'] as String)
-      },
-      {
-        'url': 'http://worldclockapi.com/api/json/utc/now',
-        'parser': (data) => DateTime.parse(data['currentDateTime'] as String)
-      }
-    ];
-    
-    apis.shuffle();
-    
-    for (final api in apis) {
-      final url = api['url'] as String;
-      final parser = api['parser'] as Function;
-      
-      try {
-        final response = await HttpClient().getUrl(Uri.parse(url))
-          .timeout(const Duration(seconds: 1))
-          .then((request) => request.close());
-        
-        if (response.statusCode != 200) continue;
-        
-        final String contentType = response.headers.value('content-type') ?? '';
-        
-        if (contentType.contains('application/json')) {
-          final json = await response.transform(utf8.decoder).join();
-          final data = jsonDecode(json) as Map<String, dynamic>;
-          return parser(data);
-        } 
-        else {
-          return parser(response);
-        }
-      } catch (e) {
-        loggerService.debug('授时API失败($url): ${e.toString()}');
-      }
-    }
-    
-    throw Exception('所有授时API请求失败');
+  /// 生成 16 字节 / 128 bit 安全随机 UID，hex 编码为 32 字符
+  Future<String> _generateUID() async {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    final uid = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    loggerService.debug('生成新UID: ${uid.substring(0, 8)}...');
+    return uid;
   }
 
   void _handleRegister() async {
@@ -483,7 +293,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
       return;
     }
 
-    if (passwordController.text.length < 6) { // 可选：添加密码长度验证
+    if (passwordController.text.length < 6) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('密码长度不能少于6位')),
@@ -500,120 +310,113 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     setState(() => _isLoading = true);
     
     try {
-      loggerService.info('用户注册流程开始');
-      
-      // 生成并加密UID
-      final uidResult = await _generateUID();
-      final uid = uidResult['uid'] as String;
-      final trustedTime = uidResult['trustedTime'] as DateTime;
-      loggerService.debug(uid);
-      loggerService.debug('生成用户UID: ${uid.substring(0, 12)}...');
-      
-      final ciphertext = EncryptUtils.encryptUID(uid, passwordController.text);
-      loggerService.debug('UID加密完成: ${ciphertext.substring(0, 16)}...');
-      
-      // 获取存储服务
+      // 1. 生成本地 UID（优先使用服务器返回的）
+      final localUid = await _generateUID();
+      loggerService.debug('本地生成UID: ${localUid.substring(0, 8)}...');
+
+      // 2. 本地存储（必须先写，loginPage 登录时依赖 Hive 中的注册记录）
       final storageService = getIt<StorageService>();
       await storageService.init(configService.appDataPath);
-      
-      // 存储到user_registry
-      storageService.registerUser(uid, ciphertext);
-      loggerService.info('用户注册信息已存储');
-      
-      // 创建用户文件夹
+      final ciphertext = EncryptUtils.encryptUID(localUid, passwordController.text);
+      storageService.registerUser(localUid, ciphertext);
+
       final userDir = Directory(path.join(configService.appDataPath, ciphertext));
       if (!await userDir.exists()) {
         await userDir.create(recursive: true);
-        loggerService.debug('用户目录创建成功: ${userDir.path}');
       }
+      await storageService.saveUserInfo(ciphertext, {
+        'name': nameController.text,
+        'uid': localUid,
+        'registerTime': DateTime.now().toIso8601String(),
+        'lastLoginTime': null,
+      });
+      loggerService.debug('本地存储完成: ${userDir.path}');
 
-      // 保存用户信息到对应目录的Hive存储
-      await storageService.saveUserInfo(
-        ciphertext,
-        {
-          'name': nameController.text,
-          'uid': uid,
-          'registerTime': trustedTime.toIso8601String(),
-          'lastLoginTime': null
-        },
+      // 3. 优先尝试服务器注册（UID 由服务器分发）
+      final chatRepo = getIt<ChatRepository>();
+      final serverUser = await chatRepo.register(
+        uid: localUid,
+        password: passwordController.text,
+        displayName: nameController.text,
       );
-      loggerService.debug('用户信息已存储到: ${path.join(configService.appDataPath, ciphertext)}');
-      
-      // 调用用户提供者注册方法
+
+      // 取最终 UID（服务器可能分配了新 UID）
+      final finalUid = serverUser?.userId ?? localUid;
+      final bool isOfflineMode = serverUser == null;
+      loggerService.info('注册完成: uid=$finalUid, offlineMode=$isOfflineMode');
+
+      // 4. 更新 UI 状态
       ref.read(userProvider.notifier).loginUser(
         name: nameController.text,
-        uid: uid,
-        userDataPath: userDir.path, // 传入用户目录路径
+        uid: finalUid,
+        userDataPath: userDir.path,
       );
-      loggerService.info('用户提供者注册调用完成');
-      
-      if (mounted) {
-        // 注册成功后显示UID提示弹窗
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => AlertDialog(
-            title: const Text('注册成功'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('您的账号已成功创建！'),
-                const SizedBox(height: 16),
-                const Text('系统分配的UID为：'),
-                const SizedBox(height: 8),
-                // 显示UID，添加复制功能
-                SelectableText(
-                  uid,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                    wordSpacing: -2,
-                  ),
+      storageService.setCurrentUser(localUid);
+      await configService.updateKeepLoggedIn(true);
+
+      if (!mounted) return;
+
+      // 5. 注册成功弹窗
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: Text(isOfflineMode ? '注册成功（离线模式）' : '注册成功'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(isOfflineMode
+                  ? '服务器暂不可用，已在本地创建账号。网络恢复后将自动同步。'
+                  : '您的账号已成功创建！'),
+              const SizedBox(height: 16),
+              Text(isOfflineMode ? '本地 UID（待服务器确认）：' : '您的 UID 为：'),
+              const SizedBox(height: 8),
+              SelectableText(
+                finalUid,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  wordSpacing: -2,
                 ),
+              ),
+              if (isOfflineMode) ...[
                 const SizedBox(height: 8),
                 const Text(
-                  '请妥善保存您的UID，用于后续登录',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
-                  ),
+                  '网络恢复后会自动重新注册',
+                  style: TextStyle(fontSize: 12, color: Colors.orange),
+                ),
+              ] else ...[
+                const SizedBox(height: 8),
+                const Text(
+                  '请妥善保存您的 UID，用于后续登录',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
               ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  // 复制UID到剪贴板
-                  Clipboard.setData(ClipboardData(text: uid));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('UID已复制到剪贴板')),
-                  );
-                },
-                child: const Text('复制UID'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop(); // 关闭弹窗
-                  Navigator.of(context).pop(); // 返回登录页
-                },
-                child: const Text('确定'),
-              ),
             ],
           ),
-        );
-        
-        loggerService.info('注册成功，显示UID提示');
-      }
-    } on Exception catch (e) {
-      loggerService.error('注册失败: ${e.toString()}');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('无法获取可信时间源，请检查网络')),
-        );
-      }
+          actions: [
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: finalUid));
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  const SnackBar(content: Text('UID已复制到剪贴板')),
+                );
+              },
+              child: const Text('复制UID'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
     } catch (e) {
-      loggerService.error('用户注册失败', e.toString());
+      loggerService.error('注册失败: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('注册失败: ${e.toString()}')),

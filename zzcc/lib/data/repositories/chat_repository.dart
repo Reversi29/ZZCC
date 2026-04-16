@@ -3,6 +3,7 @@
 // Chat repository — abstracts data source for the domain layer.
 
 import 'dart:async';
+import 'package:logging/logging.dart';
 
 import '../models/chat_message.dart';
 import '../models/chat_room.dart';
@@ -20,15 +21,15 @@ abstract class ChatRepository {
   /// Check if authenticated
   bool get isAuthenticated;
   
-  /// Register new user
-  Future<ChatUser> register({
-    required String username,
+  /// Register new user. Returns null if server unreachable (local UID generated, needsSync=true).
+  Future<ChatUser?> register({
+    required String uid,
     required String password,
     String? displayName,
   });
   
-  /// Login
-  Future<ChatUser> login({required String username, required String password});
+  /// Login. Returns null on network failure (caller handles local fallback).
+  Future<ChatUser?> login({required String username, required String password});
   
   /// Logout
   Future<void> logout();
@@ -63,11 +64,42 @@ abstract class ChatRepository {
 /// Chat repository implementation
 class ChatRepositoryImpl implements ChatRepository {
   final ChatRemoteSource _remoteSource;
+  final Logger _log = Logger('ChatRepository');
   final _authController = StreamController<bool>.broadcast();
   ChatUser? _currentUser;
   
   ChatRepositoryImpl({required ChatRemoteSource remoteSource})
-      : _remoteSource = remoteSource;
+      : _remoteSource = remoteSource {
+    // Restore session from persistent storage
+    _restoreSession();
+  }
+
+  void _restoreSession() {
+    final config = _remoteSource.config;
+    final token = config.chatAccessToken;
+    final userId = config.chatUserId;
+    final displayName = config.chatDisplayName;
+
+    if (token != null && token.isNotEmpty) {
+      // Server-authenticated session
+      _currentUser = ChatUser(
+        userId: userId ?? '',
+        displayName: displayName,
+        accessToken: token,
+        needsSync: false,
+      );
+      _log.info('Session restored: server user=${userId}');
+    } else if (userId != null) {
+      // Offline session: server unreachable previously, needsSync
+      _currentUser = ChatUser(
+        userId: userId,
+        displayName: displayName,
+        accessToken: null,
+        needsSync: true,
+      );
+      _log.info('Session restored: offline user=$userId');
+    }
+  }
   
   @override
   ChatUser? get currentUser => _currentUser;
@@ -75,31 +107,54 @@ class ChatRepositoryImpl implements ChatRepository {
   @override
   Stream<bool> get authStateStream => _authController.stream;
   
+  /// True if user has an active session (server token or local needsSync account)
   @override
-  bool get isAuthenticated => _remoteSource.isAuthenticated;
+  bool get isAuthenticated => _currentUser?.isAuthenticated ?? false;
   
   void _updateAuthState(bool authenticated) {
     _authController.add(authenticated);
   }
   
   @override
-  Future<ChatUser> register({
-    required String username,
+  Future<ChatUser?> register({
+    required String uid,
     required String password,
     String? displayName,
   }) async {
-    final user = await _remoteSource.register(
-      username: username,
+    // Try server first (UID as username)
+    final serverUser = await _remoteSource.register(
+      username: uid,
       password: password,
       displayName: displayName,
     );
-    _currentUser = user;
+
+    if (serverUser != null) {
+      _currentUser = serverUser;
+      _updateAuthState(true);
+      return serverUser;
+    }
+
+    // Server unreachable — use local UID, mark needsSync
+    _log.info('Server unreachable during register, using local UID');
+    // Persist locally so session survives app restart
+    await _remoteSource.config.saveChatAuth(
+      accessToken: null,
+      userId: uid,
+      displayName: displayName,
+    );
+    final localUser = ChatUser(
+      userId: uid,
+      displayName: displayName,
+      accessToken: null,
+      needsSync: true,
+    );
+    _currentUser = localUser;
     _updateAuthState(true);
-    return user;
+    return localUser;
   }
   
   @override
-  Future<ChatUser> login({
+  Future<ChatUser?> login({
     required String username,
     required String password,
   }) async {
@@ -107,9 +162,13 @@ class ChatRepositoryImpl implements ChatRepository {
       username: username,
       password: password,
     );
-    _currentUser = user;
-    _updateAuthState(true);
-    return user;
+    if (user != null) {
+      _currentUser = user;
+      _updateAuthState(true);
+      return user;
+    }
+    // Network failure — caller (LoginPage) will handle local fallback
+    return null;
   }
   
   @override

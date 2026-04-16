@@ -22,6 +22,10 @@ class ChatUser {
   /// Home server
   final String? homeServer;
 
+  /// Whether this account was created locally and needs to sync with server.
+  /// When true, user is logged in locally but not yet registered on the server.
+  final bool needsSync;
+
   const ChatUser({
     required this.userId,
     this.displayName,
@@ -29,6 +33,7 @@ class ChatUser {
     this.accessToken,
     this.deviceId,
     this.homeServer,
+    this.needsSync = false,
   });
 
   ChatUser copyWith({
@@ -38,6 +43,7 @@ class ChatUser {
     String? accessToken,
     String? deviceId,
     String? homeServer,
+    bool? needsSync,
   }) {
     return ChatUser(
       userId: userId ?? this.userId,
@@ -46,6 +52,7 @@ class ChatUser {
       accessToken: accessToken ?? this.accessToken,
       deviceId: deviceId ?? this.deviceId,
       homeServer: homeServer ?? this.homeServer,
+      needsSync: needsSync ?? this.needsSync,
     );
   }
 
@@ -57,6 +64,7 @@ class ChatUser {
       accessToken: json['accessToken'] as String?,
       deviceId: json['deviceId'] as String?,
       homeServer: json['homeServer'] as String?,
+      needsSync: json['needsSync'] as bool? ?? false,
     );
   }
 
@@ -68,6 +76,7 @@ class ChatUser {
       if (accessToken != null) 'accessToken': accessToken,
       if (deviceId != null) 'deviceId': deviceId,
       if (homeServer != null) 'homeServer': homeServer,
+      if (needsSync) 'needsSync': true,
     };
   }
 
@@ -90,8 +99,9 @@ class ChatUser {
     return match?.group(1) ?? userId;
   }
 
-  /// Check if user is authenticated
-  bool get isAuthenticated => accessToken != null && accessToken!.isNotEmpty;
+  /// True if user is logged in (server auth OR local account with needsSync)
+  bool get isAuthenticated =>
+      (accessToken != null && accessToken!.isNotEmpty) || needsSync;
 
   @override
   bool operator ==(Object other) =>
@@ -103,11 +113,14 @@ class ChatUser {
           avatarUrl == other.avatarUrl &&
           accessToken == other.accessToken &&
           deviceId == other.deviceId &&
-          homeServer == other.homeServer;
+          homeServer == other.homeServer &&
+          needsSync == other.needsSync;
 
   @override
-  int get hashCode => Object.hash(userId, displayName, avatarUrl, accessToken, deviceId, homeServer);
+  int get hashCode => Object.hash(
+      userId, displayName, avatarUrl, accessToken, deviceId, homeServer, needsSync);
 
   @override
-  String toString() => 'ChatUser(userId: $userId, displayName: $displayName)';
+  String toString() =>
+      'ChatUser(userId: $userId, displayName: $displayName, needsSync: $needsSync)';
 }

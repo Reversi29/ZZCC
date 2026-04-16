@@ -6,6 +6,7 @@ import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 import 'package:zzcc/core/utils/color_utils.dart';
 import 'package:zzcc/core/utils/encrypt_utils.dart';
+import 'package:zzcc/data/repositories/chat_repository.dart';
 import 'package:zzcc/presentation/pages/auth/widgets/register_page.dart';
 import 'package:path/path.dart' as path;
 import 'package:zzcc/core/routes/route_names.dart';
@@ -296,7 +297,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   Future<void> _handleLogin() async {
-    // 1. 表单验证
     final uid = accountController.text.trim();
     final password = passwordController.text.trim();
 
@@ -321,11 +321,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     setState(() => _isLoading = true);
     
     try {
-      // 2. 获取存储服务中的用户注册信息
+      // 1. 本地 Hive 验证（必须先验证本地账号存在）
       final storageService = getIt<StorageService>();
-      await storageService.init(configService.appDataPath); // 确保初始化完成
+      await storageService.init(configService.appDataPath);
 
-      // 3. 检查用户是否存在（从user_registry中获取存储的密文）
       final storedCiphertext = storageService.getUserRegistry(uid);
       if (storedCiphertext == null) {
         if (mounted) {
@@ -336,7 +335,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         return;
       }
 
-      // 4. 解密存储的密文，验证与输入的UID是否一致
       final decryptedUid = EncryptUtils.decryptUID(storedCiphertext, password);
       if (decryptedUid != uid) {
         if (mounted) {
@@ -347,29 +345,55 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         return;
       }
 
-      // 5. 登录成功：更新用户状态、获取用户信息
+      // 2. 优先尝试服务器登录
+      final chatRepo = getIt<ChatRepository>();
+      await chatRepo.login(username: uid, password: password);
+
+      // 3. 登录成功，更新 UI 状态
       final userInfo = await storageService.getUserInfo(storedCiphertext);
-      
-      // 获取用户数据路径（根据实际存储位置调整）
       final userDataPath = path.join(configService.appDataPath, storedCiphertext);
-      
+
       ref.read(userProvider.notifier).loginUser(
         name: userInfo?['name'] ?? '用户名称',
         uid: uid,
         userDataPath: userDataPath,
       );
-
       storageService.setCurrentUser(uid);
       await configService.updateKeepLoggedIn(true);
 
       if (mounted) {
-        // 替换导航方式
-        context.go('${RouteNames.root}${RouteNames.home}'); // 使用GoRouter导航到首页
+        context.go('${RouteNames.root}${RouteNames.home}');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('登录成功')),
         );
       }
     } catch (e) {
+      // 服务器返回了业务错误（账号不存在/密码错误），但本地账号存在时允许离线登录
+      if (e.toString().contains('401') || e.toString().contains('incorrect') || e.toString().contains('invalid')) {
+        // 尝试离线登录：直接用本地账号登录，跳过服务器
+        try {
+          final storageService = getIt<StorageService>();
+          final storedCiphertext = storageService.getUserRegistry(uid);
+          if (storedCiphertext != null) {
+            final userInfo = await storageService.getUserInfo(storedCiphertext);
+            final userDataPath = path.join(configService.appDataPath, storedCiphertext);
+            ref.read(userProvider.notifier).loginUser(
+              name: userInfo?['name'] ?? '用户名称',
+              uid: uid,
+              userDataPath: userDataPath,
+            );
+            storageService.setCurrentUser(uid);
+            await configService.updateKeepLoggedIn(true);
+            if (mounted) {
+              context.go('${RouteNames.root}${RouteNames.home}');
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('登录成功（离线模式）')),
+              );
+              return;
+            }
+          }
+        } catch (_) {}
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('登录失败: ${e.toString()}')),

@@ -27,8 +27,10 @@ class ChatRemoteSource {
   late final Dio _dio;
   final Logger _log = Logger('ChatRemoteSource');
   late final ConfigService _config;
-  
   String? _accessToken;
+
+  /// Expose config for session restore in ChatRepositoryImpl
+  ConfigService get config => _config;
   
   ChatRemoteSource({Dio? dio, ConfigService? config}) {
     _config = config ?? getIt<ConfigService>();
@@ -87,13 +89,15 @@ class ChatRemoteSource {
   // ============================================================
   
   /// Register new user
-  Future<ChatUser> register({
+  /// Register with server. Returns null on network failure (caller should fallback to local UID).
+  /// Throws [ChatApiException] on auth/business errors.
+  Future<ChatUser?> register({
     required String username,
     required String password,
     String? displayName,
   }) async {
     try {
-      _log.info('Registering user: $username');
+      _log.info('Registering user with server: $username');
       final response = await _dio.post(
         '/chat/register',
         data: {
@@ -111,20 +115,27 @@ class ChatRemoteSource {
         userId: user.userId,
         displayName: user.displayName,
       );
-      _log.info('Registered: ${user.userId}');
+      _log.info('Server registered: ${user.userId}');
       return user;
+    } on DioException {
+      // Network error — caller handles fallback
+      _log.warning('Server register failed (network), will use local UID');
+      return null;
     } catch (e) {
-      _handleError(e, 'register');
+      // Business/auth error — propagate so caller knows
+      _log.warning('Server register failed: $e');
+      rethrow;
     }
   }
   
-  /// Login existing user
-  Future<ChatUser> login({
+  /// Login with server. Returns null on network failure (caller should fallback to local-only).
+  /// Throws [ChatApiException] on auth errors.
+  Future<ChatUser?> login({
     required String username,
     required String password,
   }) async {
     try {
-      _log.info('Logging in: $username');
+      _log.info('Logging in with server: $username');
       final response = await _dio.post(
         '/chat/login',
         data: {
@@ -141,10 +152,14 @@ class ChatRemoteSource {
         userId: user.userId,
         displayName: user.displayName,
       );
-      _log.info('Logged in: ${user.userId}');
+      _log.info('Server logged in: ${user.userId}');
       return user;
+    } on DioException {
+      _log.warning('Server login failed (network)');
+      return null;
     } catch (e) {
-      _handleError(e, 'login');
+      _log.warning('Server login failed: $e');
+      rethrow;
     }
   }
   

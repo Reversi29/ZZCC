@@ -1,314 +1,673 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_chat_ui/flutter_chat_ui.dart';
-import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
-import 'package:zzcc/data/models/message_model.dart';
-import 'package:zzcc/presentation/widgets/alphabet_index.dart';
+// lib/presentation/pages/message/message_screen.dart
+//
+// Real chat integration — replaces fake data with ChatRepository.
 
-class MessageScreen extends StatefulWidget {
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:zzcc/core/di/service_locator.dart';
+import 'package:zzcc/core/routes/route_names.dart';
+import 'package:zzcc/data/models/chat_room.dart';
+import 'package:zzcc/data/repositories/chat_repository.dart';
+import 'package:zzcc/presentation/pages/chat/chat_page.dart';
+
+class MessageScreen extends ConsumerStatefulWidget {
   const MessageScreen({super.key});
 
   @override
-  State<MessageScreen> createState() => _MessageScreenState();
+  ConsumerState<MessageScreen> createState() => _MessageScreenState();
 }
 
-class _MessageScreenState extends State<MessageScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController; // 添加 TabController
+class _MessageScreenState extends ConsumerState<MessageScreen>
+    with TickerProviderStateMixin {
+  late TabController _tabController;
   bool _showContacts = true;
   double _sidebarWidth = 250;
-  final TextEditingController _controller = TextEditingController();
-  final types.User _me = const types.User(id: 'me', firstName: 'Me');
-  final types.User _peer = const types.User(id: 'peer', firstName: 'Peer');
-  final List<types.Message> _chatMessages = [];
-  int _activeTabIndex = 0; // 0: 消息, 1: 联系人, 2: 群组
+  final TextEditingController _searchController = TextEditingController();
+
+  // Chat state
+  ChatRepository get _chatRepo => getIt<ChatRepository>();
+  List<ChatRoom> _rooms = [];
+  List<ChatRoom> _directRooms = [];
+  List<ChatRoom> _groupRooms = [];
+  bool _roomsLoading = true;
+  String? _roomsError;
+  ChatRoom? _selectedRoom;
   String _searchQuery = '';
-  List<ContactGroup> contactGroups = [
-    ContactGroup(name: '家人', contacts: [
-      Contact(name: '张三', lastMessage: '晚上回家吃饭吗？', time: '昨天'),
-      Contact(name: '李四', lastMessage: '周末一起去公园', time: '2小时前'),
-    ]),
-    ContactGroup(name: '工作', contacts: [
-      Contact(name: '王经理', lastMessage: '项目进度如何？', time: '今天'),
-      Contact(name: '刘总监', lastMessage: '会议改到明天下午', time: '昨天'),
-    ]),
-    ContactGroup(name: '朋友', contacts: [
-      Contact(name: '赵六', lastMessage: '生日聚会别忘了', time: '3天前'),
-      Contact(name: '钱七', lastMessage: '新开的餐厅不错', time: '周一'),
-    ]),
-  ];
-  
+
+  StreamSubscription<bool>? _authSubscription;
+
   @override
   void initState() {
     super.initState();
-    // seed demo messages using defined users
-    _chatMessages.addAll([
-      types.TextMessage(
-        id: '1',
-        author: _peer,
-        text: '你好！今天有空吗？',
-        createdAt: DateTime.now().subtract(const Duration(minutes: 5)).millisecondsSinceEpoch,
-      ),
-      types.TextMessage(
-        id: '2',
-        author: _me,
-        text: '有的，有什么事吗？',
-        createdAt: DateTime.now().subtract(const Duration(minutes: 4)).millisecondsSinceEpoch,
-      ),
-      types.TextMessage(
-        id: '3',
-        author: _peer,
-        text: '想讨论一下项目进度',
-        createdAt: DateTime.now().subtract(const Duration(minutes: 3)).millisecondsSinceEpoch,
-      ),
-      types.TextMessage(
-        id: '4',
-        author: _me,
-        text: '好的，什么时候见面？',
-        createdAt: DateTime.now().subtract(const Duration(minutes: 2)).millisecondsSinceEpoch,
-      ),
-    ]);
-    // 初始化 TabController
-    _tabController = TabController(
-      length: 3, // 三个标签页
-      vsync: this, // 使用 SingleTickerProviderStateMixin
-    );
-    
-    // 添加监听器，当标签切换时更新状态
-    // Only update state when the index is actually changing or when the
-    // final index has settled. Avoid calling setState on every animation
-    // tick to prevent UI jank/freezes.
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
-      if (_tabController.indexIsChanging) {
+      if (_tabController.indexIsChanging) return;
+      if (_tabController.index != _activeTabIndex) {
+        setState(() => _activeTabIndex = _tabController.index);
+      }
+    });
+
+    // Listen auth state: on login → load rooms; on logout → clear rooms
+    _authSubscription = _chatRepo.authStateStream.listen((isAuth) {
+      if (!mounted) return;
+      if (isAuth) {
+        _loadRooms();
+      } else {
         setState(() {
-          _activeTabIndex = _tabController.index;
-        });
-      } else if (_tabController.index != _activeTabIndex) {
-        // handle the case when the animation finished but index changed
-        setState(() {
-          _activeTabIndex = _tabController.index;
+          _rooms = [];
+          _directRooms = [];
+          _groupRooms = [];
+          _selectedRoom = null;
+          _roomsLoading = false;
         });
       }
     });
+
+    // Init: load if already auth
+    final isLoggedIn = _chatRepo.isAuthenticated;
+    if (isLoggedIn) {
+      _loadRooms();
+    } else {
+      setState(() => _roomsLoading = false);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Auth guard — if auth changed from another screen, refresh
+    if (_chatRepo.isAuthenticated && _roomsLoading && _roomsError == null) {
+      _loadRooms();
+    }
   }
 
   @override
   void dispose() {
-    // 释放 TabController
+    _authSubscription?.cancel();
     _tabController.dispose();
-    // 释放文本控制器
-    _controller.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("消息"),
-        leading: IconButton(
-          icon: Icon(_showContacts ? Icons.chevron_left : Icons.chevron_right),
-          onPressed: () => setState(() => _showContacts = !_showContacts),
-        ),
-        actions: [
-          IconButton(icon: const Icon(Icons.videocam), onPressed: () {}),
-          IconButton(icon: const Icon(Icons.phone), onPressed: () {}),
-        ],
-      ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          return Row(
-            children: [
-              if (_showContacts) ...[
-                SizedBox(
-                  width: _sidebarWidth,
-                  child: Column(
-                    children: [
-                      // 搜索框
-                      Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: TextField(
-                          decoration: InputDecoration(
-                            hintText: '搜索联系人或消息',
-                            prefixIcon: const Icon(Icons.search),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          onChanged: (value) {
-                            setState(() {
-                              _searchQuery = value;
-                            });
-                          },
-                        ),
-                      ),
-                      
-                      // 标签栏 - 使用 TabController
-                      TabBar(
-                        controller: _tabController, // 添加控制器
-                        tabs: const [
-                          Tab(icon: Icon(Icons.chat), text: '消息'),
-                          Tab(icon: Icon(Icons.contacts), text: '联系人'),
-                          Tab(icon: Icon(Icons.group), text: '群组'),
-                        ],
-                        labelColor: Theme.of(context).primaryColor,
-                        unselectedLabelColor: Colors.grey,
-                        indicatorSize: TabBarIndicatorSize.tab,
-                      ),
-                      
-                      // 标签内容
-                      Expanded(
-                        child: _buildSidebarContent(),
-                      ),
-                    ],
-                  ),
-                ),
-                GestureDetector(
-                  onHorizontalDragUpdate: (details) {
-                    setState(() {
-                      _sidebarWidth += details.delta.dx;
-                      _sidebarWidth = _sidebarWidth.clamp(150.0, 350.0);
-                    });
-                  },
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.resizeLeftRight,
-                    child: Container(
-                      width: 6,
-                      color: Colors.grey[300],
-                    ),
-                  ),
-                ),
-              ],
-              Expanded(
-                child: Chat(
-                  messages: _chatMessages,
-                  user: _me,
-                  onSendPressed: _handleSendPressed,
-                  showUserAvatars: true,
-                  showUserNames: true,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildSidebarContent() {
-    switch (_activeTabIndex) {
-      case 0: // 消息
-        return ListView.builder(
-          itemCount: 10,
-          itemBuilder: (context, index) {
-            return ListTile(
-              leading: const CircleAvatar(
-                backgroundImage: NetworkImage('https://picsum.photos/200'),
-              ),
-              title: Text('联系人 ${index + 1}'),
-              subtitle: const Text('最后一条消息...'),
-              trailing: const Text('昨天'),
-              onTap: () {},
-            );
-          },
-        );
-      case 1: // 联系人
-        return _buildContactsTab();
-      case 2: // 群组
-        return ListView.builder(
-          itemCount: 5,
-          itemBuilder: (context, index) {
-            return ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Colors.blue,
-                child: Icon(Icons.group, color: Colors.white),
-              ),
-              title: Text('群聊 ${index + 1}'),
-              subtitle: const Text('最后一条群消息...'),
-              trailing: const Text('今天'),
-              onTap: () {},
-            );
-          },
-        );
-      default:
-        return Container();
+  Future<void> _loadRooms() async {
+    if (!mounted || !_chatRepo.isAuthenticated) return;
+    setState(() {
+      _roomsLoading = true;
+      _roomsError = null;
+    });
+    try {
+      final rooms = await _chatRepo.getRooms();
+      if (mounted) {
+        setState(() {
+          _rooms = rooms;
+          _directRooms = rooms.where((r) => r.isDirect).toList();
+          _groupRooms = rooms.where((r) => !r.isDirect).toList();
+          _roomsLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _roomsError = e.toString();
+          _roomsLoading = false;
+        });
+      }
     }
   }
 
-  Widget _buildContactsTab() {
-    final filteredGroups = _searchQuery.isEmpty
-        ? contactGroups
-        : contactGroups.map((group) {
-            final filteredContacts = group.contacts
-                .where((contact) =>
-                    contact.name.toLowerCase().contains(_searchQuery.toLowerCase()))
-                .toList();
-            return ContactGroup(
-              name: group.name,
-              contacts: filteredContacts,
-            );
-          }).where((group) => group.contacts.isNotEmpty).toList();
-
-    if (filteredGroups.isEmpty) {
-      return const Center(child: Text('没有找到联系人'));
+  Future<void> _logout() async {
+    await _chatRepo.logout();
+    if (mounted) {
+      context.go('${RouteNames.root}${RouteNames.login}');
     }
-
-    return Column(
-      children: [
-        // 添加分组按钮
-        ListTile(
-          leading: const Icon(Icons.add),
-          title: const Text('添加新分组'),
-          onTap: _showAddGroupDialog,
-        ),
-        const Divider(),
-        Expanded(
-          child: AlphabetIndexListView(
-            groups: filteredGroups,
-            onAddGroup: _showAddGroupDialog,
-          ),
-        ),
-      ],
-    );
   }
 
-  void _showAddGroupDialog() {
-    showDialog(
+  void _selectRoom(ChatRoom room) {
+    setState(() => _selectedRoom = room);
+  }
+
+  void _closeChat() {
+    setState(() => _selectedRoom = null);
+  }
+
+  Future<void> _createRoom() async {
+    final nameController = TextEditingController();
+    final topicController = TextEditingController();
+
+    final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('新建分组'),
-        content: const TextField(
-          decoration: InputDecoration(
-            labelText: '分组名称',
-            border: OutlineInputBorder(),
-          ),
+      builder: (ctx) => AlertDialog(
+        title: const Text('创建房间'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: '房间名称',
+                hintText: '输入房间名称',
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: topicController,
+              decoration: const InputDecoration(
+                labelText: '主题（可选）',
+                hintText: '输入房间主题',
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(ctx, false),
             child: const Text('取消'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              // 这里添加创建新分组的逻辑
-              Navigator.pop(context);
-            },
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
             child: const Text('创建'),
           ),
         ],
       ),
     );
+
+    if (result == true && nameController.text.isNotEmpty && mounted) {
+      try {
+        final room = await _chatRepo.createRoom(
+          name: nameController.text,
+          topic: topicController.text.isNotEmpty ? topicController.text : null,
+        );
+        await _loadRooms();
+        _selectRoom(room);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('创建失败: $e')),
+          );
+        }
+      }
+    }
   }
 
-  void _handleSendPressed(types.PartialText message) {
-    setState(() {
-      _chatMessages.insert(
-        0,
-        types.TextMessage(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          author: _me,
-          text: message.text,
-          createdAt: DateTime.now().millisecondsSinceEpoch,
+  Future<void> _joinRoom() async {
+    final controller = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('加入房间'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: '房间 ID 或别名',
+            hintText: '!roomid:server 或 #alias:server',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('加入'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && controller.text.isNotEmpty && mounted) {
+      try {
+        final room = await _chatRepo.joinRoom(controller.text);
+        await _loadRooms();
+        _selectRoom(room);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('加入失败: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  // ── Sidebar content ──────────────────────────────────────────
+
+  int _activeTabIndex = 0;
+
+  Widget _buildSidebarContent() {
+    switch (_activeTabIndex) {
+      case 0:
+        return _buildChatTab();
+      case 1:
+        return _buildContactsTab();
+      case 2:
+        return _buildGroupsTab();
+      default:
+        return const SizedBox();
+    }
+  }
+
+  Widget _buildChatTab() {
+    if (!_chatRepo.isAuthenticated) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('请先登录', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+              child: const Text('登录 / 注册'),
+            ),
+          ],
         ),
       );
-    });
+    }
+    if (_roomsLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_roomsError != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('加载失败', style: const TextStyle(color: Colors.red)),
+            const SizedBox(height: 8),
+            Text(_roomsError!, style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
+            FilledButton(onPressed: _loadRooms, child: const Text('重试')),
+          ],
+        ),
+      );
+    }
+    if (_rooms.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('暂无房间', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _createRoom,
+              icon: const Icon(Icons.add),
+              label: const Text('创建房间'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final filtered = _searchQuery.isEmpty
+        ? _rooms
+        : _rooms.where((r) {
+            final q = _searchQuery.toLowerCase();
+            return (r.name?.toLowerCase().contains(q) ?? false) ||
+                r.roomId.toLowerCase().contains(q);
+          }).toList();
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.login, size: 20),
+              tooltip: '加入房间',
+              onPressed: _joinRoom,
+            ),
+            IconButton(
+              icon: const Icon(Icons.add, size: 20),
+              tooltip: '创建房间',
+              onPressed: _createRoom,
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 20),
+              tooltip: '刷新',
+              onPressed: _loadRooms,
+            ),
+          ],
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: filtered.isEmpty
+              ? const Center(
+                  child: Text('无匹配房间', style: TextStyle(color: Colors.grey)),
+                )
+              : ListView.builder(
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) {
+                    final room = filtered[index];
+                    final isSelected = _selectedRoom?.roomId == room.roomId;
+                    return ListTile(
+                      selected: isSelected,
+                      selectedTileColor:
+                          Theme.of(context).primaryColor.withOpacity(0.1),
+                      leading: CircleAvatar(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        child: Text(
+                          (room.name ?? room.roomId)
+                              .substring(0, 1)
+                              .toUpperCase(),
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      title: Text(room.name ?? room.roomId,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(
+                        room.topic ?? room.lastMessage ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      trailing: room.unreadCount > 0
+                          ? CircleAvatar(
+                              radius: 10,
+                              backgroundColor: Colors.red,
+                              child: Text(
+                                '${room.unreadCount}',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 10),
+                              ),
+                            )
+                          : null,
+                      onTap: () => _selectRoom(room),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildContactsTab() {
+    if (!_chatRepo.isAuthenticated) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('请先登录', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+              child: const Text('登录 / 注册'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_roomsLoading) return const Center(child: CircularProgressIndicator());
+
+    final filtered = _searchQuery.isEmpty
+        ? _directRooms
+        : _directRooms
+            .where((r) =>
+                (r.name?.toLowerCase().contains(_searchQuery.toLowerCase()) ??
+                    false) ||
+                r.roomId.toLowerCase().contains(_searchQuery.toLowerCase()))
+            .toList();
+
+    if (filtered.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.person_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('暂无联系人', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 8),
+            const Text('发起私聊即可添加联系人',
+                style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: filtered.length,
+      itemBuilder: (context, index) {
+        final room = filtered[index];
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Theme.of(context).primaryColor,
+            child: Text(
+              (room.name ?? '?').substring(0, 1).toUpperCase(),
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+          title: Text(room.name ?? room.roomId,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(room.lastMessage ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12)),
+          onTap: () => _selectRoom(room),
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupsTab() {
+    if (!_chatRepo.isAuthenticated) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('请先登录', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+              child: const Text('登录 / 注册'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_roomsLoading) return const Center(child: CircularProgressIndicator());
+
+    final filtered = _searchQuery.isEmpty
+        ? _groupRooms
+        : _groupRooms
+            .where((r) =>
+                (r.name?.toLowerCase().contains(_searchQuery.toLowerCase()) ??
+                    false) ||
+                r.roomId.toLowerCase().contains(_searchQuery.toLowerCase()))
+            .toList();
+
+    if (filtered.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.group_outlined, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('暂无群组', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _createRoom,
+              icon: const Icon(Icons.add),
+              label: const Text('创建群组'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: filtered.length,
+      itemBuilder: (context, index) {
+        final room = filtered[index];
+        return ListTile(
+          leading: const CircleAvatar(
+            backgroundColor: Colors.blue,
+            child: Icon(Icons.group, color: Colors.white),
+          ),
+          title: Text(room.name ?? room.roomId,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(room.topic ?? room.lastMessage ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12)),
+          trailing: room.unreadCount > 0
+              ? CircleAvatar(
+                  radius: 10,
+                  backgroundColor: Colors.red,
+                  child: Text('${room.unreadCount}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10)),
+                )
+              : null,
+          onTap: () => _selectRoom(room),
+        );
+      },
+    );
+  }
+
+  // ── Main build ───────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final isAuth = _chatRepo.isAuthenticated;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_selectedRoom?.name ?? '消息'),
+        leading: IconButton(
+          icon: Icon(_showContacts ? Icons.chevron_left : Icons.chevron_right),
+          onPressed: () => setState(() => _showContacts = !_showContacts),
+        ),
+        automaticallyImplyLeading: false,
+        actions: [
+          if (_selectedRoom != null)
+            IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: _closeChat,
+            ),
+          if (isAuth)
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: '退出登录',
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('退出登录'),
+                    content: const Text('确定退出聊天账号？'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('退出'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) await _logout();
+              },
+            ),
+          IconButton(icon: const Icon(Icons.videocam), onPressed: () {}),
+          IconButton(icon: const Icon(Icons.phone), onPressed: () {}),
+        ],
+      ),
+      body: Row(
+        children: [
+          // Left sidebar
+          if (_showContacts) ...[
+            SizedBox(
+              width: _sidebarWidth,
+              child: Column(
+                children: [
+                  // Search
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        hintText: '搜索',
+                        prefixIcon: const Icon(Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                      ),
+                      onChanged: (v) => setState(() => _searchQuery = v),
+                    ),
+                  ),
+                  // Tabs
+                  TabBar(
+                    controller: _tabController,
+                    tabs: const [
+                      Tab(icon: Icon(Icons.chat, size: 20)),
+                      Tab(icon: Icon(Icons.contacts, size: 20)),
+                      Tab(icon: Icon(Icons.group, size: 20)),
+                    ],
+                    labelColor: Theme.of(context).primaryColor,
+                    unselectedLabelColor: Colors.grey,
+                    indicatorSize: TabBarIndicatorSize.tab,
+                  ),
+                  // Tab content
+                  Expanded(child: _buildSidebarContent()),
+                ],
+              ),
+            ),
+            // Resize handle
+            GestureDetector(
+              onHorizontalDragUpdate: (d) {
+                setState(() {
+                  _sidebarWidth += d.delta.dx;
+                  _sidebarWidth = _sidebarWidth.clamp(150.0, 350.0);
+                });
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeLeftRight,
+                child: Container(width: 6, color: Colors.grey[300]),
+              ),
+            ),
+          ],
+          // Right content
+          Expanded(
+            child: _selectedRoom == null
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.forum, size: 64, color: Colors.grey[400]),
+                        const SizedBox(height: 16),
+                        Text(
+                          _activeTabIndex == 0
+                              ? '选择聊天开始'
+                              : _activeTabIndex == 1
+                                  ? '选择联系人开始聊天'
+                                  : '选择群组开始聊天',
+                          style: TextStyle(
+                            color: Colors.grey[500],
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ChatPage(
+                    repository: _chatRepo,
+                    room: _selectedRoom!,
+                  ),
+          ),
+        ],
+      ),
+    );
   }
 }
