@@ -39,10 +39,10 @@ rsync -avz --delete "$LOCAL_PATH/" "$SERVER_USER@$SERVER:$SERVER_PATH/"
 # 重建并重启容器
 echo ""
 echo "重建并重启容器..."
-ssh "$SERVER_USER@$SERVER" "cd $SERVER_PATH && docker compose build --no-cache && docker compose up -d"
+ssh "$SERVER_USER@$SERVER" "cd $SERVER_PATH && docker compose build --no-cache nebula-interface && docker compose up -d nebula-interface"
 
 echo ""
 echo "✅ 部署完成"
 echo ""
 echo "验证:"
-ssh "$SERVER_USER@$SERVER" "curl -s http://localhost:8001/health"
+ssh "$SERVER_USER@$SERVER" "docker compose ps nebula-interface && docker compose logs --tail 5 nebula-interface"
