@@ -128,8 +128,9 @@ class ChatRemoteSource {
     }
   }
   
-  /// Login with server. Returns null on network failure (caller should fallback to local-only).
-  /// Throws [ChatApiException] on auth errors.
+  /// Login with server. Returns null on network failure.
+  /// Throws [ChatApiException] on auth errors (401/403).
+  /// Use [tryLoginThenSync] for automatic sync on 403.
   Future<ChatUser?> login({
     required String username,
     required String password,
@@ -154,14 +155,21 @@ class ChatRemoteSource {
       );
       _log.info('Server logged in: ${user.userId}');
       return user;
-    } on DioException {
-      _log.warning('Server login failed (network)');
+    } on DioException catch (exc) {
+      if (exc.response?.statusCode == 403) {
+        // Auth failed (user not on server) — let caller decide sync
+        _log.info('Login 403, account may need sync: $username');
+        throw ChatApiException('Account not found on server', statusCode: 403);
+      }
+      _log.warning('Server login failed (network): ${exc.message}');
       return null;
     } catch (e) {
       _log.warning('Server login failed: $e');
       rethrow;
     }
   }
+
+
   
   /// Logout current user
   Future<void> logout() async {
@@ -178,6 +186,49 @@ class ChatRemoteSource {
     }
   }
   
+  /// Sync a locally-created account to the server.
+  /// Calls POST /chat/sync-account.
+  /// Returns null on network failure; throws on auth errors (wrong password).
+  Future<ChatUser?> syncAccount({
+    required String localUid,
+    required String password,
+    String? displayName,
+  }) async {
+    try {
+      _log.info('Syncing local account to server: $localUid');
+      final response = await _dio.post(
+        '/chat/sync-account',
+        data: {
+          'local_uid': localUid,
+          'password': password,
+          if (displayName != null) 'display_name': displayName,
+        },
+      );
+
+      final data = response.data['data'] as Map<String, dynamic>;
+      final user = ChatUser(
+        userId: data['user_id'] as String,
+        displayName: data['display_name'] as String? ?? displayName,
+        accessToken: data['access_token'] as String,
+        needsSync: false,
+      );
+      setAccessToken(user.accessToken);
+      await _config.saveChatAuth(
+        accessToken: user.accessToken,
+        userId: user.userId,
+        displayName: user.displayName,
+      );
+      _log.info('Account synced, server user_id=${user.userId}, was_created=${data['was_created']}');
+      return user;
+    } on DioException catch (exc) {
+      _log.warning('sync-account failed (network): ${exc.message}');
+      return null;
+    } catch (e) {
+      _log.warning('sync-account failed: $e');
+      rethrow;
+    }
+  }
+
   // ============================================================
   // Profile
   // ============================================================

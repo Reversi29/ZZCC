@@ -3,6 +3,7 @@
 // Real chat integration — replaces fake data with ChatRepository.
 
 import 'dart:async';
+import 'package:logging/logging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -37,6 +38,7 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
   String _searchQuery = '';
 
   StreamSubscription<bool>? _authSubscription;
+  final _log = Logger('MessageScreen');
 
   @override
   void initState() {
@@ -92,7 +94,10 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
   }
 
   Future<void> _loadRooms() async {
-    if (!mounted || !_chatRepo.isAuthenticated) return;
+    if (!mounted) return;
+    final isAuth = _chatRepo.isAuthenticated;
+    _log.fine('_loadRooms: isAuthenticated=$isAuth, needsSync=${_chatRepo.currentUser?.needsSync}');
+    if (!isAuth) return;
     setState(() {
       _roomsLoading = true;
       _roomsError = null;
@@ -108,6 +113,7 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
         });
       }
     } catch (e) {
+      _log.warning('_loadRooms failed: $e');
       if (mounted) {
         setState(() {
           _roomsError = e.toString();
@@ -252,6 +258,27 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
 
   Widget _buildChatTab() {
     if (!_chatRepo.isAuthenticated) {
+      // Distinguish: completely logged out vs. offline-but-logged-in (needsSync)
+      final needsSync = _chatRepo.currentUser?.needsSync ?? false;
+      if (needsSync) {
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.cloud_off, size: 48, color: Colors.orange),
+              const SizedBox(height: 12),
+              const Text('离线账号', style: TextStyle(color: Colors.orange, fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text('密码未保存，请重新登录以同步', style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+                child: const Text('重新登录'),
+              ),
+            ],
+          ),
+        );
+      }
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -347,7 +374,7 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
                     return ListTile(
                       selected: isSelected,
                       selectedTileColor:
-                          Theme.of(context).primaryColor.withOpacity(0.1),
+                          Theme.of(context).primaryColor.withValues(alpha: 0.1),
                       leading: CircleAvatar(
                         backgroundColor: Theme.of(context).primaryColor,
                         child: Text(

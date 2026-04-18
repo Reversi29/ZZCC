@@ -15,6 +15,7 @@ import 'package:zzcc/presentation/pages/settings/settings_page.dart';
 import 'package:zzcc/presentation/pages/profile/profile_page.dart';
 import 'package:zzcc/presentation/providers/theme_provider.dart';
 import 'package:zzcc/presentation/providers/user_provider.dart';
+import 'package:zzcc/presentation/providers/chat_auth_provider.dart';
 import 'package:zzcc/presentation/widgets/resizable_panel.dart';
 import 'package:zzcc/core/utils/color_utils.dart';
 import 'package:zzcc/core/routes/route_names.dart';
@@ -172,6 +173,7 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
                 onIndexChanged: _handleIndexChanged,
                 content: _buildContent(),
                 isLoggedIn: user.isLoggedIn,
+                isOnline: user.isLoggedIn && (ref.watch(chatAuthProvider).valueOrNull ?? false),
                 onLoginPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
               ),
             ],

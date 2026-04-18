@@ -2,7 +2,6 @@
 //
 // Web stub — FFI is not available on web platform.
 
-import 'package:zzcc/core/services/logger_service.dart';
 
 abstract class TorrentProgress {
   String get infoHash;

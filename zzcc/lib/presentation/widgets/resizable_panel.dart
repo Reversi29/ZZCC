@@ -19,6 +19,7 @@ class ResizablePanel extends ConsumerStatefulWidget {
   final ValueChanged<int> onIndexChanged;
   final Widget content;
   final bool isLoggedIn;
+  final bool isOnline;
   final VoidCallback onLoginPressed;
 
   const ResizablePanel({
@@ -29,6 +30,7 @@ class ResizablePanel extends ConsumerStatefulWidget {
     required this.onIndexChanged,
     required this.content,
     required this.isLoggedIn,
+    this.isOnline = true,
     required this.onLoginPressed,
   });
 
@@ -96,54 +98,77 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                     : widget.onLoginPressed,
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
-                  child: CircleAvatar(
-                    radius: isExpanded ? 36 : 24,
-                    backgroundColor: widget.isLoggedIn
-                        ? Colors.grey[200]
-                        : ColorUtils.withValues(accentColor, 0.15),
-                    backgroundImage: widget.isLoggedIn && avatarFile != null
-                        ? FileImage(avatarFile)
-                        : null,
-                    child: widget.isLoggedIn
-                        ? (avatarFile == null
-                            ? Icon(Icons.person,
-                                size: isExpanded ? 30 : 20,
-                                color: Colors.grey[600])
-                            : null)
-                        : isExpanded
-                            ? Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 10),
-                                child: const Text('未登录',
-                                    style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                        letterSpacing: 0.5)),
-                              )
-                            : Container(
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: const LinearGradient(
-                                    colors: [accentColor, buttonHoverColor],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      CircleAvatar(
+                        radius: isExpanded ? 36 : 24,
+                        backgroundColor: widget.isLoggedIn
+                            ? Colors.grey[200]
+                            : ColorUtils.withValues(accentColor, 0.15),
+                        backgroundImage: widget.isLoggedIn && avatarFile != null
+                            ? FileImage(avatarFile)
+                            : null,
+                        child: widget.isLoggedIn
+                            ? (avatarFile == null
+                                ? Icon(Icons.person,
+                                    size: isExpanded ? 30 : 20,
+                                    color: Colors.grey[600])
+                                : null)
+                            : isExpanded
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 10),
+                                    child: const Text('未登录',
+                                        style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                            letterSpacing: 0.5)),
+                                  )
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: const LinearGradient(
+                                        colors: [accentColor, buttonHoverColor],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: ColorUtils.withValues(
+                                              accentColor, 0.3),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 2),
+                                        )
+                                      ],
+                                    ),
+                                    child: const Icon(
+                                      Icons.person_add_alt_1,
+                                      size: 20,
+                                      color: Colors.white,
+                                    ),
                                   ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: ColorUtils.withValues(
-                                          accentColor, 0.3),
-                                      blurRadius: 4,
-                                      offset: const Offset(0, 2),
-                                    )
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.person_add_alt_1,
-                                  size: 20,
-                                  color: Colors.white,
-                                ),
+                      ),
+                      // 在线/离线状态指示器
+                      if (widget.isLoggedIn)
+                        Positioned(
+                          right: isExpanded ? 0 : -2,
+                          bottom: isExpanded ? 0 : -2,
+                          child: Container(
+                            width: isExpanded ? 16 : 12,
+                            height: isExpanded ? 16 : 12,
+                            decoration: BoxDecoration(
+                              color: widget.isOnline ? Colors.green : Colors.grey,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 2,
                               ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),

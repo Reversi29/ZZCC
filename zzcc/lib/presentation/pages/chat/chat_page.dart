@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import '../../../data/models/chat_message.dart';
 import '../../../data/models/chat_room.dart';
 import '../../../data/repositories/chat_repository.dart';
-import '../../../domain/services/sync_service.dart';
 import '../../widgets/chat/message_bubble.dart';
 
 /// Chat page for a specific room
@@ -300,7 +299,7 @@ class _ChatPageState extends State<ChatPage> {
           color: Theme.of(context).colorScheme.surface,
           border: Border(
             top: BorderSide(
-              color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+              color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
             ),
           ),
         ),

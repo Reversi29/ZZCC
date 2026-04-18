@@ -327,6 +327,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
       await storageService.saveUserInfo(ciphertext, {
         'name': nameController.text,
         'uid': localUid,
+        'password': passwordController.text,  // 用于后续 auto-sync
         'registerTime': DateTime.now().toIso8601String(),
         'lastLoginTime': null,
       });

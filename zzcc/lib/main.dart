@@ -5,7 +5,7 @@ import 'package:zzcc/core/theme/theme_manager.dart';
 import 'package:zzcc/core/services/logger_service.dart';
 import 'package:zzcc/core/services/config_service.dart';
 import 'package:zzcc/core/services/storage_service.dart';
-import 'package:zzcc/core/services/torrent_service.dart';
+import 'package:zzcc/data/repositories/chat_repository.dart';
 // Conditional import: no-op on web, FFI cleanup on native.
 import 'package:zzcc/core/platform/platform_setup_stub.dart'
     if (dart.library.io) 'package:zzcc/core/platform/platform_setup_io.dart';
@@ -98,6 +98,15 @@ void main() async {
               userDataPath: userDataPath,
             );
             logger.info('自动登录成功');
+            // 后台同步离线账号（如果需要）
+            final chatRepo = getIt<ChatRepository>();
+            final password = userInfo['password'] as String? ?? '';
+            logger.info('auto-login: userInfo has password=${password.isNotEmpty ? "YES" : "NO (empty)"}');
+            if (password.isNotEmpty) {
+              chatRepo.syncOfflineAccountIfNeeded(password: password);
+            } else {
+              logger.info('auto-login: cannot sync — password not stored. User needs to log in manually once.');
+            }
           } else {
             logger.info('用户信息不存在，清除当前用户记录');
             storageService.clearCurrentUser();

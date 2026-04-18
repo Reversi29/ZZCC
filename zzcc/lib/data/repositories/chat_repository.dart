@@ -28,9 +28,16 @@ abstract class ChatRepository {
     String? displayName,
   });
   
-  /// Login. Returns null on network failure (caller handles local fallback).
-  Future<ChatUser?> login({required String username, required String password});
-  
+  /// Login. Returns null on network failure; on 403 auto-synces local account.
+  Future<ChatUser?> login({required String username, required String password, String? displayName});
+
+  /// Sync a local-only account to the server (replaces local UID with server UID).
+  /// Returns null on network failure; throws on auth errors.
+  Future<ChatUser?> syncAccount({required String localUid, required String password, String? displayName});
+
+  /// Sync offline account to server (used during auto-login).
+  Future<void> syncOfflineAccountIfNeeded({required String password});
+
   /// Logout
   Future<void> logout();
   
@@ -74,11 +81,40 @@ class ChatRepositoryImpl implements ChatRepository {
     _restoreSession();
   }
 
+  /// Called externally (e.g., from main.dart after auto-login) to sync any
+  /// offline account. Safe to call multiple times; only syncs if needsSync=true.
+  /// Requires [password] — register stores it in userInfo for auto-sync.
+  @override
+  Future<void> syncOfflineAccountIfNeeded({required String password}) async {
+    final hasPw = password.isNotEmpty;
+    final pwStatus = hasPw ? 'present' : 'EMPTY';
+    _log.info('syncOfflineAccountIfNeeded: password=<$pwStatus> needsSync=${_currentUser?.needsSync}');
+    if (_currentUser == null || !_currentUser!.needsSync) return;
+    if (!hasPw) {
+      _log.warning('syncOfflineAccountIfNeeded: password empty — user must log in with password first to enable sync');
+      return;
+    }
+    _log.info('syncOfflineAccountIfNeeded: syncing offline user=${_currentUser!.userId}');
+    final result = await syncAccount(
+      localUid: _currentUser!.userId,
+      password: password,
+      displayName: _currentUser!.displayName,
+    );
+    if (result != null) {
+      _log.info('syncOfflineAccountIfNeeded: success, userId=${result.userId}');
+    } else {
+      _log.warning('syncOfflineAccountIfNeeded: failed, remain offline');
+    }
+    // Emit auth state so message_screen and chatAuthProvider update
+    _updateAuthState(_currentUser?.isAuthenticated ?? false);
+  }
+
   void _restoreSession() {
     final config = _remoteSource.config;
     final token = config.chatAccessToken;
     final userId = config.chatUserId;
     final displayName = config.chatDisplayName;
+    _log.info('_restoreSession: token=${token != null ? "present" : "null"}, userId=$userId, displayName=$displayName');
 
     if (token != null && token.isNotEmpty) {
       // Server-authenticated session
@@ -88,19 +124,23 @@ class ChatRepositoryImpl implements ChatRepository {
         accessToken: token,
         needsSync: false,
       );
-      _log.info('Session restored: server user=${userId}');
+      _log.info('Session restored: server user=$userId');
     } else if (userId != null) {
-      // Offline session: server unreachable previously, needsSync
+      // Offline session: server unreachable previously — flag for auto-sync
       _currentUser = ChatUser(
         userId: userId,
         displayName: displayName,
         accessToken: null,
         needsSync: true,
       );
-      _log.info('Session restored: offline user=$userId');
+      _log.info('Session restored: offline user=$userId (needsSync=true)');
+    } else {
+      _log.info('_restoreSession: no chat session found, _currentUser=null');
     }
+    // Emit initial auth state so watchers (e.g. chatAuthProvider) get current value
+    _updateAuthState(_currentUser?.isAuthenticated ?? false);
   }
-  
+
   @override
   ChatUser? get currentUser => _currentUser;
   
@@ -130,6 +170,11 @@ class ChatRepositoryImpl implements ChatRepository {
 
     if (serverUser != null) {
       _currentUser = serverUser;
+      await _remoteSource.config.saveChatAuth(
+        accessToken: serverUser.accessToken,
+        userId: serverUser.userId,
+        displayName: serverUser.displayName,
+      );
       _updateAuthState(true);
       return serverUser;
     }
@@ -157,17 +202,57 @@ class ChatRepositoryImpl implements ChatRepository {
   Future<ChatUser?> login({
     required String username,
     required String password,
+    String? displayName,
   }) async {
-    final user = await _remoteSource.login(
-      username: username,
+    try {
+      final user = await _remoteSource.login(
+        username: username,
+        password: password,
+      );
+      if (user != null) {
+        _currentUser = user;
+        await _remoteSource.config.saveChatAuth(
+          accessToken: user.accessToken,
+          userId: user.userId,
+          displayName: user.displayName,
+        );
+        _updateAuthState(true);
+        return user;
+      }
+      // Network failure
+      return null;
+    } on ChatApiException catch (exc) {
+      // 403: local account not yet on server — auto sync
+      if (exc.statusCode == 403) {
+        _log.info('Login 403 for $username, attempting sync');
+        return syncAccount(localUid: username, password: password, displayName: displayName);
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<ChatUser?> syncAccount({
+    required String localUid,
+    required String password,
+    String? displayName,
+  }) async {
+    final user = await _remoteSource.syncAccount(
+      localUid: localUid,
       password: password,
+      displayName: displayName,
     );
     if (user != null) {
       _currentUser = user;
+      await _remoteSource.config.saveChatAuth(
+        accessToken: user.accessToken,
+        userId: user.userId,
+        displayName: user.displayName,
+      );
       _updateAuthState(true);
       return user;
     }
-    // Network failure — caller (LoginPage) will handle local fallback
+    // Network failure — not recoverable locally, caller handles
     return null;
   }
   

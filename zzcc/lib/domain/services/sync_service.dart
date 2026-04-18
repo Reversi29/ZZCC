@@ -8,7 +8,6 @@ import 'package:logging/logging.dart';
 
 import '../../data/models/chat_message.dart';
 import '../../data/repositories/chat_repository.dart';
-import '../../data/sources/chat_remote_source.dart';
 
 /// Sync service for real-time chat updates
 class SyncService {

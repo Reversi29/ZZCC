@@ -30,7 +30,6 @@ class TorrentServiceImpl implements TorrentService {
   final StreamController<TorrentStatusUpdateEvent> _controller =
       StreamController<TorrentStatusUpdateEvent>.broadcast();
   final Map<String, String> _taskIdToInfoHash = {};
-  final Map<String, double> _progressMap = {};
 
   @override
   Future<void> initialize() async {

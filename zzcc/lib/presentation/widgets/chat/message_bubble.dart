@@ -81,8 +81,8 @@ class MessageBubble extends StatelessWidget {
                     style: theme.textTheme.bodySmall?.copyWith(
                       fontSize: 10,
                       color: isMe 
-                          ? theme.colorScheme.onPrimary.withOpacity(0.7) 
-                          : theme.colorScheme.onSurface.withOpacity(0.5),
+                          ? theme.colorScheme.onPrimary.withValues(alpha: 0.7) 
+                          : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
                   ),
                 ],

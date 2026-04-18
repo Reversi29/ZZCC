@@ -156,7 +156,8 @@ abstract class TorrentService {
 
 class TorrentServiceImpl implements TorrentService {
   final LoggerService _logger = getIt<LoggerService>();
-  late final DynamicLibrary _lib;
+  DynamicLibrary? _lib;
+  bool get _available => _lib != null;
   Pointer<Void>? _sessionPtr = nullptr;
 
   // final ReceivePort _receivePort = ReceivePort();
@@ -207,15 +208,15 @@ class TorrentServiceImpl implements TorrentService {
   }
   
   // 声明函数
-  late final void Function(Pointer<Void>, Pointer<NativeFunction<ProgressCallbackNative>>) _setProgressCallback;
-  late final Pointer<Void> Function() _createSession;
-  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _addTorrent;
-  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>) _addTorrentFile;
-  late final int Function(Pointer<Void>, Pointer<Utf8>) _pauseTorrent;
-  late final int Function(Pointer<Void>, Pointer<Utf8>) _resumeTorrent;
-  late final int Function(Pointer<Void>, Pointer<Utf8>) _cancelTorrent;
-  late final int Function(Pointer<Void>, Pointer<Utf8>) _removeTorrentKeep;
-  late final void Function(Pointer<Void>) _freeSession;
+  void Function(Pointer<Void>, Pointer<NativeFunction<ProgressCallbackNative>>)? _setProgressCallback;
+  Pointer<Void> Function()? _createSession;
+  int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)? _addTorrent;
+  int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)? _addTorrentFile;
+  int Function(Pointer<Void>, Pointer<Utf8>)? _pauseTorrent;
+  int Function(Pointer<Void>, Pointer<Utf8>)? _resumeTorrent;
+  int Function(Pointer<Void>, Pointer<Utf8>)? _cancelTorrent;
+  int Function(Pointer<Void>, Pointer<Utf8>)? _removeTorrentKeep;
+  void Function(Pointer<Void>)? _freeSession;
   
   // 添加进度跟踪
   final Map<String, double> _progressMap = {};
@@ -224,41 +225,51 @@ class TorrentServiceImpl implements TorrentService {
   // static TorrentServiceImpl? _instance;
 
   TorrentServiceImpl() {
-    if (Platform.isWindows) {
-      _lib = DynamicLibrary.open('torrent_ffi.dll');
-    } else if (Platform.isLinux) {
-      _lib = DynamicLibrary.open('torrent_ffi.so');
-    } else if (Platform.isMacOS) {
-      _lib = DynamicLibrary.open('torrent_ffi.dylib');
-    } else {
-      _lib = DynamicLibrary.process();
+    try {
+      if (Platform.isWindows) {
+        _lib = DynamicLibrary.open('torrent_ffi.dll');
+      } else if (Platform.isLinux) {
+        _lib = DynamicLibrary.open('torrent_ffi.so');
+      } else if (Platform.isMacOS) {
+        _lib = DynamicLibrary.open('torrent_ffi.dylib');
+      } else {
+        _lib = DynamicLibrary.process();
+      }
+    } catch (e) {
+      _logger.warning('Torrent FFI library not available: $e');
+      _lib = null;
+      return;
     }
     
-    _createSession = _lib.lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>('create_session');
-    _addTorrent = _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>('add_torrent');
-    _addTorrentFile = _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)>('add_torrent_file');
-    _pauseTorrent = _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('pause_torrent');
-    _resumeTorrent = _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('resume_torrent');
-    _cancelTorrent = _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('cancel_torrent');
-    _removeTorrentKeep = _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('remove_torrent_keep');
-    _freeSession = _lib.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('free_session');
-    _setProgressCallback = _lib.lookupFunction<Void Function(Pointer<Void>, Pointer<NativeFunction<ProgressCallbackNative>>), void Function(Pointer<Void>, Pointer<NativeFunction<ProgressCallbackNative>>)>('set_progress_callback');
+    _createSession = _lib!.lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>('create_session');
+    _addTorrent = _lib!.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>('add_torrent');
+    _addTorrentFile = _lib!.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)>('add_torrent_file');
+    _pauseTorrent = _lib!.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('pause_torrent');
+    _resumeTorrent = _lib!.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('resume_torrent');
+    _cancelTorrent = _lib!.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('cancel_torrent');
+    _removeTorrentKeep = _lib!.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>)>('remove_torrent_keep');
+    _freeSession = _lib!.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('free_session');
+    _setProgressCallback = _lib!.lookupFunction<Void Function(Pointer<Void>, Pointer<NativeFunction<ProgressCallbackNative>>), void Function(Pointer<Void>, Pointer<NativeFunction<ProgressCallbackNative>>)>('set_progress_callback');
   }
 
   @override
   Future<void> initialize() async {
+    if (!_available) {
+      _logger.warning('Torrent FFI library not available, skipping initialization');
+      return;
+    }
     try {
       _logger.info('Initializing torrent service...');
       
       if (_sessionPtr == nullptr || _sessionPtr!.address == 0) {
-        _sessionPtr = _createSession();
+        _sessionPtr = _createSession!();
         
         if (_sessionPtr == nullptr || _sessionPtr!.address == 0) {
           throw Exception('Failed to get torrent session');
         }
         
         final callback = Pointer.fromFunction<ProgressCallbackNative>(TorrentService._onProgressUpdate);
-        _setProgressCallback(_sessionPtr!, callback);
+        _setProgressCallback!(_sessionPtr!, callback);
       }
     } catch (e, stack) {
       _logger.error('Torrent initialization failed: $e\n$stack');
@@ -268,8 +279,8 @@ class TorrentServiceImpl implements TorrentService {
 
   @override
   Future<String> startDownload(String torrentInput, String savePath) async {
-    if (_sessionPtr == nullptr) {
-      throw Exception('Torrent session not available');
+    if (!_available || _sessionPtr == nullptr) {
+      throw Exception('Torrent service not available');
     }
     
     final taskId = '${DateTime.now().millisecondsSinceEpoch}-${torrentInput.hashCode}';
@@ -387,7 +398,7 @@ class TorrentServiceImpl implements TorrentService {
     final savePathPtr = savePath.toNativeUtf8();
     
     try {
-      return _addTorrent(sessionPtr, magnetPtr, savePathPtr);
+      return _addTorrent!(sessionPtr, magnetPtr, savePathPtr);
     } finally {
       malloc.free(magnetPtr);
       malloc.free(savePathPtr);
@@ -402,7 +413,7 @@ class TorrentServiceImpl implements TorrentService {
       // 使用Uint8分配内存，然后转换为Utf8指针
       final infoHashPtr = calloc<Uint8>(41).cast<Utf8>();
       
-      final result = _addTorrentFile(
+      final result = _addTorrentFile!(
         _sessionPtr!, 
         normalizedPath.toNativeUtf8(), 
         savePath.toNativeUtf8(),
@@ -432,6 +443,7 @@ class TorrentServiceImpl implements TorrentService {
 
   @override
   Future<void> pauseDownload(String taskId, {String? infoHash}) async {
+    if (!_available) return;
     try {
       String? hash = infoHash ?? _taskIdToInfoHash[taskId];
       hash = _normalizeInfoHash(hash) ?? hash;
@@ -443,7 +455,7 @@ class TorrentServiceImpl implements TorrentService {
       _taskIdToInfoHash[taskId] = hash;
 
       final infoHashPtr = hash.toNativeUtf8();
-      final result = _pauseTorrent(_sessionPtr!, infoHashPtr);
+      final result = _pauseTorrent!(_sessionPtr!, infoHashPtr);
       malloc.free(infoHashPtr);
       
       if (result != 0) {
@@ -457,6 +469,7 @@ class TorrentServiceImpl implements TorrentService {
 
   @override
   Future<void> resumeDownload(String taskId, {String? infoHash}) async {
+    if (!_available) return;
     try {
       String? hash = infoHash ?? _taskIdToInfoHash[taskId];
       hash = _normalizeInfoHash(hash) ?? hash;
@@ -467,7 +480,7 @@ class TorrentServiceImpl implements TorrentService {
       _taskIdToInfoHash[taskId] = hash;
 
       final infoHashPtr = hash.toNativeUtf8();
-      final result = _resumeTorrent(_sessionPtr!, infoHashPtr);
+      final result = _resumeTorrent!(_sessionPtr!, infoHashPtr);
       malloc.free(infoHashPtr);
       
       if (result != 0) {
@@ -481,6 +494,7 @@ class TorrentServiceImpl implements TorrentService {
 
   @override
   Future<void> cancelDownload(String taskId, {String? infoHash}) async {
+    if (!_available) return;
     try {
       final raw = infoHash ?? _taskIdToInfoHash[taskId];
       final finalInfoHash = _normalizeInfoHash(raw);
@@ -493,7 +507,7 @@ class TorrentServiceImpl implements TorrentService {
 
       _logger.info('Cancelling torrent for task $taskId with infoHash $finalInfoHash');
       final infoHashPtr = finalInfoHash.toNativeUtf8();
-      final result = _cancelTorrent(_sessionPtr!, infoHashPtr);
+      final result = _cancelTorrent!(_sessionPtr!, infoHashPtr);
       malloc.free(infoHashPtr);
 
       if (result != 0) {
@@ -511,6 +525,7 @@ class TorrentServiceImpl implements TorrentService {
 
   @override
   Future<void> removeTorrentKeepFiles(String taskId, {String? infoHash}) async {
+    if (!_available) return;
     try {
       final raw = infoHash ?? _taskIdToInfoHash[taskId];
       final finalInfoHash = _normalizeInfoHash(raw);
@@ -523,7 +538,7 @@ class TorrentServiceImpl implements TorrentService {
 
       _logger.info('Removing torrent (keep files) for task $taskId with infoHash $finalInfoHash');
       final infoHashPtr = finalInfoHash.toNativeUtf8();
-      final result = _removeTorrentKeep(_sessionPtr!, infoHashPtr);
+      final result = _removeTorrentKeep!(_sessionPtr!, infoHashPtr);
       malloc.free(infoHashPtr);
 
       if (result != 0) {
@@ -541,12 +556,12 @@ class TorrentServiceImpl implements TorrentService {
 
   @override
   void dispose() {
-    _clearProgressCallback();
-    _progressController.close();  // 添加流控制器关闭
+    if (_available) _clearProgressCallback();
+    _progressController.close();
 
     final sessionPtr = _sessionPtr;
-    if (sessionPtr != nullptr) {
-      _freeSession(sessionPtr!);
+    if (_available && sessionPtr != nullptr) {
+      _freeSession!(sessionPtr!);
       _sessionPtr = nullptr;
       
       // 清除缓存
@@ -557,7 +572,7 @@ class TorrentServiceImpl implements TorrentService {
 
   void _clearProgressCallback() {
     try {
-      final clearCallback = _lib.lookupFunction<Void Function(), void Function()>('clear_progress_callback');
+      final clearCallback = _lib!.lookupFunction<Void Function(), void Function()>('clear_progress_callback');
       clearCallback();
     } catch (e) {
       _logger.warning('Failed to clear progress callback: $e');

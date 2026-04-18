@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 // import 'package:zzcc/core/utils/storage_manager.dart';
@@ -237,6 +238,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             const SizedBox(height: 30),
             _buildInfoForm(),
             const SizedBox(height: 30),
+            _buildAccountSection(),
+            const SizedBox(height: 30),
             _buildSocialSection(),
             const SizedBox(height: 30),
             _buildSecuritySection(),
@@ -296,6 +299,58 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               ),
             ]
           ],
+        ),
+      ],
+    );
+  }
+
+
+  Widget _buildAccountSection() {
+    final user = ref.watch(userProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '账号信息',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.fingerprint, color: Colors.grey),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('UID', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    Text(
+                      user.uid.isNotEmpty ? user.uid : '未登录',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+              if (user.uid.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 20),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: user.uid));
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('UID 已复制')),
+                      );
+                    }
+                  },
+                ),
+            ],
+          ),
         ),
       ],
     );

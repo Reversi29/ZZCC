@@ -67,6 +67,17 @@ class ProfileUpdateRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=256)
 
 
+class SyncAccountRequest(BaseModel):
+    local_uid: str = Field(..., min_length=1, max_length=255, description="Locally generated UID")
+    password: str = Field(..., min_length=8)
+    display_name: Optional[str] = Field(None, description="Display name")
+
+
+class SyncAccountResponse(BaseModel):
+    ok: bool = True
+    data: dict
+
+
 # ============================================================
 # Dependencies
 # ============================================================
@@ -137,6 +148,62 @@ async def logout(
     try:
         await matrix.logout(access_token)
         return {"ok": True, "data": {"message": "Logged out"}}
+    except MatrixError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.message)
+
+
+@router.post("/sync-account", response_model=SyncAccountResponse, status_code=status.HTTP_201_CREATED)
+async def sync_account(
+    req: SyncAccountRequest,
+    matrix: MatrixClient = Depends(get_matrix),
+    auth: str = Depends(verify_api_key),
+):
+    """
+    Sync a locally-created account to the server.
+
+    Flow:
+    1. Attempt register with the local UID + password
+       - If success: return server user_id + access_token (newly created)
+       - If 400/M_USER_EXISTS: account exists on server → try login instead
+    2. Attempt login (only when register said username exists)
+       - If success: return server user_id + access_token (was already registered)
+       - If failed: propagate the error
+    """
+    # Step 1: try register
+    try:
+        reg_result = await matrix.register(
+            username=req.local_uid,
+            password=req.password,
+            display_name=req.display_name,
+        )
+        return {
+            "ok": True,
+            "data": {
+                "user_id": reg_result["user_id"],
+                "access_token": reg_result["access_token"],
+                "was_created": True,
+            },
+        }
+    except MatrixError as exc:
+        # Only fall through to login if username already taken
+        # M_USER_IN_USE (409) means the UID was registered on another device
+        if exc.http_status != 409 or "M_USER_IN_USE" not in exc.code:
+            raise HTTPException(status_code=exc.http_status, detail=exc.message)
+
+    # Step 2: username exists → try login
+    try:
+        login_result = await matrix.login(
+            username=req.local_uid,
+            password=req.password,
+        )
+        return {
+            "ok": True,
+            "data": {
+                "user_id": login_result["user_id"],
+                "access_token": login_result["access_token"],
+                "was_created": False,
+            },
+        }
     except MatrixError as exc:
         raise HTTPException(status_code=exc.http_status, detail=exc.message)
 
