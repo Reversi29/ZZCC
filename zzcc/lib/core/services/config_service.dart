@@ -21,8 +21,7 @@ class ConfigService {
   // ── 后端 API 配置 ──────────────────────────────────────
   String get nebulaApiBaseUrl =>
       _config['nebulaApiBaseUrl'] ?? 'http://124.223.47.167:8001/api/v1/';
-  String get nebulaApiKey =>
-      _config['nebulaApiKey'] ?? 'zzcc-secret-key-2025';
+  String get nebulaApiKey => _config['nebulaApiKey'] ?? 'zzcc-secret-key-2025';
 
   Future<void> updateNebulaApiConfig(String baseUrl, String apiKey) async {
     _config['nebulaApiBaseUrl'] = baseUrl;
@@ -38,7 +37,7 @@ class ConfigService {
   // 添加检查登录状态的方法
   Future<bool> isUserLoggedIn() async {
     if (!keepLoggedIn) return false;
-    
+
     try {
       final storage = getIt<StorageService>();
       return storage.getCurrentUser() != null;
@@ -62,7 +61,7 @@ class ConfigService {
       }
 
       getIt<LoggerService>().debug('配置文件路径: $_configPath');
-      
+
       final file = File(_configPath);
       if (await file.exists()) {
         final content = await file.readAsString();
@@ -73,7 +72,7 @@ class ConfigService {
         _config = {
           'appDataPath': defaultPath,
           'keepLoggedIn': true,
-          };
+        };
         await _saveConfig();
       }
       getIt<LoggerService>().debug('APP基本设置: $_config');
@@ -90,9 +89,9 @@ class ConfigService {
 
   String _replaceUsernamePlaceholder(String path) {
     if (path.contains('<username>')) {
-      final username = Platform.environment['USERNAME'] ?? 
-                      Platform.environment['USER'] ?? 
-                      'user';
+      final username = Platform.environment['USERNAME'] ??
+          Platform.environment['USER'] ??
+          'user';
       return path.replaceAll('<username>', username);
     }
     return path;
@@ -126,19 +125,19 @@ class ConfigService {
 
     if (await oldDir.exists()) {
       await _migrateData(
-        oldDir, 
-        newDir, 
+        oldDir,
+        newDir,
         onProgress: onProgress,
         shouldCancel: shouldCancel,
       );
-      
+
       // 检查是否取消了迁移
       if (shouldCancel != null && shouldCancel()) {
         // 删除已复制的文件
         await newDir.delete(recursive: true);
         throw Exception('迁移已取消');
       }
-      
+
       await oldDir.delete(recursive: true);
       getIt<LoggerService>().debug('Deleted old data directory: $oldPath');
     }
@@ -157,7 +156,7 @@ class ConfigService {
   }
 
   Future<void> _migrateData(
-    Directory source, 
+    Directory source,
     Directory target, {
     void Function(int current, int total)? onProgress,
     bool Function()? shouldCancel,
@@ -177,20 +176,20 @@ class ConfigService {
         if (shouldCancel != null && shouldCancel()) {
           return;
         }
-        
+
         currentFile++;
         onProgress?.call(currentFile, totalFiles);
-        
+
         if (entity is File) {
-            // 跳过lock文件
+          // 跳过lock文件
           if (path.basename(entity.path).endsWith('.lock')) {
             logger.debug('Skipping lock file: ${entity.path}');
             continue;
           }
-          
+
           final relativePath = path.relative(entity.path, from: source.path);
           final destFile = File(path.join(target.path, relativePath));
-          
+
           if (!await destFile.parent.exists()) {
             await destFile.parent.create(recursive: true);
           }
@@ -212,8 +211,9 @@ class ConfigService {
           }
         }
       }
-      
-      logger.debug('Successfully migrated $totalFiles items from ${source.path} to ${target.path}');
+
+      logger.debug(
+          'Successfully migrated $totalFiles items from ${source.path} to ${target.path}');
     } catch (e) {
       getIt<LoggerService>().error('Data migration failed: $e');
       rethrow;
@@ -252,24 +252,28 @@ class ConfigService {
   // ── Chat/Matrix 认证配置 ───────────────────────────────
   /// Chat access token (persisted for auto-login)
   String? get chatAccessToken => _config['chatAccessToken'] as String?;
-  
+
   /// Chat user ID (e.g. @username:server)
   String? get chatUserId => _config['chatUserId'] as String?;
-  
+
   /// Chat display name
   String? get chatDisplayName => _config['chatDisplayName'] as String?;
-  
+
   Future<void> saveChatAuth({
     required String? accessToken,
     required String? userId,
     String? displayName,
   }) async {
+    getIt<LoggerService>().info(
+        'saveChatAuth: accessToken=${accessToken != null ? "present(${accessToken.substring(0, 8)}...)" : "null"} userId=$userId');
     _config['chatAccessToken'] = accessToken;
     _config['chatUserId'] = userId;
     _config['chatDisplayName'] = displayName;
     await _saveConfig();
+    getIt<LoggerService>().info(
+        'saveChatAuth: _config["chatAccessToken"] now = ${_config['chatAccessToken']}');
   }
-  
+
   Future<void> clearChatAuth() async {
     _config.remove('chatAccessToken');
     _config.remove('chatUserId');

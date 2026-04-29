@@ -54,6 +54,7 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
     // Listen auth state: on login → load rooms; on logout → clear rooms
     _authSubscription = _chatRepo.authStateStream.listen((isAuth) {
       if (!mounted) return;
+      _log.info('authStateStream: isAuth=$isAuth');
       if (isAuth) {
         _loadRooms();
       } else {
@@ -69,6 +70,7 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
 
     // Init: load if already auth
     final isLoggedIn = _chatRepo.isAuthenticated;
+    _log.info('initState isLoggedIn=$isLoggedIn token=${_chatRepo.currentUser?.accessToken?.substring(0, 8)} needsSync=${_chatRepo.currentUser?.needsSync}');
     if (isLoggedIn) {
       _loadRooms();
     } else {
@@ -96,8 +98,13 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
   Future<void> _loadRooms() async {
     if (!mounted) return;
     final isAuth = _chatRepo.isAuthenticated;
-    _log.fine('_loadRooms: isAuthenticated=$isAuth, needsSync=${_chatRepo.currentUser?.needsSync}');
+    final user = _chatRepo.currentUser;
+    final needsSync = user?.needsSync ?? false;
+    final hasToken = user?.accessToken != null && user!.accessToken!.isNotEmpty;
+    _log.fine('_loadRooms: isAuthenticated=$isAuth, needsSync=$needsSync, hasToken=$hasToken');
     if (!isAuth) return;
+    // Offline account (needsSync=true, no real token) — cannot call server APIs
+    if (needsSync && !hasToken) return;
     setState(() {
       _roomsLoading = true;
       _roomsError = null;
@@ -257,28 +264,31 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
   }
 
   Widget _buildChatTab() {
+    // Check offline account first (needsSync=true but no real token → cannot use chat APIs)
+    final offlineUser = _chatRepo.currentUser;
+    final offlineNeedsSync = offlineUser?.needsSync ?? false;
+    final offlineHasToken = offlineUser?.accessToken != null && offlineUser!.accessToken!.isNotEmpty;
+    _log.info('_buildChatTab: user=$offlineUser needsSync=$offlineNeedsSync hasToken=$offlineHasToken');
+    if (offlineNeedsSync && !offlineHasToken) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off, size: 48, color: Colors.orange),
+            const SizedBox(height: 12),
+            const Text('离线账号', style: TextStyle(color: Colors.orange, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('密码未保存，请重新登录以同步', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+              child: const Text('重新登录'),
+            ),
+          ],
+        ),
+      );
+    }
     if (!_chatRepo.isAuthenticated) {
-      // Distinguish: completely logged out vs. offline-but-logged-in (needsSync)
-      final needsSync = _chatRepo.currentUser?.needsSync ?? false;
-      if (needsSync) {
-        return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.cloud_off, size: 48, color: Colors.orange),
-              const SizedBox(height: 12),
-              const Text('离线账号', style: TextStyle(color: Colors.orange, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              const Text('密码未保存，请重新登录以同步', style: TextStyle(color: Colors.grey)),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
-                child: const Text('重新登录'),
-              ),
-            ],
-          ),
-        );
-      }
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

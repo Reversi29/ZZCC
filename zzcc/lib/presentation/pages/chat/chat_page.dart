@@ -184,18 +184,20 @@ class _ChatPageState extends State<ChatPage> {
           PopupMenuButton<String>(
             onSelected: (value) async {
               if (value == 'leave') {
+                final navigator = Navigator.of(context);
+                final messenger = ScaffoldMessenger.of(context);
                 final confirm = await showDialog<bool>(
                   context: context,
-                  builder: (context) => AlertDialog(
+                  builder: (ctx) => AlertDialog(
                     title: const Text('Leave Room?'),
                     content: const Text('You will need to be re-invited to rejoin.'),
                     actions: [
                       TextButton(
-                        onPressed: () => Navigator.pop(context, false),
+                        onPressed: () => Navigator.pop(ctx, false),
                         child: const Text('Cancel'),
                       ),
                       FilledButton(
-                        onPressed: () => Navigator.pop(context, true),
+                        onPressed: () => Navigator.pop(ctx, true),
                         child: const Text('Leave'),
                       ),
                     ],
@@ -205,10 +207,10 @@ class _ChatPageState extends State<ChatPage> {
                 if (confirm == true) {
                   try {
                     await widget.repository.leaveRoom(widget.room.roomId);
-                    if (mounted) Navigator.pop(context);
+                    if (mounted) navigator.pop();
                   } catch (e) {
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      messenger.showSnackBar(
                         SnackBar(content: Text('Failed to leave: $e')),
                       );
                     }

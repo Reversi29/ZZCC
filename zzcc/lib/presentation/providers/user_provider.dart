@@ -43,9 +43,9 @@ class UserNotifier extends StateNotifier<UserModel> {
   // 登出用户
   void logoutUser() {
     state = UserModel(
-      name: state.name,
-      uid: state.uid,
-      isLoggedIn: false,  // 显式设置登录状态
+      name: '',
+      uid: '',
+      isLoggedIn: false,
     );
   }
 

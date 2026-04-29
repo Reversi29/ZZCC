@@ -40,6 +40,10 @@ abstract class ChatRepository {
 
   /// Logout
   Future<void> logout();
+
+  /// Permanently delete the user's account.
+  /// [erase=true] removes all user data on the server (not reversible).
+  Future<void> deleteAccount({bool erase = false});
   
   /// Get rooms
   Future<List<ChatRoom>> getRooms();
@@ -152,6 +156,7 @@ class ChatRepositoryImpl implements ChatRepository {
   bool get isAuthenticated => _currentUser?.isAuthenticated ?? false;
   
   void _updateAuthState(bool authenticated) {
+    _log.info('_updateAuthState called with authenticated=$authenticated, _currentUser.isAuthenticated=${_currentUser?.isAuthenticated}');
     _authController.add(authenticated);
   }
   
@@ -161,21 +166,32 @@ class ChatRepositoryImpl implements ChatRepository {
     required String password,
     String? displayName,
   }) async {
+    _log.info('chatRepo.register: START uid=$uid');
     // Try server first (UID as username)
-    final serverUser = await _remoteSource.register(
-      username: uid,
-      password: password,
-      displayName: displayName,
-    );
+    ChatUser? serverUser;
+    try {
+      serverUser = await _remoteSource.register(
+        username: uid,
+        password: password,
+        displayName: displayName,
+      );
+      _log.info('chatRepo.register: serverUser=${serverUser?.userId} token=${serverUser?.accessToken}');
+    } catch (e) {
+      _log.warning('chatRepo.register: remoteSource.register ERROR $e');
+    }
 
     if (serverUser != null) {
+      _log.info('chatRepo.register: server success userId=${serverUser.userId} token=${serverUser.accessToken?.substring(0, 8)}...');
       _currentUser = serverUser;
+      _log.info('chatRepo.register: _currentUser set, isAuthenticated=${_currentUser?.isAuthenticated}');
       await _remoteSource.config.saveChatAuth(
         accessToken: serverUser.accessToken,
         userId: serverUser.userId,
         displayName: serverUser.displayName,
       );
+      _log.info('chatRepo.register: saveChatAuth done, about to _updateAuthState(true)');
       _updateAuthState(true);
+      _log.info('chatRepo.register: _updateAuthState(true) called');
       return serverUser;
     }
 
@@ -211,12 +227,15 @@ class ChatRepositoryImpl implements ChatRepository {
       );
       if (user != null) {
         _currentUser = user;
+        _log.info('chatRepo.login: _currentUser set, isAuthenticated=${_currentUser?.isAuthenticated}');
         await _remoteSource.config.saveChatAuth(
           accessToken: user.accessToken,
           userId: user.userId,
           displayName: user.displayName,
         );
+        _log.info('chatRepo.login: saveChatAuth done, about to _updateAuthState(true)');
         _updateAuthState(true);
+        _log.info('chatRepo.login: _updateAuthState(true) called');
         return user;
       }
       // Network failure
@@ -261,6 +280,15 @@ class ChatRepositoryImpl implements ChatRepository {
     await _remoteSource.logout();
     _currentUser = null;
     _updateAuthState(false);
+  }
+
+  @override
+  Future<void> deleteAccount({bool erase = false}) async {
+    _log.info('deleteAccount: erase=$erase');
+    await _remoteSource.deleteAccount(erase: erase);
+    _currentUser = null;
+    _updateAuthState(false);
+    _log.info('deleteAccount: done');
   }
   
   @override

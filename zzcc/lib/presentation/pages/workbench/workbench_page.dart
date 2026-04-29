@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/gestures.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter_code_editor/flutter_code_editor.dart';
 import 'package:highlight/languages/dart.dart';
 import 'package:zzcc/presentation/providers/workbench_provider.dart';
@@ -66,6 +67,7 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
   Timer? _debounceTimer;
   final ScrollController _tabScrollController = ScrollController();
   String? _rootPath;
+  bool _isDragging = false;
 
   @override
   void initState() {
@@ -671,108 +673,136 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
     final provider = ref.watch(workbenchProvider);
     
     return Scaffold(
-      body: Column(
-        children: [
-          _buildMenuBar(context, ref),
-          _buildTabBar(provider, context, ref),
-          Expanded(
-            child: Row(
-              children: [
-                Container(
-                  width: 48,
-                  color: Colors.grey[200],
-                  child: Column(
-                    children: [
-                      _buildActivityBarItem(context, Icons.explore, '资源管理器', 0, provider, ref),
-                      _buildActivityBarItem(context, Icons.search, '搜索', 1, provider, ref),
-                      _buildActivityBarItem(context, Icons.source, '源代码管理', 2, provider, ref),
-                      const Spacer(),
-                      _buildActivityBarItem(context, Icons.settings, '设置', 3, provider, ref),
-                    ],
-                  ),
-                ),
-                if (provider.isSidebarVisible) ...[
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeInOut,
-                    width: provider.sidebarWidth,
-                    child: _buildSidebarContent(provider.activeSidebarTab, context, ref),
-                  ),
-                  MouseRegion(
-                    cursor: SystemMouseCursors.resizeLeftRight,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onHorizontalDragUpdate: (details) {
-                        double newWidth = provider.sidebarWidth + details.delta.dx;
-                        newWidth = newWidth.clamp(120.0, 400.0);
-                        ref.read(workbenchProvider.notifier).updateSidebarWidth(newWidth);
-                      },
-                      child: Container(
-                        width: 6,
-                        color: Colors.grey[300],
-                      ),
+      body: DropTarget(
+        onDragDone: (details) => provider.handleDrop(details),
+        onDragEntered: (_) => setState(() => _isDragging = true),
+        onDragExited: (_) => setState(() => _isDragging = false),
+        child: Stack(
+          children: [
+            Column(
+          children: [
+            _buildMenuBar(context, ref),
+            _buildTabBar(provider, context, ref),
+            Expanded(
+              child: Row(
+                children: [
+                  Container(
+                    width: 48,
+                    color: Colors.grey[200],
+                    child: Column(
+                      children: [
+                        _buildActivityBarItem(context, Icons.explore, '资源管理器', 0, provider, ref),
+                        _buildActivityBarItem(context, Icons.search, '搜索', 1, provider, ref),
+                        _buildActivityBarItem(context, Icons.source, '源代码管理', 2, provider, ref),
+                        const Spacer(),
+                        _buildActivityBarItem(context, Icons.settings, '设置', 3, provider, ref),
+                      ],
                     ),
                   ),
+                  if (provider.isSidebarVisible) ...[
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      width: provider.sidebarWidth,
+                      child: _buildSidebarContent(provider.activeSidebarTab, context, ref),
+                    ),
+                    MouseRegion(
+                      cursor: SystemMouseCursors.resizeLeftRight,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onHorizontalDragUpdate: (details) {
+                          double newWidth = provider.sidebarWidth + details.delta.dx;
+                          newWidth = newWidth.clamp(120.0, 400.0);
+                          ref.read(workbenchProvider.notifier).updateSidebarWidth(newWidth);
+                        },
+                        child: Container(
+                          width: 6,
+                          color: Colors.grey[300],
+                        ),
+                      ),
+                    ),
+                  ],
+                  Expanded(child: _EditorArea(provider: provider)),
                 ],
-                Expanded(child: _EditorArea(provider: provider)),
-              ],
+              ),
             ),
-          ),
-          // Bottom status bar showing editor/file metadata
-          Container(
-            height: 28,
-            color: Colors.grey[100],
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                const Icon(Icons.code, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Row(
-                    children: [
-                      Expanded(child: Text('行: ${provider.editorLine} 列: ${provider.editorColumn}  选中: ${provider.selectionCount}  缩进: ${provider.firstLineIndent}', style: const TextStyle(fontSize: 12))),
-                      const SizedBox(width: 8),
-                      // Encoding selector
-                      HoverPopupMenuButton<String>(
-                        menuWidth: 120,
-                        childButton: PopupMenuButton<String>(
-                          tooltip: '',
-                          popUpAnimationStyle: AnimationStyle(
-                            duration: const Duration(milliseconds: 0),
-                            curve: Curves.linear,
-                            reverseDuration: const Duration(milliseconds: 0),
-                          ),
-                          initialValue: provider.encoding,
-                          onSelected: (v) {
-                            ref.read(workbenchProvider.notifier).setEncoding(v);
-                          },
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'utf-8', child: Text('utf-8')), 
-                            PopupMenuItem(value: 'gbk', child: Text('gbk')),
-                            PopupMenuItem(value: 'utf-16le', child: Text('utf-16le')),
-                            PopupMenuItem(value: 'utf-16be', child: Text('utf-16be')),
-                            PopupMenuItem(value: 'windows-1252', child: Text('windows-1252')),
-                          ],
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.language, size: 14),
-                              const SizedBox(width: 4),
-                              Text(provider.encoding, style: const TextStyle(fontSize: 12)),
-                              const Icon(Icons.arrow_drop_down, size: 16),
+            // Bottom status bar showing editor/file metadata
+            Container(
+              height: 28,
+              color: Colors.grey[100],
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.code, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Expanded(child: Text('行: ${provider.editorLine} 列: ${provider.editorColumn}  选中: ${provider.selectionCount}  缩进: ${provider.firstLineIndent}', style: const TextStyle(fontSize: 12))),
+                        const SizedBox(width: 8),
+                        // Encoding selector
+                        HoverPopupMenuButton<String>(
+                          menuWidth: 120,
+                          childButton: PopupMenuButton<String>(
+                            tooltip: '',
+                            popUpAnimationStyle: AnimationStyle(
+                              duration: const Duration(milliseconds: 0),
+                              curve: Curves.linear,
+                              reverseDuration: const Duration(milliseconds: 0),
+                            ),
+                            initialValue: provider.encoding,
+                            onSelected: (v) {
+                              ref.read(workbenchProvider.notifier).setEncoding(v);
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(value: 'utf-8', child: Text('utf-8')), 
+                              PopupMenuItem(value: 'gbk', child: Text('gbk')),
+                              PopupMenuItem(value: 'utf-16le', child: Text('utf-16le')),
+                              PopupMenuItem(value: 'utf-16be', child: Text('utf-16be')),
+                              PopupMenuItem(value: 'windows-1252', child: Text('windows-1252')),
                             ],
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.language, size: 14),
+                                const SizedBox(width: 4),
+                                Text(provider.encoding, style: const TextStyle(fontSize: 12)),
+                                const Icon(Icons.arrow_drop_down, size: 16),
+                              ],
+                            ),
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(provider.activeFileIndex >= 0 && provider.activeFileIndex < provider.openedFiles.length ? '大小: ${_humanFileSize(provider.openedFiles[provider.activeFileIndex].path)}' : '', style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+            ),
+          if (_isDragging)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.15),
+                child: const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.folder_open, size: 64, color: Colors.white),
+                      SizedBox(height: 12),
+                      Text(
+                        '松开以打开',
+                        style: TextStyle(color: Colors.white, fontSize: 18),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Text(provider.activeFileIndex >= 0 && provider.activeFileIndex < provider.openedFiles.length ? '大小: ${_humanFileSize(provider.openedFiles[provider.activeFileIndex].path)}' : '', style: const TextStyle(fontSize: 12)),
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

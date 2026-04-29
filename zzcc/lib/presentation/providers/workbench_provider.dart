@@ -11,6 +11,7 @@ import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 import 'dart:convert';
 import 'package:charset_converter/charset_converter.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 
 final workbenchProvider = ChangeNotifierProvider((ref) => WorkbenchProvider());
 
@@ -448,6 +449,58 @@ class WorkbenchProvider extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  /// Open a folder by its absolute path (used by drag-drop).
+  Future<void> _openFolderFromPath(String path) async {
+    _currentFilePath = '';
+    _currentFileContent = '';
+    _currentFileBytes = null;
+    _currentFolderPath = path;
+
+    watchFileSystem(path);
+
+    if (_fileTree.isEmpty || _fileTree[0].path != path) {
+      final rootNode = FileNode(
+        name: path.split(Platform.pathSeparator).last,
+        path: path,
+        isDirectory: true,
+        isExpanded: true,
+      );
+      setFileTree([rootNode]);
+    }
+
+    await refreshFileTree();
+  }
+
+  /// Handle files/folders dropped onto the workbench.
+  Future<void> handleDrop(DropDoneDetails details) async {
+    if (details.files.isEmpty) return;
+
+    final paths = details.files.map((xFile) => xFile.path).toList();
+
+    bool hasDirectory = false;
+    for (final p in paths) {
+      if (await Directory(p).exists()) {
+        hasDirectory = true;
+        break;
+      }
+    }
+
+    if (hasDirectory) {
+      for (final p in paths) {
+        if (await Directory(p).exists()) {
+          await _openFolderFromPath(p);
+          break;
+        }
+      }
+    }
+
+    for (final p in paths) {
+      if (await File(p).exists()) {
+        await openFileByName(p);
+      }
     }
   }
 

@@ -152,6 +152,37 @@ async def logout(
         raise HTTPException(status_code=exc.http_status, detail=exc.message)
 
 
+class DeleteAccountRequest(BaseModel):
+    erase: bool = Field(False, description="Whether to also erase all user data (true = permanent deletion)")
+
+
+@router.post("/delete-account")
+async def delete_account(
+    req: DeleteAccountRequest = DeleteAccountRequest(),
+    access_token: str = Depends(get_access_token),
+    matrix: MatrixClient = Depends(get_matrix),
+    auth: str = Depends(verify_api_key),
+):
+    """
+    Deactivate (and optionally erase) the current user's account.
+
+    - erase=false: account is deactivated (can no longer authenticate),
+      but messages/rooms are preserved. Reversible via re-registration.
+    - erase=true: permanently erases all user data from the server.
+      This is NOT reversible.
+
+    Requires the user's current access token.
+    """
+    try:
+        result = await matrix.deactivate_user(
+            access_token=access_token,
+            erase_user=req.erase,
+        )
+        return {"ok": True, "data": result}
+    except MatrixError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.message)
+
+
 @router.post("/sync-account", response_model=SyncAccountResponse, status_code=status.HTTP_201_CREATED)
 async def sync_account(
     req: SyncAccountRequest,

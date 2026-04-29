@@ -57,12 +57,66 @@ class StorageService {
     await _userRegistryBox.close();
   }
 
+  /// 清除所有内容并关闭（不清文件）
+  Future<void> clearAndClose() async {
+    await _appBox.clear();
+    await _userRegistryBox.clear();
+    if (_cachedSharedFileBox != null) {
+      await _cachedSharedFileBox!.clear();
+      await _cachedSharedFileBox!.close();
+      _cachedSharedFileBox = null;
+    }
+    await _appBox.close();
+    await _userRegistryBox.close();
+  }
+
+  /// 重新打开 boxes（在 clearAndClose 后调用）
+  Future<void> reopen() async {
+    _appBox = await Hive.openBox('app_settings');
+    _userRegistryBox = await Hive.openBox('user_registry');
+  }
+
   void registerUser(String uid, String ciphertext) {
     _userRegistryBox.put(uid, ciphertext);
   }
 
   String? getUserRegistry(String uid) {
     return _userRegistryBox.get(uid);
+  }
+
+  /// 列出所有本地注册的账号（不含密码）。
+  /// 返回 [{name, uid, lastLoginTime}]，按最后登录时间倒序。
+  Future<List<Map<String, dynamic>>> listAllAccounts() async {
+    final List<Map<String, dynamic>> accounts = [];
+    for (final uid in _userRegistryBox.keys) {
+      final ciphertext = _userRegistryBox.get(uid);
+      if (ciphertext == null) continue;
+      try {
+        final userBox = await _openUserBox(ciphertext);
+        final name = userBox.get('name') as String?;
+        final lastLogin = userBox.get('lastLoginTime') as String?;
+        await userBox.close();
+        if (name != null) {
+          accounts.add({
+            'name': name,
+            'uid': uid,
+            'lastLoginTime': lastLogin,
+          });
+        }
+      } catch (_) {
+        // 忽略读取失败的账号
+      }
+    }
+    // 按 lastLoginTime 倒序（最新的在前）
+    accounts.sort((a, b) {
+      final ta = a['lastLoginTime'] as String?;
+      final tb = b['lastLoginTime'] as String?;
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return tb.compareTo(ta); // ISO8601 字符串可直比较
+    });
+    return accounts;
   }
 
   Future<Box> _openUserBox(String ciphertext) async {

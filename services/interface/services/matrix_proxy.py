@@ -158,6 +158,21 @@ class MatrixClient:
     async def logout(self, access_token: str) -> None:
         """Logout and invalidate access token."""
         await self._request("POST", "/logout", access_token=access_token)
+
+    async def deactivate_user(self, access_token: str, erase_user: bool = False) -> dict[str, Any]:
+        """
+        Deactivate (and optionally erase) the user account.
+
+        Matrix API: POST /_matrix/client/r0/account/deactivate
+        Set erase_user=true to also erase all user data.
+        """
+        result = await self._request(
+            "POST",
+            "/account/deactivate",
+            access_token=access_token,
+            json_data={"erase_user": erase_user},
+        )
+        return result
     
     # ============================================================
     # Profile

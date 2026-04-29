@@ -47,6 +47,7 @@ dependencies:
   filepicker_windows: ^2.1.4
   file_selector: ^1.0.3
   file_selector_windows: ^0.9.3+4
+  desktop_drop: ^0.4.4
   flutter_code_editor: ^0.3.3
   highlight: ^0.7.0
   syncfusion_flutter_charts: ^30.2.4

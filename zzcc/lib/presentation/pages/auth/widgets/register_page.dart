@@ -293,10 +293,10 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
       return;
     }
 
-    if (passwordController.text.length < 6) {
+    if (passwordController.text.length < 8) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('密码长度不能少于6位')),
+          const SnackBar(content: Text('密码长度不能少于8位')),
         );
       }
       return;

@@ -8,9 +8,15 @@ import 'package:zzcc/core/di/service_locator.dart';
 import 'package:zzcc/l10n/generated/app_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zzcc/presentation/providers/locale_provider.dart';
+import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:svg_flag/svg_flag.dart';
 import 'package:zzcc/presentation/providers/font_provider.dart';
 import 'package:zzcc/presentation/providers/splash_provider.dart';
+import 'package:zzcc/core/services/storage_service.dart';
+import 'package:zzcc/core/routes/route_names.dart';
+import 'package:go_router/go_router.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 // import 'package:flag/flag.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -26,6 +32,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   late ConfigService _configService;
   bool _isMigrating = false;
   final List<bool> _isExpanded = [true, true, true, true];
+  String? _cacheSize;
+  bool _isClearingCache = false;
+  bool _isClearingData = false;
+
   static const List<String> availableFonts = [
     'NotoSansSC',
     'MSYH',
@@ -40,6 +50,185 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void initState() {
     super.initState();
     _configService = getIt<ConfigService>();
+    _loadCacheSize();
+  }
+
+  Future<void> _loadCacheSize() async {
+    try {
+      final tmpDir = await getTemporaryDirectory();
+      final size = await _dirSize(tmpDir);
+      if (mounted) {
+        setState(() => _cacheSize = _formatBytes(size));
+      }
+    } catch (_) {
+      if (mounted) setState(() => _cacheSize = '--');
+    }
+  }
+
+  Future<int> _dirSize(Directory dir) async {
+    int total = 0;
+    try {
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is File) total += await entity.length();
+      }
+    } catch (_) {}
+    return total;
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  Future<void> _clearCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清除缓存'),
+        content: const Text('确定要清除所有缓存数据吗？此操作不会影响您的账号和设置。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _isClearingCache = true);
+    try {
+      // 清除图片缓存
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+
+      // 清除临时目录
+      final tmpDir = await getTemporaryDirectory();
+      if (tmpDir.existsSync()) {
+        await for (final entity in tmpDir.list()) {
+          try {
+            if (entity is File) await entity.delete();
+            if (entity is Directory) await entity.delete(recursive: true);
+          } catch (_) {}
+        }
+      }
+
+      await _loadCacheSize();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('缓存已清除'), duration: Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('清除失败: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isClearingCache = false);
+    }
+  }
+
+  Future<void> _clearData() async {
+    // 二次确认：需输入"确认"才能执行
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final controller = TextEditingController();
+        return AlertDialog(
+          title: const Text('清除所有数据'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '此操作将删除所有本地数据，包括：',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text('• 所有账号信息\n• 聊天记录与认证\n• 个人设置与偏好\n• 下载的文件'),
+              const SizedBox(height: 12),
+              const Text('此操作不可撤销。'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: '输入"确认"以继续',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              onPressed: () {
+                if (controller.text == '确认') {
+                  Navigator.pop(ctx, true);
+                }
+              },
+              child: const Text('清除数据'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() => _isClearingData = true);
+    try {
+      final storageService = getIt<StorageService>();
+
+      // 1. 清除聊天认证
+      await _configService.clearChatAuth();
+
+      // 2. 退出登录（清空并关闭 Hive boxes）
+      ref.read(userProvider.notifier).logoutUser(); // 重置内存状态
+      storageService.clearCurrentUser();
+      await storageService.clearAndClose();
+
+      // 3. 删除用户数据目录（除 Hive 自身文件外）
+      final dataDir = Directory(_configService.appDataPath);
+      if (dataDir.existsSync()) {
+        await for (final entity in dataDir.list()) {
+          try {
+            final path = entity.path;
+            if (path.endsWith('.hive') || path.endsWith('.lock')) continue;
+            if (entity is File) await entity.delete();
+            if (entity is Directory) await entity.delete(recursive: true);
+          } catch (_) {}
+        }
+      }
+
+      // 4. 清除图片缓存
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+
+      // 5. 重新打开 StorageService（保留 Hive 文件）
+      await storageService.reopen();
+
+      // 6. 跳转到登录页
+      if (mounted) {
+        GoRouter.of(context).go('${RouteNames.root}${RouteNames.login}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('数据已清除'), duration: Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('清除数据失败: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isClearingData = false);
+    }
   }
 
   @override
@@ -222,6 +411,36 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 20),
+
+                // 清除缓存
+                ListTile(
+                  leading: const Icon(Icons.cleaning_services_outlined),
+                  title: const Text('清除缓存'),
+                  subtitle: Text(_cacheSize ?? '计算中...'),
+                  trailing: _isClearingCache
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.chevron_right),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  onTap: _isClearingCache ? null : _clearCache,
+                ),
+                const SizedBox(height: 10),
+
+                // 清除数据
+                ListTile(
+                  leading: const Icon(Icons.delete_forever, color: Colors.red),
+                  title: const Text('清除数据', style: TextStyle(color: Colors.red)),
+                  subtitle: const Text('删除所有本地数据，包括账号、聊天记录和设置'),
+                  trailing: _isClearingData
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.chevron_right, color: Colors.red),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  onTap: _isClearingData ? null : _clearData,
                 ),
                 const SizedBox(height: 20),
               ],

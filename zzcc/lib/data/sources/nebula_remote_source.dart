@@ -31,7 +31,8 @@ class NebulaRemoteSource {
   /// 获取所有图空间列表
   Future<List<GraphSpace>> listSpaces() async {
     try {
-      final resp = await _dio.get('/spaces');
+      _log.info('listSpaces: GET spaces baseUrl=${_dio.options.baseUrl}');
+      final resp = await _dio.get('spaces');
       _log.info('listSpaces resp: ${resp.statusCode} data=${resp.data}');
       final data = resp.data;
       if (data == null) { _log.warning('listSpaces: resp.data is null'); return []; }
@@ -59,7 +60,7 @@ class NebulaRemoteSource {
     String vidType = 'FIXED_STRING(64)',
   }) async {
     try {
-      await _dio.post('/spaces', data: {
+      await _dio.post('spaces', data: {
         'name': name,
         'partition_num': partitionNum,
         'replica_factor': replicaFactor,
@@ -75,7 +76,7 @@ class NebulaRemoteSource {
   /// 删除图空间
   Future<bool> dropSpace(String name) async {
     try {
-      await _dio.delete('/spaces/$name');
+      await _dio.delete('spaces/$name');
       return true;
     } on DioException catch (e) {
       _log.warning('dropSpace failed: ${e.message}');
@@ -88,7 +89,7 @@ class NebulaRemoteSource {
   /// 获取当前空间的 tag 列表
   Future<List<GraphTag>> listTags(String space) async {
     try {
-      final resp = await _dio.get('/tags', queryParameters: {'space': space});
+      final resp = await _dio.get('tags', queryParameters: {'space': space});
       final data = resp.data;
       return (data['data']['tags'] as List<dynamic>?)
               ?.map((t) => GraphTag.fromJson(t as Map<String, dynamic>))
@@ -107,7 +108,7 @@ class NebulaRemoteSource {
     List<Map<String, String>> properties = const [],
   }) async {
     try {
-      await _dio.post('/tags', data: {
+      await _dio.post('tags', data: {
         'space': space,
         'tag': tag,
         'properties': properties,
@@ -122,7 +123,7 @@ class NebulaRemoteSource {
   /// 删除 tag
   Future<bool> dropTag(String space, String tag) async {
     try {
-      await _dio.delete('/tags', data: {'space': space, 'tag': tag});
+      await _dio.delete('tags', data: {'space': space, 'tag': tag});
       return true;
     } on DioException catch (e) {
       _log.warning('dropTag failed: ${e.message}');
@@ -136,7 +137,7 @@ class NebulaRemoteSource {
   Future<List<GraphEdgeType>> listEdgeTypes(String space) async {
     try {
       final resp =
-          await _dio.get('/edge-types', queryParameters: {'space': space});
+          await _dio.get('edge-types', queryParameters: {'space': space});
       final data = resp.data;
       return (data['data']['edge_types'] as List<dynamic>?)
               ?.map((e) => GraphEdgeType.fromJson(e as Map<String, dynamic>))
@@ -155,7 +156,7 @@ class NebulaRemoteSource {
     List<Map<String, String>> properties = const [],
   }) async {
     try {
-      await _dio.post('/edge-types', data: {
+      await _dio.post('edge-types', data: {
         'space': space,
         'edge': edge,
         'properties': properties,
@@ -170,7 +171,7 @@ class NebulaRemoteSource {
   /// 删除 edge type
   Future<bool> dropEdgeType(String space, String edge) async {
     try {
-      await _dio.delete('/edge-types', data: {'space': space, 'edge': edge});
+      await _dio.delete('edge-types', data: {'space': space, 'edge': edge});
       return true;
     } on DioException catch (e) {
       _log.warning('dropEdgeType failed: ${e.message}');
@@ -184,7 +185,7 @@ class NebulaRemoteSource {
   Future<GraphVertex?> getVertex(String space, String vid) async {
     try {
       final resp =
-          await _dio.get('/vertices/$vid', queryParameters: {'space': space});
+          await _dio.get('vertices/$vid', queryParameters: {'space': space});
       if (resp.data['ok'] == true && resp.data['data'] != null) {
         return GraphVertex.fromJson(resp.data['data']);
       }
@@ -203,7 +204,7 @@ class NebulaRemoteSource {
     Map<String, dynamic> props = const {},
   }) async {
     try {
-      await _dio.post('/vertices', data: {
+      await _dio.post('vertices', data: {
         'space': space,
         'tag': tag,
         'vid': vid,
@@ -224,7 +225,7 @@ class NebulaRemoteSource {
     Map<String, dynamic> props = const {},
   }) async {
     try {
-      await _dio.patch('/vertices/$vid', data: {
+      await _dio.patch('vertices/$vid', data: {
         'space': space,
         'tag': tag,
         'props': props,
@@ -240,7 +241,7 @@ class NebulaRemoteSource {
   Future<bool> deleteVertex(String space, String vid,
       {bool withEdges = true}) async {
     try {
-      await _dio.delete('/vertices', data: {
+      await _dio.delete('vertices', data: {
         'space': space,
         'vid': vid,
         'with_edges': withEdges,
@@ -262,7 +263,7 @@ class NebulaRemoteSource {
     required String dst,
   }) async {
     try {
-      final resp = await _dio.get('/edges', queryParameters: {
+      final resp = await _dio.get('edges', queryParameters: {
         'space': space,
         'edge': edge,
         'src': src,
@@ -287,7 +288,7 @@ class NebulaRemoteSource {
     Map<String, dynamic> props = const {},
   }) async {
     try {
-      await _dio.post('/edges', data: {
+      await _dio.post('edges', data: {
         'space': space,
         'edge': edge,
         'src': src,
@@ -309,7 +310,7 @@ class NebulaRemoteSource {
     required String dst,
   }) async {
     try {
-      await _dio.delete('/edges', data: {
+      await _dio.delete('edges', data: {
         'space': space,
         'edge': edge,
         'src': src,
@@ -327,7 +328,7 @@ class NebulaRemoteSource {
   /// 执行 nGQL 查询，返回原始数据（供图谱渲染用）
   Future<Map<String, dynamic>?> executeQuery(String space, String nGQL) async {
     try {
-      final resp = await _dio.get('/query', queryParameters: {
+      final resp = await _dio.get('query', queryParameters: {
         'space': space,
         'q': nGQL,
       });
@@ -356,7 +357,7 @@ class NebulaRemoteSource {
         'tag': tag,
         'file': MultipartFile.fromBytes(bytes, filename: 'vertices.csv'),
       });
-      await _dio.post('/import/csv/vertices', data: formData);
+      await _dio.post('import/csv/vertices', data: formData);
       return true;
     } on DioException catch (e) {
       _log.warning('importCsvVertices failed: ${e.message}');
@@ -377,7 +378,7 @@ class NebulaRemoteSource {
         'edge': edge,
         'file': MultipartFile.fromBytes(bytes, filename: 'edges.csv'),
       });
-      await _dio.post('/import/csv/edges', data: formData);
+      await _dio.post('import/csv/edges', data: formData);
       return true;
     } on DioException catch (e) {
       _log.warning('importCsvEdges failed: ${e.message}');
@@ -469,11 +470,13 @@ class NebulaRemoteSource {
 
   // ── Health Check ───────────────────────────────────────
 
-  /// 检查后端服务是否在线
+  /// 检查后端服务是否在线（/health 在根路径，不在 /api/v1/ 下）
   Future<bool> isServerHealthy() async {
     try {
+      final base = _dio.options.baseUrl;
+      final healthUrl = base.replaceFirst(RegExp(r'/api/v1/?$'), '/health');
       final resp = await _dio.get(
-        'http://124.223.47.167:8001/health',
+        healthUrl,
         options: Options(validateStatus: (_) => true),
       );
       return resp.statusCode == 200;

@@ -10,6 +10,7 @@ import 'package:zzcc/core/services/storage_service.dart';
 import 'package:path/path.dart' as path;
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:go_router/go_router.dart';
+import 'package:zzcc/data/repositories/chat_repository.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
   final Function(File?) onAvatarChanged;
@@ -218,6 +219,84 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     );
   }
 
+  void _handleDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('注销账号'),
+        content: const Text(
+          '注销后你的账号将从服务器永久删除，所有聊天记录和好友关系将无法恢复。\n\n'
+          '此操作不可撤销，请三思。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('确认注销'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // 二次确认
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.of(context);
+    final doubleConfirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('再次确认'),
+        content: const Text('确定要永久删除你的账号吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('永久删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (doubleConfirmed != true) return;
+
+    // 执行注销
+    if (!mounted) return;
+    final chatRepo = getIt<ChatRepository>();
+    final storageService = getIt<StorageService>();
+
+    try {
+      await chatRepo.deleteAccount(erase: true);
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('注销失败: $e')),
+      );
+      return;
+    }
+
+    // 清除本地数据
+    storageService.clearCurrentUser();
+    ref.read(userProvider.notifier).logoutUser();
+
+    if (!mounted) return;
+    router.go('${RouteNames.root}${RouteNames.login}');
+    messenger.showSnackBar(
+      const SnackBar(content: Text('账号已注销')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // final user = ref.watch(userProvider);
@@ -404,6 +483,13 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           onTap: () {
             // 可以添加修改密码的导航
           },
+        ),
+        const Divider(height: 1),
+        ListTile(
+          title: const Text('注销账号'),
+          leading: const Icon(Icons.dangerous, color: Colors.red),
+          textColor: Colors.red,
+          onTap: _handleDeleteAccount,
         ),
         const Divider(height: 1),
         ListTile(

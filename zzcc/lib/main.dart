@@ -3,6 +3,7 @@ import 'package:zzcc/core/di/service_locator.dart';
 import 'package:zzcc/core/routes/app_router.dart';
 import 'package:zzcc/core/theme/theme_manager.dart';
 import 'package:zzcc/core/services/logger_service.dart';
+import 'package:logging/logging.dart' show Logger, Level;
 import 'package:zzcc/core/services/config_service.dart';
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/data/repositories/chat_repository.dart';
@@ -74,6 +75,26 @@ void main() async {
 
   final logger = getIt<LoggerService>();
   await logger.init();
+
+  // Bridge dart `logging` package to LoggerService so that ChatRepository /
+  // ChatRemoteSource logs are visible in the console and log file.
+  Logger.root.level = Level.ALL;
+  Logger.root.onRecord.listen((record) {
+    final msg = '[${record.loggerName}] ${record.message}';
+    switch (record.level) {
+      case Level.SEVERE:
+        logger.error(msg);
+        break;
+      case Level.WARNING:
+        logger.warning(msg);
+        break;
+      case Level.INFO:
+        logger.info(msg);
+        break;
+      default:
+        logger.debug(msg);
+    }
+  });
 
   final configService = getIt<ConfigService>();
   final storageService = getIt<StorageService>();

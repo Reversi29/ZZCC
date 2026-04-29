@@ -99,7 +99,7 @@ class ChatRemoteSource {
     try {
       _log.info('Registering user with server: $username');
       final response = await _dio.post(
-        '/chat/register',
+        'chat/register',
         data: {
           'username': username,
           'password': password,
@@ -107,8 +107,14 @@ class ChatRemoteSource {
         },
       );
       
+      _log.info('register: statusCode=${response.statusCode}');
+      _log.info('register: response.data=${response.data}');
       final data = response.data['data'] as Map<String, dynamic>;
+      _log.info('register: data keys=${data.keys}');
+      _log.info('register: data[access_token]=${data['access_token']}');
+      _log.info('register: data[user_id]=${data['user_id']}');
       final user = ChatUser.fromAuthResponse(data);
+      _log.info('register: user.accessToken=${user.accessToken} user.userId=${user.userId}');
       setAccessToken(user.accessToken);
       await _config.saveChatAuth(
         accessToken: user.accessToken,
@@ -117,9 +123,16 @@ class ChatRemoteSource {
       );
       _log.info('Server registered: ${user.userId}');
       return user;
-    } on DioException {
+    } on DioException catch (e) {
       // Network error — caller handles fallback
-      _log.warning('Server register failed (network), will use local UID');
+      _log.warning('Server register failed (network): type=${e.type} msg=${e.message}');
+      _log.warning('  uri=${e.requestOptions.uri} baseUrl=${e.requestOptions.baseUrl}');
+      if (e.response != null) {
+        _log.warning('  statusCode=${e.response!.statusCode} data=${e.response!.data}');
+      }
+      if (e.error != null) {
+        _log.warning('  inner error=${e.error}');
+      }
       return null;
     } catch (e) {
       // Business/auth error — propagate so caller knows
@@ -138,7 +151,7 @@ class ChatRemoteSource {
     try {
       _log.info('Logging in with server: $username');
       final response = await _dio.post(
-        '/chat/login',
+        'chat/login',
         data: {
           'username': username,
           'password': password,
@@ -177,9 +190,33 @@ class ChatRemoteSource {
     
     try {
       _log.info('Logging out');
-      await _dio.post('/chat/logout', options: Options(headers: _headers()));
+      await _dio.post('chat/logout', options: Options(headers: _headers()));
     } catch (e) {
       _log.warning('Logout error (ignored): $e');
+    } finally {
+      setAccessToken(null);
+      await _config.clearChatAuth();
+    }
+  }
+
+  /// Permanently delete (deactivate + erase) the user's account on the server.
+  /// Set [erase=true] to also remove all user data (not reversible).
+  /// Always clears local credentials afterward.
+  Future<void> deleteAccount({bool erase = false}) async {
+    final token = _accessToken;
+    if (token == null) return;
+
+    try {
+      _log.info('deleteAccount: erase=$erase');
+      await _dio.post(
+        'chat/delete-account',
+        data: {'erase': erase},
+        options: Options(headers: _headers()),
+      );
+      _log.info('deleteAccount: success');
+    } on DioException catch (e) {
+      _log.warning('deleteAccount failed: ${e.message}');
+      rethrow;
     } finally {
       setAccessToken(null);
       await _config.clearChatAuth();
@@ -197,7 +234,7 @@ class ChatRemoteSource {
     try {
       _log.info('Syncing local account to server: $localUid');
       final response = await _dio.post(
-        '/chat/sync-account',
+        'chat/sync-account',
         data: {
           'local_uid': localUid,
           'password': password,
@@ -236,7 +273,7 @@ class ChatRemoteSource {
   /// Get user profile
   Future<Map<String, dynamic>> getProfile(String userId) async {
     try {
-      final response = await _dio.get('/chat/profile/$userId');
+      final response = await _dio.get('chat/profile/$userId');
       return response.data['data'] as Map<String, dynamic>;
     } catch (e) {
       _handleError(e, 'getProfile');
@@ -251,7 +288,7 @@ class ChatRemoteSource {
     
     try {
       await _dio.put(
-        '/chat/profile/displayname',
+        'chat/profile/displayname',
         data: {'display_name': displayName},
         options: Options(headers: _headers()),
       );
@@ -267,24 +304,27 @@ class ChatRemoteSource {
   /// Get joined rooms
   Future<List<ChatRoom>> getRooms() async {
     if (!isAuthenticated) {
+      _log.warning('getRooms: NOT authenticated, _accessToken=${_accessToken != null ? "present(${_accessToken!.substring(0,8)}...)" : "null"}');
       throw ChatApiException('Not authenticated');
     }
     
     try {
-      _log.fine('Fetching rooms');
+      _log.info('getRooms: GET chat/rooms token=${_accessToken!.substring(0,10)}...');
       final response = await _dio.get(
-        '/chat/rooms',
+        'chat/rooms',
         options: Options(headers: _headers()),
       );
       
+      _log.info('getRooms: resp status=${response.statusCode} data=${response.data}');
       final data = response.data['data'] as Map<String, dynamic>;
       final rooms = (data['rooms'] as List<dynamic>)
           .map((r) => ChatRoom.fromMatrixResponse(r as Map<String, dynamic>))
           .toList();
       
-      _log.fine('Fetched ${rooms.length} rooms');
+      _log.info('getRooms: ${rooms.length} rooms');
       return rooms;
     } catch (e) {
+      _log.warning('getRooms FAILED: $e');
       _handleError(e, 'getRooms');
     }
   }
@@ -303,7 +343,7 @@ class ChatRemoteSource {
     try {
       _log.info('Creating room: $name');
       final response = await _dio.post(
-        '/chat/rooms',
+        'chat/rooms',
         data: {
           if (name != null) 'name': name,
           if (topic != null) 'topic': topic,
@@ -332,7 +372,7 @@ class ChatRemoteSource {
     try {
       _log.info('Joining room: $roomIdOrAlias');
       await _dio.post(
-        '/chat/rooms/$roomIdOrAlias/join',
+        'chat/rooms/$roomIdOrAlias/join',
         options: Options(headers: _headers()),
       );
       
@@ -352,7 +392,7 @@ class ChatRemoteSource {
     try {
       _log.info('Leaving room: $roomId');
       await _dio.post(
-        '/chat/rooms/$roomId/leave',
+        'chat/rooms/$roomId/leave',
         options: Options(headers: _headers()),
       );
     } catch (e) {
@@ -387,7 +427,7 @@ class ChatRemoteSource {
     try {
       _log.fine('Fetching messages for $roomId');
       final response = await _dio.get(
-        '/chat/rooms/$roomId/messages',
+        'chat/rooms/$roomId/messages',
         queryParameters: {
           'limit': limit,
           if (fromToken != null) 'from_token': fromToken,
@@ -416,7 +456,7 @@ class ChatRemoteSource {
     try {
       _log.info('Sending message to $roomId');
       final response = await _dio.post(
-        '/chat/rooms/$roomId/messages',
+        'chat/rooms/$roomId/messages',
         data: {'body': body},
         options: Options(headers: _headers()),
       );
@@ -449,7 +489,7 @@ class ChatRemoteSource {
     try {
       _log.fine('Syncing (since: ${since?.substring(0, since.length > 20 ? 20 : since.length)}...)');
       final response = await _dio.get(
-        '/chat/sync',
+        'chat/sync',
         queryParameters: {
           if (since != null) 'since': since,
           'timeout': timeout,

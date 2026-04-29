@@ -1,0 +1,77 @@
+name: streaming-stack
+
+services:
+  # SRS 推流服务器
+  srs:
+    image: ossrs/srs:5
+    container_name: srs-server
+    restart: unless-stopped
+    ports:
+      - "${SRS_RTMP_PORT:-1935}:1935"      # RTMP 推流
+      - "${SRS_HTTP_PORT:-8080}:8080"      # HTTP API / HLS 拉流
+      - "${SRS_HTTPS_PORT:-443}:443"       # HTTPS
+      - "${SRS_SRT_PORT:-10080}:10080"     # SRT 低延迟
+      - "${SRS_WEBRTC_PORT:-1985}:1985"    # WebRTC
+    volumes:
+      - ./conf/srs.conf:/usr/local/srs/conf/srs.conf:ro
+      - ./data/srs/recordings:/usr/local/srs/recordings
+      - ./logs/srs:/usr/local/srs/logs
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/versions"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - streaming-net
+
+  # SRS 控制台（可选）
+  srs-console:
+    image: ossrs/srs-console:latest
+    container_name: srs-console
+    restart: unless-stopped
+    ports:
+      - "${SRS_CONSOLE_PORT:-8081}:8080"
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - SRS_API_URL=http://srs:8080
+    depends_on:
+      srs:
+        condition: service_healthy
+    networks:
+      - streaming-net
+
+  # FFmpeg 转码服务（可选，按需启动）
+  # 用于实时转码、水印添加等
+  ffmpeg:
+    image: linuxserver/ffmpeg:latest
+    container_name: ffmpeg-worker
+    restart: "no"  # 按需启动
+    profiles:
+      - transcode
+    volumes:
+      - ./data/videos:/data/videos:ro
+      - ./data/transcoded:/data/transcoded
+      - ./scripts:/scripts:ro
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - PUID=1000
+      - PGID=1000
+    networks:
+      - streaming-net
+    command: ["tail", "-f", "/dev/null"]  # 保持运行，手动执行转码命令
+
+networks:
+  streaming-net:
+    driver: bridge
+    name: streaming-net
+
+# 使用 bind mount，数据持久化在本地目录 data/ 和 logs/
+# 如需 docker volume，可在服务 volumes 部分替换为：
+#   - srs-recordings:/usr/local/srs/recordings
+# 然后取消注释以下定义：
+# volumes:
+#   srs-recordings:
+#     driver: local

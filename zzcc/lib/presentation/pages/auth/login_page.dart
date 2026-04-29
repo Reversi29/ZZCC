@@ -25,6 +25,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   late ConfigService configService;
   bool _isLoading = false;
   bool _obscurePassword = true;
+  List<Map<String, dynamic>> _accounts = [];
   
   @override
   void initState() {
@@ -32,6 +33,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     accountController = TextEditingController();
     passwordController = TextEditingController();
     configService = getIt<ConfigService>();
+    _loadAccounts();
+  }
+
+  Future<void> _loadAccounts() async {
+    final storageService = getIt<StorageService>();
+    try {
+      await storageService.init(configService.appDataPath);
+      final accounts = await storageService.listAllAccounts();
+      if (mounted) setState(() => _accounts = accounts);
+    } catch (_) {}
   }
   
   @override
@@ -98,9 +109,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           color: Colors.grey,
                         ),
                       ),
-                      const SizedBox(height: 30),
-                      
-                      // 邮箱输入框
+
+                      const SizedBox(height: 20),
+
+                      // 账号输入框
                       TextField(
                         controller: accountController,
                         decoration: InputDecoration(
@@ -113,7 +125,45 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           filled: true,
                           fillColor: Colors.grey[100],
                           contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                          suffixIcon: _accounts.isEmpty
+                              ? null
+                              : PopupMenuButton<String>(
+                                  icon: const Icon(Icons.arrow_drop_down, color: Colors.grey),
+                                  tooltip: '选择本地账号',
+                                  onSelected: (uid) {
+                                    setState(() {
+                                      accountController.text = uid;
+                                      passwordController.clear();
+                                    });
+                                  },
+                                  itemBuilder: (context) => _accounts.map((acc) {
+                                    final uid = acc['uid'] as String;
+                                    final name = acc['name'] as String? ?? uid;
+                                    return PopupMenuItem<String>(
+                                      value: uid,
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.person, size: 18, color: Color(0xFF4361EE)),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(name, style: const TextStyle(fontWeight: FontWeight.w500)),
+                                                Text(uid, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
                         ),
+                        onSubmitted: (_) {
+                          FocusScope.of(context).nextFocus();
+                        },
                       ),
                       const SizedBox(height: 20),
                       

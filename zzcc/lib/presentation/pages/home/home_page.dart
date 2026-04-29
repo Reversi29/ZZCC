@@ -1,6 +1,5 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart' show PointerSignalEvent, PointerScrollEvent;
+import 'package:flutter/services.dart';
 import 'package:zzcc/presentation/pages/home/widgets/resizable_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/weather_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/todo_widget.dart';
@@ -20,13 +19,108 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   late final List<WidgetItem> _widgets = _initWidgets();
   final List<WidgetItem> _stashBox = [];
-  bool _showStashBox = false;
+
+  // Backup for cancel/restore functionality
+  List<WidgetItem>? _backupWidgets;
+  List<WidgetItem>? _backupStashBox;
+
+  // Edit mode toggle (default: false = view mode)
+  bool _isEditMode = false;
+
+  // Stash box only visible in edit mode
+  bool get _showStashBox => _isEditMode;
   final GlobalKey _stashBoxKey = GlobalKey();
-  // Scroll controllers so we can manually route pointer scroll events
-  // to the appropriate axis (vertical or horizontal).
-  final ScrollController _hScrollController = ScrollController();
-  final ScrollController _vScrollController = ScrollController();
-  bool _isPanning = false;
+  bool _isDraggingOverStashBox = false;
+  // Transformation controller for infinite canvas panning
+  final TransformationController _transformationController = TransformationController();
+  // Minimap: cache last known viewport rect
+  Rect? _lastViewportRect;
+  bool _minimapLoopActive = true;
+
+  // View mode (default): pan/zoom only, click widget triggers function
+  // Edit mode: drag widgets, resize, box select, stash box visible
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateMinimapViewport());
+  }
+
+
+  void _updateMinimapViewport() {
+    if (!_minimapLoopActive) return;
+    try {
+      final size = MediaQuery.of(context).size;
+      final matrix = _transformationController.value;
+      final scale = matrix.getMaxScaleOnAxis();
+      final tx = matrix.getTranslation().x;
+      final ty = matrix.getTranslation().y;
+      if (_lastViewportRect != null) {
+        final v = _lastViewportRect!;
+        final same = (v.left.abs() - (-tx/scale).abs()) < 0.5 &&
+                     (v.top.abs()  - (-ty/scale).abs()) < 0.5 &&
+                     (v.width  - (size.width/scale)).abs() < 1.0 &&
+                     (v.height - (size.height/scale)).abs() < 1.0;
+        if (same) { WidgetsBinding.instance.addPostFrameCallback((_) => _updateMinimapViewport()); return; }
+      }
+      _lastViewportRect = Rect.fromLTWH(-tx/scale, -ty/scale, size.width/scale, size.height/scale);
+      if (mounted) setState(() {});
+    } catch (_) { /* context may be unavailable during hot reload */ }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateMinimapViewport());
+  }
+
+  // Multi-selection state
+  final Set<Key> _selectedWidgetKeys = {};
+  bool _isSelecting = false;
+  Offset? _selectionStart;
+  Offset? _selectionEnd;
+
+  // Multi-drag state
+  final Map<Key, Offset> _dragStartPositions = {};
+
+  // Pointer state for Listener (edit mode)
+  Offset? _pointerDownPos;
+  bool _isPointerDragging = false;
+  bool _pointerDownOnWidget = false; // Track if initial click was on a widget
+
+  // Minimap state
+  final GlobalKey _canvasKey = GlobalKey();
+
+  // Compute bounding box of all widgets
+  Rect _computeWidgetsBounds() {
+    if (_widgets.isEmpty) return Rect.zero;
+    
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = double.negativeInfinity;
+    double maxY = double.negativeInfinity;
+    
+    for (final widget in _widgets) {
+      minX = minX < widget.position.dx ? minX : widget.position.dx;
+      minY = minY < widget.position.dy ? minY : widget.position.dy;
+      final right = widget.position.dx + widget.size.width;
+      final bottom = widget.position.dy + widget.size.height;
+      maxX = maxX > right ? maxX : right;
+      maxY = maxY > bottom ? maxY : bottom;
+    }
+    
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  Rect? _computeViewportRect() {
+    final size = MediaQuery.of(context).size;
+    final matrix = _transformationController.value;
+    final translation = matrix.getTranslation();
+    final scale = matrix.getMaxScaleOnAxis();
+    final rect = Rect.fromLTWH(
+      -translation.x / scale, -translation.y / scale,
+      size.width / scale, size.height / scale,
+    );
+    debugPrint('[Minimap] viewport: left=${rect.left} top=${rect.top} w=${rect.width} h=${rect.height} scale=$scale');
+    return rect;
+  }
+
+
 
   List<WidgetItem> _initWidgets() {
     return [
@@ -168,33 +262,25 @@ class _HomePageState extends State<HomePage> {
   }
 
   Size _computeCanvasSize(BuildContext context) {
-    final viewSize = MediaQuery.of(context).size;
-    const basePadding = 2000.0; // generous base area to simulate an "infinite" canvas
-    const edgePadding = 800.0;  // extra margin beyond farthest widget
-    double maxX = viewSize.width + basePadding;
-    double maxY = viewSize.height + basePadding;
-    for (final w in _widgets) {
-      maxX = math.max(maxX, w.position.dx + w.size.width + edgePadding);
-      maxY = math.max(maxY, w.position.dy + w.size.height + edgePadding);
-    }
-    return Size(maxX, maxY);
+    const canvasExtent = 10000.0; // large fixed canvas size for infinite feel
+    return const Size(canvasExtent, canvasExtent);
   }
 
   @override
   void dispose() {
-    _hScrollController.dispose();
-    _vScrollController.dispose();
+    _minimapLoopActive = false;
+    _transformationController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: _buildToolbar(),
       body: Row(
         children: [
           Expanded(
             child: MouseRegion(
-              onEnter: (_) => setState(() => _showStashBox = false),
               child: DragTarget<WidgetType>(
                 onAcceptWithDetails: (details) {
                   final renderBox = context.findRenderObject() as RenderBox;
@@ -203,98 +289,103 @@ class _HomePageState extends State<HomePage> {
                 },
                 builder: (context, candidateData, rejectedData) {
                   final canvasSize = _computeCanvasSize(context);
-                  return MouseRegion(
-                    cursor: _isPanning ? SystemMouseCursors.grabbing : SystemMouseCursors.grab,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onPanStart: (_) => setState(() => _isPanning = true),
-                      onPanCancel: () => setState(() => _isPanning = false),
-                      onPanEnd: (_) => setState(() => _isPanning = false),
-                      onPanUpdate: (details) {
-                        // Drag to pan the canvas
-                        try {
-                          if (_hScrollController.hasClients) {
-                            final newOffset = (_hScrollController.offset - details.delta.dx)
-                                .clamp(_hScrollController.position.minScrollExtent, _hScrollController.position.maxScrollExtent);
-                            _hScrollController.jumpTo(newOffset);
-                          }
-                          if (_vScrollController.hasClients) {
-                            final newOffset = (_vScrollController.offset - details.delta.dy)
-                                .clamp(_vScrollController.position.minScrollExtent, _vScrollController.position.maxScrollExtent);
-                            _vScrollController.jumpTo(newOffset);
-                          }
-                        } catch (_) {}
-                      },
-                      child: Listener(
-                      onPointerSignal: (PointerSignalEvent event) {
-                        if (event is PointerScrollEvent) {
-                          try {
-                            final dx = event.scrollDelta.dx;
-                            final dy = event.scrollDelta.dy;
+                  final canvasContent = SizedBox(
+                    width: canvasSize.width,
+                    height: canvasSize.height,
+                    child: Stack(
+                      key: _canvasKey,
+                      clipBehavior: Clip.none,
+                      children: [
+                        // Widgets
+                        ..._widgets.map((item) {
+                          return ResizableWidget(
+                            key: item.key,
+                            isEditMode: _isEditMode,
+                            position: item.position,
+                            size: item.size,
+                            minSize: item.minSize,
+                            onStash: () => _handleStashWidget(item),
+                            onBringToFront: () => _bringToFront(item),
+                            stashBoxKey: _stashBoxKey,
+                            isStashBoxExpanded: _showStashBox,
+                            onPositionChanged: (pos) => _updateWidgetPosition(item.key, pos),
+                            onSizeChanged: (sz) => _updateWidgetSize(item.key, sz),
+                            isSelected: _selectedWidgetKeys.contains(item.key),
+                            onSelect: (addToSelection) => _handleWidgetSelect(item, addToSelection),
+                            onDeselect: () => _handleWidgetDeselect(item),
+                            onMultiDragStart: () => _handleMultiDragStart(item),
+                            onMultiDragUpdate: (delta) => _handleMultiDragUpdate(delta),
+                            onStashBoxHoverChanged: (isOver) => setState(() => _isDraggingOverStashBox = isOver),
+                            child: _buildWidgetByType(item.type),
+                          );
+                        }),
+                        // Minimap overlay - inside canvas Stack, bottom-left
+                        Positioned(
+                          left: 16,
+                          bottom: 16,
+                          child: _buildMinimap(),
+                        ),
+                      ],
+                    ),
+                  );
 
-                            if (dx != 0 && _hScrollController.hasClients) {
-                              final newOffset = (_hScrollController.offset + dx)
-                                  .clamp(_hScrollController.position.minScrollExtent, _hScrollController.position.maxScrollExtent);
-                              _hScrollController.jumpTo(newOffset);
-                            }
+                  // In edit mode, wrap with GestureDetector at viewport level
+                  // so it covers areas outside the canvas bounds when translated
+                  final viewer = InteractiveViewer(
+                    transformationController: _transformationController,
+                    boundaryMargin: const EdgeInsets.all(double.infinity),
+                    minScale: 0.1,
+                    maxScale: 4.0,
+                    constrained: false,
+                    panEnabled: !_isEditMode, // View mode: built-in pan; Edit mode: manual via Listener
+                    scaleEnabled: true, // Scale works with Listener - they don't conflict
+                    child: canvasContent,
+                  );
 
-                            if (dy != 0 && _vScrollController.hasClients) {
-                              final newOffset = (_vScrollController.offset + dy)
-                                  .clamp(_vScrollController.position.minScrollExtent, _vScrollController.position.maxScrollExtent);
-                              _vScrollController.jumpTo(newOffset);
-                            }
-                          } catch (_) {}
-                        }
-                      },
-                        child: SingleChildScrollView(
-                          controller: _hScrollController,
-                          scrollDirection: Axis.horizontal,
-                          child: SingleChildScrollView(
-                            controller: _vScrollController,
-                            scrollDirection: Axis.vertical,
-                            child: SizedBox(
-                              // Canvas expands to fit all widgets while keeping at least viewport size.
-                              width: canvasSize.width,
-                              height: canvasSize.height,
-                              child: Stack(
-                                children: _widgets.map((item) {
-                                  return ResizableWidget(
-                                    key: item.key,
-                                    position: item.position,
-                                    size: item.size,
-                                    minSize: item.minSize,
-                                    onStash: () => _handleStashWidget(item),
-                                    onBringToFront: () => _bringToFront(item),
-                                    stashBoxKey: _stashBoxKey,
-                                    isStashBoxExpanded: _showStashBox,
-                                    onPositionChanged: (pos) => _updateWidgetPosition(item.key, pos),
-                                    onSizeChanged: (sz) => _updateWidgetSize(item.key, sz),
-                                    child: _buildWidgetByType(item.type),
-                                  );
-                                }).toList(),
-                              ),
+                  return Stack(
+                    children: [
+                      Positioned.fill(
+                        child: _isEditMode
+                            ? Listener(
+                                behavior: HitTestBehavior.translucent,
+                                onPointerDown: _handlePointerDown,
+                                onPointerMove: _handlePointerMove,
+                                onPointerUp: _handlePointerUp,
+                                child: viewer,
+                              )
+                            : viewer,
+                      ),
+                      // Selection rectangle - drawn at viewport level
+                      if (_isEditMode && _isSelecting && _selectionStart != null && _selectionEnd != null)
+                        Positioned.fromRect(
+                          rect: Rect.fromPoints(_selectionStart!, _selectionEnd!),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withValues(alpha: 0.2),
+                              border: Border.all(color: Colors.blue, width: 1),
                             ),
                           ),
                         ),
-                      ),
-                    ),
+                    ],
                   );
                 },
               ),
             ),
           ),
-          MouseRegion(
-            onEnter: (_) => setState(() => _showStashBox = true),
-            onExit: (_) => setState(() => _showStashBox = false),
-            child: AnimatedContainer(
+          // Stash box - only shown in edit mode
+          if (_showStashBox)
+            AnimatedContainer(
               key: _stashBoxKey,
               duration: const Duration(milliseconds: 300),
-              width: _showStashBox ? 120 : 20,
+              width: 120,
               decoration: BoxDecoration(
-                color: Colors.grey[200],
-                border: Border(left: BorderSide(color: Colors.grey.shade300)),
+                color: _isDraggingOverStashBox ? Colors.lightBlue[100] : Colors.grey[200],
+                border: Border(left: BorderSide(
+                  color: _isDraggingOverStashBox ? Colors.lightBlue : Colors.grey.shade300,
+                  width: _isDraggingOverStashBox ? 2 : 1,
+                )),
               ),
-              child: _showStashBox ? Column(
+              child: Column(
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(8.0),
@@ -344,7 +435,7 @@ class _HomePageState extends State<HomePage> {
                     child: _stashBox.isEmpty
                         ? Center(
                             child: Text(
-                              '拖拽组件到这里收纳',
+                              _isDraggingOverStashBox ? '松开即可收纳' : '拖拽组件到这里收纳',
                               style: TextStyle(
                                 color: Colors.grey[500],
                                 fontSize: 12,
@@ -416,23 +507,393 @@ class _HomePageState extends State<HomePage> {
                           ),
                   ),
                 ],
-              ) : Center(
-                child: RotatedBox(
-                  quarterTurns: 1,
-                  child: Text(
-                    '收纳盒',
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
               ),
-            ),
           ),
         ],
       ),
     );
+  }
+
+  // Minimap widget
+  Widget _buildMinimap() {
+    final bounds = _computeWidgetsBounds();
+    final viewportRect = _computeViewportRect();
+
+    debugPrint('[Minimap] bounds=${bounds.left},${bounds.top},${bounds.width},${bounds.height} viewport=$viewportRect');
+
+    if (bounds.isEmpty || viewportRect == null) {
+      debugPrint('[Minimap] -> empty (bounds.isEmpty=${bounds.isEmpty} viewportRect=null)');
+      return const SizedBox.shrink();
+    }
+
+    // Check if viewport contains all widgets
+    final containsAll = viewportRect.contains(bounds.topLeft) && viewportRect.contains(bounds.bottomRight);
+    debugPrint('[Minimap] containsAll=$containsAll (viewport ${viewportRect.left},${viewportRect.top} ${viewportRect.width}x${viewportRect.height} vs bounds ${bounds.width}x${bounds.height})');
+    if (containsAll) {
+      debugPrint('[Minimap] -> shrink (viewport contains all widgets)');
+      return const SizedBox.shrink();
+    }
+    
+    const minimapSize = 150.0;
+    const padding = 20.0;
+    
+    // Compute scale to fit bounds + padding in minimap
+    final contentWidth = bounds.width + padding * 2;
+    final contentHeight = bounds.height + padding * 2;
+    final scaleX = minimapSize / contentWidth;
+    final scaleY = minimapSize / contentHeight;
+    final scale = scaleX < scaleY ? scaleX : scaleY;
+    
+    // Minimap origin (top-left of content area in minimap coords)
+    final originX = padding * scale - bounds.left * scale;
+    final originY = padding * scale - bounds.top * scale;
+    
+    return Container(
+      width: minimapSize,
+      height: minimapSize,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: CustomPaint(
+          size: const Size(minimapSize, minimapSize),
+          painter: MinimapPainter(
+            widgets: _widgets,
+            viewportRect: viewportRect,
+            scale: scale,
+            origin: Offset(originX, originY),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Toolbar
+  PreferredSizeWidget _buildToolbar() {
+    return AppBar(
+      title: const Text('工作台'),
+      backgroundColor: Colors.white,
+      foregroundColor: Colors.black,
+      elevation: 1,
+      actions: _isEditMode
+          ? [
+              // Save button (edit mode): save layout + exit edit mode
+              TextButton.icon(
+                onPressed: _saveLayout,
+                icon: const Icon(Icons.save),
+                label: const Text('保存'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.blue,
+                ),
+              ),
+              // Exit button (edit mode): restore backup + exit edit mode
+              TextButton.icon(
+                onPressed: _cancelEdit,
+                icon: const Icon(Icons.close),
+                label: const Text('退出'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.grey,
+                ),
+              ),
+              const SizedBox(width: 8),
+            ]
+          : [
+              // Edit button (view mode): backup current state + enter edit mode
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    // Backup current state before entering edit mode
+                    _backupWidgets = _widgets.map((w) => WidgetItem(
+                      key: w.key,
+                      type: w.type,
+                      position: w.position,
+                      size: w.size,
+                      minSize: w.minSize,
+                    )).toList();
+                    _backupStashBox = _stashBox.map((w) => WidgetItem(
+                      key: w.key,
+                      type: w.type,
+                      position: w.position,
+                      size: w.size,
+                      minSize: w.minSize,
+                    )).toList();
+                    _isEditMode = true;
+                  });
+                },
+                icon: const Icon(Icons.edit),
+                label: const Text('编辑'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.blue,
+                ),
+              ),
+              const SizedBox(width: 16),
+            ],
+    );
+  }
+
+  // Selection handlers
+  void _handleWidgetSelect(WidgetItem item, bool addToSelection) {
+    setState(() {
+      if (addToSelection) {
+        _selectedWidgetKeys.add(item.key);
+      } else {
+        _selectedWidgetKeys.clear();
+        _selectedWidgetKeys.add(item.key);
+      }
+    });
+  }
+
+  void _handleWidgetDeselect(WidgetItem item) {
+    setState(() {
+      _selectedWidgetKeys.remove(item.key);
+    });
+  }
+
+  void _saveLayout() {
+    // Clear backup since we're saving
+    _backupWidgets = null;
+    _backupStashBox = null;
+    
+    // Exit edit mode
+    setState(() {
+      _isEditMode = false;
+      _selectedWidgetKeys.clear();
+    });
+    
+    // TODO: Implement actual persistence
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('布局已保存')),
+    );
+  }
+
+  void _cancelEdit() {
+    // Restore backup if available
+    if (_backupWidgets != null) {
+      _widgets.clear();
+      for (final w in _backupWidgets!) {
+        _widgets.add(WidgetItem(
+          key: w.key,
+          type: w.type,
+          position: w.position,
+          size: w.size,
+          minSize: w.minSize,
+        ));
+      }
+    }
+    if (_backupStashBox != null) {
+      _stashBox.clear();
+      for (final w in _backupStashBox!) {
+        _stashBox.add(WidgetItem(
+          key: w.key,
+          type: w.type,
+          position: w.position,
+          size: w.size,
+          minSize: w.minSize,
+        ));
+      }
+    }
+    
+    // Clear backup
+    _backupWidgets = null;
+    _backupStashBox = null;
+    
+    // Exit edit mode
+    setState(() {
+      _isEditMode = false;
+      _selectedWidgetKeys.clear();
+    });
+  }
+
+  // Canvas gesture handlers
+  // Left-click drag: pan canvas
+  // Ctrl + drag: box select (add to selection)
+  // Shift + drag: box deselect (remove from selection)
+
+  // Canvas gesture handlers (Listener - raw pointer events)
+  // Listener receives events BEFORE gesture detection, and events propagate to children automatically.
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (!_isEditMode) return;
+    _pointerDownPos = event.localPosition;
+    _isPointerDragging = false;
+    
+    // Convert viewport position to canvas position
+    final matrix = _transformationController.value;
+    final inverseMatrix = Matrix4.inverted(matrix);
+    final canvasPos = MatrixUtils.transformPoint(inverseMatrix, event.localPosition);
+    
+    // Check if pointer is on a widget
+    _pointerDownOnWidget = false;
+    for (final item in _widgets) {
+      final widgetRect = Rect.fromLTWH(
+        item.position.dx,
+        item.position.dy,
+        item.size.width,
+        item.size.height,
+      );
+      if (widgetRect.contains(canvasPos)) {
+        _pointerDownOnWidget = true;
+        debugPrint('[PointerDown] On widget: ${item.key}');
+        break;
+      }
+    }
+    debugPrint('[PointerDown] viewportPos=${event.localPosition}, canvasPos=$canvasPos, onWidget=$_pointerDownOnWidget');
+  }
+
+  void _handlePointerMove(PointerEvent event) {
+    if (!_isEditMode || _pointerDownPos == null) return;
+    
+    // If pointer started on a widget, let ResizableWidget handle it entirely
+    if (_pointerDownOnWidget) {
+      return;
+    }
+
+    // Check if this is a drag (moved more than threshold)
+    if (!_isPointerDragging) {
+      final delta = event.localPosition - _pointerDownPos!;
+      if (delta.distance > 5) {
+        _isPointerDragging = true;
+        debugPrint('[PointerMove] Canvas drag started');
+      }
+    }
+    
+    if (!_isPointerDragging) return;
+
+    // Handle canvas pan (not on any widget)
+    final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
+    final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+
+    if (_isSelecting) {
+      setState(() {
+        _selectionEnd = event.localPosition;
+      });
+    } else if (isCtrlPressed || isShiftPressed) {
+      // Start selection
+      setState(() {
+        _isSelecting = true;
+        _selectionStart = _pointerDownPos;
+        _selectionEnd = event.localPosition;
+      });
+    } else {
+      // Pan canvas using delta
+      final matrix = _transformationController.value.clone();
+      final translation = matrix.getTranslation();
+      matrix.setTranslationRaw(
+        translation.x + event.delta.dx,
+        translation.y + event.delta.dy,
+        translation.z,
+      );
+      _transformationController.value = matrix;
+    }
+  }
+
+  void _handlePointerUp(PointerEvent event) {
+    if (!_isEditMode) return;
+    
+    debugPrint('[PointerUp] pos=${event.localPosition}, isDragging=$_isPointerDragging, pointerDownPos=$_pointerDownPos');
+    
+    // If this was a tap (not drag) on empty space, deselect all
+    if (!_isPointerDragging && _pointerDownPos != null) {
+      final matrix = _transformationController.value;
+      final inverseMatrix = Matrix4.inverted(matrix);
+      final canvasPos = MatrixUtils.transformPoint(inverseMatrix, _pointerDownPos!);
+      
+      bool clickedOnWidget = false;
+      for (final item in _widgets) {
+        final widgetRect = Rect.fromLTWH(
+          item.position.dx,
+          item.position.dy,
+          item.size.width,
+          item.size.height,
+        );
+        if (widgetRect.contains(canvasPos)) {
+          clickedOnWidget = true;
+          debugPrint('[PointerUp] Click was on widget: ${item.key}');
+          break;
+        }
+      }
+      
+      if (!clickedOnWidget) {
+        debugPrint('[PointerUp] Click on empty space - deselecting all');
+        setState(() {
+          _selectedWidgetKeys.clear();
+        });
+      }
+    }
+
+    // Handle selection end
+    if (_isSelecting && _selectionStart != null && _selectionEnd != null) {
+      final matrix = _transformationController.value;
+      final inverseMatrix = Matrix4.inverted(matrix);
+      final canvasStart = MatrixUtils.transformPoint(inverseMatrix, _selectionStart!);
+      final canvasEnd = MatrixUtils.transformPoint(inverseMatrix, _selectionEnd!);
+      final selectionRect = Rect.fromPoints(canvasStart, canvasEnd);
+      final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+
+      setState(() {
+        for (final widget in _widgets) {
+          final widgetRect = Rect.fromLTWH(
+            widget.position.dx,
+            widget.position.dy,
+            widget.size.width,
+            widget.size.height,
+          );
+          if (selectionRect.overlaps(widgetRect)) {
+            if (isShiftPressed) {
+              _selectedWidgetKeys.remove(widget.key);
+            } else {
+              _selectedWidgetKeys.add(widget.key);
+            }
+          }
+        }
+        _isSelecting = false;
+        _selectionStart = null;
+        _selectionEnd = null;
+      });
+    }
+
+    _pointerDownPos = null;
+    _isPointerDragging = false;
+    _pointerDownOnWidget = false;
+  }
+
+  // Multi-drag handlers
+  void _handleMultiDragStart(WidgetItem draggedItem) {
+    _dragStartPositions.clear();
+    for (final key in _selectedWidgetKeys) {
+      final widget = _widgets.firstWhere((w) => w.key == key);
+      _dragStartPositions[key] = widget.position;
+    }
+  }
+
+  void _handleMultiDragUpdate(Offset delta) {
+    setState(() {
+      for (final entry in _dragStartPositions.entries) {
+        final key = entry.key;
+        final startPos = entry.value;
+        final newPos = startPos + delta;
+        
+        final idx = _widgets.indexWhere((w) => w.key == key);
+        if (idx != -1) {
+          final w = _widgets[idx];
+          _widgets[idx] = w.copyWith(position: newPos);
+        }
+      }
+      // Update stored positions for next delta
+      for (final key in _dragStartPositions.keys.toList()) {
+        final widget = _widgets.firstWhere((w) => w.key == key);
+        _dragStartPositions[key] = widget.position;
+      }
+    });
   }
 
   String _getWidgetName(WidgetType type) {
@@ -488,4 +949,64 @@ class WidgetItem {
 
 enum WidgetType {
   weather, todo, network, deviceStatus, location, calendar, hardwareDetails
+}
+
+// Minimap painter
+class MinimapPainter extends CustomPainter {
+  final List<WidgetItem> widgets;
+  final Rect viewportRect;
+  final double scale;
+  final Offset origin;
+
+  MinimapPainter({
+    required this.widgets,
+    required this.viewportRect,
+    required this.scale,
+    required this.origin,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Draw background
+    final bgPaint = Paint()..color = Colors.grey.shade100;
+    canvas.drawRect(Offset.zero & size, bgPaint);
+
+    // Draw widgets
+    final widgetPaint = Paint()..color = Colors.blue.shade300;
+    for (final widget in widgets) {
+      final rect = Rect.fromLTWH(
+        origin.dx + widget.position.dx * scale,
+        origin.dy + widget.position.dy * scale,
+        widget.size.width * scale,
+        widget.size.height * scale,
+      );
+      canvas.drawRect(rect, widgetPaint);
+    }
+
+    // Draw viewport indicator
+    final viewportPaint = Paint()
+      ..color = Colors.red.withValues(alpha: 0.3)
+      ..style = PaintingStyle.fill;
+    final viewportBorderPaint = Paint()
+      ..color = Colors.red
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    final viewportRectLocal = Rect.fromLTWH(
+      origin.dx + viewportRect.left * scale,
+      origin.dy + viewportRect.top * scale,
+      viewportRect.width * scale,
+      viewportRect.height * scale,
+    );
+    canvas.drawRect(viewportRectLocal, viewportPaint);
+    canvas.drawRect(viewportRectLocal, viewportBorderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant MinimapPainter oldDelegate) {
+    return oldDelegate.widgets != widgets ||
+        oldDelegate.viewportRect != viewportRect ||
+        oldDelegate.scale != scale ||
+        oldDelegate.origin != origin;
+  }
 }
