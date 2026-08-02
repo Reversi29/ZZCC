@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZZCC OA 系统</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #242836; --border: #2e3347;
+    --accent: #5b8dee; --accent2: #7c6af5; --green: #34d399; --yellow: #fbbf24;
+    --red: #f87171; --text: #e2e8f0; --text2: #94a3b8; --text3: #64748b; --radius: 10px;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  a { color: var(--accent); text-decoration: none; }
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; height: 56px; gap: 24px; position: sticky; top: 0; z-index: 100; }
+  .header-logo { font-weight: 700; font-size: 18px; display: flex; align-items: center; gap: 8px; }
+  .header-logo span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .header-nav { display: flex; gap: 4px; flex: 1; overflow-x: auto; scrollbar-width: none; }
+  .header-nav::-webkit-scrollbar { display: none; }
+  .nav-btn { padding: 6px 14px; border-radius: 6px; cursor: pointer; border: none; background: transparent; color: var(--text2); font-size: 14px; font-weight: 500; white-space: nowrap; transition: all 0.15s; }
+  .nav-btn:hover { background: var(--surface2); color: var(--text); }
+  .nav-btn.active { background: var(--accent); color: #fff; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .status-dot.offline { background: var(--red); }
+  .main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+  .card-title { font-size: 14px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .card-title .emoji { font-size: 16px; }
+  .module-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .module-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 8px; }
+  .module-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .module-card .m-emoji { font-size: 28px; }
+  .module-card .m-name { font-weight: 600; font-size: 15px; }
+  .module-card .m-count { font-size: 12px; color: var(--text3); }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-grid .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 4px; font-weight: 500; }
+  input, textarea, select { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border 0.15s; }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 70px; }
+  select { cursor: pointer; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: 500; font-family: inherit; transition: all 0.15s; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--accent); }
+  .btn-danger { background: #3b1a1a; color: var(--red); border: 1px solid #5c2d2d; }
+  .btn-danger:hover { background: #4a2020; }
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .table-wrap { overflow-x: auto; margin-top: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--text3); font-weight: 500; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: #0d3324; color: var(--green); }
+  .badge-yellow { background: #3a2d0a; color: var(--yellow); }
+  .badge-red { background: #3b1a1a; color: var(--red); }
+  .badge-blue { background: #1a2d4a; color: var(--accent); }
+  .actions { display: flex; gap: 4px; }
+  .actions button { background: transparent; border: 1px solid var(--border); color: var(--text2); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .actions button:hover { border-color: var(--accent); color: var(--text); }
+  .empty { text-align: center; padding: 40px; color: var(--text3); font-size: 14px; }
+  .empty-emoji { font-size: 48px; margin-bottom: 12px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
+  .tab { padding: 8px 16px; cursor: pointer; border: none; background: transparent; color: var(--text2); font-size: 14px; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .stat .v { font-size: 24px; font-weight: 700; color: var(--text); }
+  .stat .l { font-size: 12px; color: var(--text3); margin-top: 4px; }
+  .ai-result { background: var(--bg); border-radius: 6px; padding: 12px; margin-top: 12px; font-size: 13px; line-height: 1.6; }
+  .ai-result .risk-flag { color: var(--red); font-weight: 600; }
+  .ai-result .ok { color: var(--green); }
+  .ai-result .warn { color: var(--yellow); }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-size: 13px; z-index: 1000; display: none; animation: slideIn 0.2s; }
+  .toast.show { display: block; }
+  .toast.success { border-color: var(--green); }
+  .toast.error { border-color: var(--red); }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  /* subtable editor */
+  .subtable { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-top: 8px; }
+  .subtable-row { display: grid; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border); align-items: center; }
+  .subtable-row.head { background: var(--surface2); font-size: 12px; color: var(--text3); font-weight: 500; }
+  .subtable-row input { padding: 6px 8px; font-size: 13px; }
+  .subtable-row .del { background: #3b1a1a; border: 1px solid #5c2d2d; color: var(--red); cursor: pointer; border-radius: 4px; padding: 4px; width: auto; }
+  @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+
+  /* ── 审批工作流 ── */
+  .wf-section { margin-bottom: 20px; }
+  .wf-section-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface2); border-radius: 8px; font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+  .wf-count { background: #f59e0b; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+  .wf-total { margin-left: auto; color: var(--accent); font-size: 15px; }
+  .wf-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--surface2); border-radius: 8px; margin-bottom: 6px; border: 1px solid transparent; transition: border-color .15s; }
+  .wf-item:hover { border-color: var(--border); }
+  .wf-item-main { flex: 1; min-width: 0; }
+  .wf-item-title { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-item-meta { font-size: 12px; color: var(--text3); margin-top: 3px; }
+  .wf-item-amount { font-size: 15px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+  .wf-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .wf-action-btn { border: none; color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 13px; cursor: pointer; font-weight: 500; transition: opacity .15s; }
+  .wf-action-btn:hover { opacity: 0.85; }
+  .wf-tabs { border-bottom: 1px solid var(--border); padding-bottom: 0; }
+  .tab-btn { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text3); padding: 8px 16px; cursor: pointer; font-size: 14px; font-weight: 500; }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .wf-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .wf-stats-card { background: var(--surface2); border-radius: 10px; padding: 16px; }
+  .wf-stats-title { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .wf-stats-total { font-size: 12px; color: var(--text3); margin-bottom: 10px; }
+  .wf-stats-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .wf-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .wf-stats-cnt { margin-left: auto; font-weight: 600; color: var(--text3); }
+  /* 单据详情 */
+  .wf-doc-detail { background: var(--surface2); border-radius: 10px; padding: 20px; }
+  .wf-doc-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .wf-doc-name { font-size: 18px; font-weight: 700; }
+  .wf-doc-status { color: #fff; border-radius: 20px; padding: 3px 12px; font-size: 13px; font-weight: 600; }
+  .wf-doc-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .wf-doc-field { background: var(--surface); border-radius: 6px; padding: 8px 12px; }
+  .wf-doc-key { display: block; font-size: 11px; color: var(--text3); margin-bottom: 3px; text-transform: uppercase; }
+  .wf-doc-val { font-size: 14px; font-weight: 500; }
+  .wf-doc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .btn-detail { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+  .btn-cancel { background: var(--surface); border: 1px solid var(--border); color: var(--text3); border-radius: 6px; padding: 8px 20px; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo"><span>ZZCC</span> OA</div>
+  <div class="header-nav" id="nav"></div>
+  <div class="header-right">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText" style="font-size:13px;color:var(--text2)">连接中...</span>
+  </div>
+</div>
+
+<div class="main" id="main"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = 'http://localhost:8000';
+const API_KEY = 'zzcc_oadev_key_2024';
+
+// URL 编码含空格的 doctype（ERPNext 约定）
+const enc = (s) => encodeURIComponent(s);
+
+const MODULES = [
+  { id: 'dashboard',   name: '总览',     emoji: '🏠' },
+  { id: 'crm',         name: 'CRM',      emoji: '👥', doctype: 'Lead' },
+  { id: 'project',     name: '项目运营',  emoji: '📋', doctype: 'Project' },
+  { id: 'procurement', name: '采购',     emoji: '🛒', doctype: 'Purchase Order' },
+  { id: 'finance',     name: '财务',     emoji: '💰' },
+  { id: 'compliance',  name: '法务合规',  emoji: '⚖️',  doctype: 'Contract' },
+  { id: 'quality',     name: '质量测试',  emoji: '🔍', doctype: 'Quality Inspection' },
+  { id: 'customer',    name: '客服',     emoji: '🎧', doctype: 'Support Ticket' },
+  { id: 'hr',          name: '人力资源',  emoji: '👔', doctype: 'Employee' },
+  { id: 'stock',       name: '资产行政',  emoji: '📦', doctype: 'Item' },
+  { id: 'ai',          name: 'AI 咨询',  emoji: '🤖' },
+  { id: 'workflow',    name: '审批',     emoji: '📝' },
+];
+
+let currentModule = 'dashboard';
+
+// ── 字段配置（与后端模型对齐）─────────────────────────────────
+const FIELDS = {
+  'Lead': [
+    { k: 'lead_name', l: '客户名称' }, { k: 'company_name', l: '公司' },
+    { k: 'email_id', l: '邮箱' }, { k: 'phone', l: '电话' },
+    { k: 'source', l: '来源', type: 'select', opts: ['官网','展会','推荐','广告','其他'] },
+    { k: 'lead_status', l: '状态', type: 'select', opts: ['New','Contacted','Qualified','Converted','Lost'] },
+  ],
+  'Project': [
+    { k: 'project_name', l: '项目名称' },
+    { k: 'status', l: '状态', type: 'select', opts: ['Open','Completed','Cancelled','On Hold'] },
+    { k: 'priority', l: '优先级', type: 'select', opts: ['Low','Medium','High','Urgent'] },
+    { k: 'percent_complete', l: '进度%', type: 'number' },
+    { k: 'start_date', l: '开始日期', type: 'date' },
+    { k: 'end_date', l: '结束日期', type: 'date' },
+    { k: 'notes', l: '备注', type: 'textarea' },
+  ],
+  'Contract': [
+    { k: 'contract_name', l: '合同名称' }, { k: 'party_a', l: '甲方' },
+    { k: 'party_b', l: '乙方' }, { k: 'contract_value', l: '合同金额', type: 'number' },
+    { k: 'start_date', l: '开始日期', type: 'date' }, { k: 'end_date', l: '结束日期', type: 'date' },
+    { k: 'terms', l: '条款', type: 'textarea' },
+  ],
+  'Quality Inspection': [
+    { k: 'inspection_type', l: '类型', type: 'select', opts: ['Incoming','Outgoing','In Process','Final Inspection'] },
+    { k: 'item_code', l: '物料编码' }, { k: 'batch_no', l: '批次号' },
+    { k: 'acceptance_criteria', l: '验收标准', type: 'textarea' },
+  ],
+  'Support Ticket': [
+    { k: 'subject', l: '主题' }, { k: 'ticket_type', l: '类型', type: 'select', opts: ['Bug','Feature Request','Support','Question'] },
+    { k: 'priority', l: '优先级', type: 'select', opts: ['Low','Medium','High','Urgent'] },
+    { k: 'status', l: '状态', type: 'select', opts: ['Open','Closed','Pending','Resolved'] },
+    { k: 'description', l: '描述', type: 'textarea' },
+  ],
+  'Employee': [
+    { k: 'employee_name', l: '姓名' }, { k: 'designation', l: '职位' },
+    { k: 'department', l: '部门', type: 'select', opts: ['研发','运营','商务','财务','行政','法务'] },
+    { k: 'email', l: '邮箱' }, { k: 'phone', l: '电话' },
+    { k: 'employment_type', l: '雇佣类型', type: 'select', opts: ['Full-time','Part-time','Intern','Contract'] },
+  ],
+  // 财务
+  'Account': [
+    { k: 'account_name', l: '账户名称' },
+    { k: 'account_type', l: '类型', type: 'select', opts: ['Asset','Liability','Equity','Income','Expense'] },
+    { k: 'root_type', l: '根类型', type: 'select', opts: ['Asset','Liability','Equity','Income','Expense'] },
+    { k: 'balance', l: '期初余额', type: 'number' },
+  ],
+  'Journal Entry': [
+    { k: 'title', l: '摘要' }, { k: 'posting_date', l: '记账日期', type: 'date' },
+    { k: 'remark', l: '备注', type: 'textarea' },
+    { k: '__accounts', l: '分录（借贷）', type: 'subtable', cols: [
+      { k: 'account', l: '科目', w: 2 }, { k: 'debit', l: '借', w: 1, t: 'number' },
+      { k: 'credit', l: '贷', w: 1, t: 'number' } ] },
+  ],
+  'Payment Entry': [
+    { k: 'payment_type', l: '类型', type: 'select', opts: ['Receive','Pay'] },
+    { k: 'party_type', l: '对方类型', type: 'select', opts: ['Customer','Supplier','Employee'] },
+    { k: 'party', l: '对方' }, { k: 'paid_amount', l: '金额', type: 'number' },
+    { k: 'mode_of_payment', l: '方式', type: 'select', opts: ['银行转账','现金','支票','支付宝','微信'] },
+    { k: 'reference_no', l: '单据号' }, { k: 'reference_date', l: '单据日期', type: 'date' },
+  ],
+  'Expense Claim': [
+    { k: 'employee', l: '报销人' }, { k: 'expense_type', l: '类型', type: 'select', opts: ['Travel','Meals','Office','Supplies','Entertainment','Other'] },
+    { k: 'claim_amount', l: '金额', type: 'number' }, { k: 'expense_date', l: '费用日期', type: 'date' },
+    { k: 'approval_status', l: '状态', type: 'select', opts: ['Draft','Submitted','Approved','Rejected','Paid'] },
+    { k: 'purpose', l: '用途说明', type: 'textarea' },
+  ],
+  // 采购
+  'Supplier': [
+    { k: 'supplier_name', l: '供应商名称' },
+    { k: 'supplier_group', l: '分组', type: 'select', opts: ['原材料','服务','设备','办公用品'] },
+    { k: 'supplier_type', l: '类型', type: 'select', opts: ['Company','Individual'] },
+    { k: 'tax_id', l: '税号' }, { k: 'website', l: '网址' }, { k: 'notes', l: '备注', type: 'textarea' },
+  ],
+  'Purchase Order': [
+    { k: 'supplier', l: '供应商' }, { k: 'schedule_date', l: '交期', type: 'date' },
+    { k: 'status', l: '状态', type: 'select', opts: ['Draft','Submitted','Ordered','Received','Cancelled'] },
+    { k: '__items', l: '采购明细', type: 'subtable', cols: [
+      { k: 'item_code', l: '物料', w: 2 }, { k: 'qty', l: '数量', w: 1, t: 'number' },
+      { k: 'rate', l: '单价', w: 1, t: 'number' } ] },
+  ],
+  // 资产行政
+  'Item': [
+    { k: 'item_code', l: '物料编码' }, { k: 'item_name', l: '物料名称' },
+    { k: 'item_group', l: '分组', type: 'select', opts: ['原材料','半成品','成品','消耗品','固定资产'] },
+    { k: 'stock_uom', l: '单位', type: 'select', opts: ['Nos','Kg','Set','Box','Meter'] },
+    { k: 'val_rate', l: '单价', type: 'number' }, { k: 'opening_stock', l: '期初库存', type: 'number' },
+  ],
+  'Stock Entry': [
+    { k: 'stock_entry_type', l: '类型', type: 'select', opts: ['Material Receipt','Material Issue','Material Transfer','Manufacture'] },
+    { k: 'from_warehouse', l: '调出仓库' }, { k: 'to_warehouse', l: '调入仓库' },
+    { k: '__items', l: '明细', type: 'subtable', cols: [
+      { k: 'item_code', l: '物料', w: 2 }, { k: 'qty', l: '数量', w: 1, t: 'number' } ] },
+  ],
+  'Asset': [
+    { k: 'asset_name', l: '资产名称' },
+    { k: 'asset_category', l: '类别', type: 'select', opts: ['电子设备','办公家具','车辆','生产设备','其他'] },
+    { k: 'purchase_date', l: '采购日期', type: 'date' }, { k: 'purchase_value', l: '原值', type: 'number' },
+    { k: 'custodian', l: '保管人' }, { k: 'location', l: '位置' },
+    { k: 'status', l: '状态', type: 'select', opts: ['Active','In Maintenance','Scrapped'] },
+  ],
+};
+
+// ── Utils ────────────────────────────────────────────────────
+// API doctype 路径映射（camelCase → 路由路径）
+const DOCTYPE_API = {
+  'ExpenseClaim':    'Expense Claim',
+  'PurchaseOrder':   'Purchase Order',
+  'JournalEntry':    'Journal Entry',
+  'QualityInspection': 'Quality Inspection',
+  'SupportTicket':   'Support Ticket',
+  'StockEntry':      'Stock Entry',
+};
+function toApiDoctype(dt) { return DOCTYPE_API[dt] || dt; }
+
+function toast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = `toast ${type} show`;
+  setTimeout(() => t.className = 'toast', 3000);
+}
+async function api(path, method='GET', body=null) {
+  const opts = { headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' } };
+  if (method !== 'GET') opts.method = method;
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || j.message || JSON.stringify(j));
+  return j;
+}
+async function apiGet(doctype) { const j = await api(`/api/resource/${enc(toApiDoctype(doctype))}`); return j.data?.data || []; }
+async function apiCreate(doctype, data) { return api(`/api/resource/${enc(toApiDoctype(doctype))}`, 'POST', data); }
+async function apiDelete(doctype, name) { return api(`/api/resource/${enc(toApiDoctype(doctype))}/${enc(name)}`, 'DELETE'); }
+function esc(s) { return s == null ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtMoney(n) { return (n==null?'0':Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})); }
+
+// ── Nav ──────────────────────────────────────────────────────
+function renderNav() {
+  document.getElementById('nav').innerHTML = MODULES.map(m =>
+    `<button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('${m.id}')">${m.emoji} ${m.name}</button>`
+  ).join('');
+}
+function navigate(id) { currentModule = id; renderNav(); render(); }
+
+// ── Render ───────────────────────────────────────────────────
+function render() {
+  const main = document.getElementById('main');
+  const map = { dashboard:renderDashboard, crm:renderSimple, project:renderSimple, procurement:renderProcurement,
+    finance:renderFinance, compliance:renderSimple, quality:renderSimple, customer:renderSimple,
+    hr:renderSimple, stock:renderStock, ai:renderAI, workflow:renderWorkflow };
+  (map[currentModule] || renderDashboard)(main);
+}
+
+// ── Dashboard ────────────────────────────────────────────────
+async function renderDashboard(el) {
+  el.innerHTML = `<div class="card"><div class="card-title">🏠 系统总览</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>`;
+  const doctypes = ['Lead','Project','Purchase Order','Journal Entry','Contract','Quality Inspection','Support Ticket','Employee','Item','Asset'];
+  const counts = {};
+  await Promise.all(doctypes.map(async d => { try { counts[d] = (await apiGet(d)).length; } catch { counts[d] = 0; } }));
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">🏠</span> 系统总览</div>
+      <div class="module-grid">
+        ${MODULES.filter(m=>m.doctype).map(m => `
+          <div class="module-card" onclick="navigate('${m.id}')">
+            <div class="m-emoji">${m.emoji}</div>
+            <div class="m-name">${m.name}</div>
+            <div class="m-count">${counts[m.doctype]||0} 条记录</div>
+          </div>`).join('')}
+      </div>
+      <p style="margin-top:16px;font-size:13px;color:var(--text3)">API 文档：<a href="http://localhost:8000/docs" target="_blank">/docs</a></p>
+    </div>`;
+}
+
+// ── 通用简单模块（CRM/项目/合规/质量/客服/HR）─────────────────
+async function renderSimple(el) {
+  const m = MODULES.find(x => x.id === currentModule);
+  const doctype = m.doctype;
+  el.innerHTML = `<div class="card"><div class="card-title">${m.emoji} ${doctype}</div><div class="empty">⏳ 加载中...</div></div>`;
+  let rows = [];
+  try { rows = await apiGet(doctype); } catch(e) { toast('加载失败: '+e.message, 'error'); }
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">${m.emoji}</span> ${doctype}（${rows.length}）</div>
+      ${renderForm(doctype, `createForm-${doctype}`)}
+      ${renderTable(doctype, rows, FIELDS[doctype])}
+    </div>`;
+}
+
+// ── 财务（多 Tab）─────────────────────────────────────────────
+async function renderFinance(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">💰</span> 财务中心</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="summary" onclick="switchFinTab('summary')">汇总</button>
+        <button class="tab" data-tab="account" onclick="switchFinTab('account')">账户</button>
+        <button class="tab" data-tab="je" onclick="switchFinTab('je')">日记账</button>
+        <button class="tab" data-tab="pe" onclick="switchFinTab('pe')">收付款</button>
+        <button class="tab" data-tab="claim" onclick="switchFinTab('claim')">报销</button>
+        <button class="tab" data-tab="invoice" onclick="switchFinTab('invoice')">发票分类</button>
+      </div>
+      <div id="finTabContent"></div>
+    </div>`;
+  await loadFinSummary();
+}
+async function switchFinTab(tab) {
+  document.querySelectorAll('#main .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const c = document.getElementById('finTabContent');
+  if (tab === 'summary') return loadFinSummary();
+  if (tab === 'invoice') return loadFinInvoice(c);
+  const dt = { account:'Account', je:'Journal Entry', pe:'Payment Entry', claim:'Expense Claim' }[tab];
+  const m = MODULES.find(x => x.id === 'finance');
+  c.innerHTML = `<div class="empty">⏳ 加载中...</div>`;
+  let rows = [];
+  try { rows = await apiGet(dt); } catch(e) { toast('加载失败: '+e.message, 'error'); }
+  c.innerHTML = renderForm(dt, `createForm-${dt}`) + renderTable(dt, rows, FIELDS[dt]);
+}
+async function loadFinSummary() {
+  const c = document.getElementById('finTabContent');
+  let s = {};
+  try { s = await api('/api/resource/finance_summary'); } catch(e) { toast('汇总失败: '+e.message, 'error'); }
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="v">${s.account_count||0}</div><div class="l">账户数</div></div>
+      <div class="stat"><div class="v">${s.journal_count||0}</div><div class="l">日记账笔数</div></div>
+      <div class="stat"><div class="v">¥${fmtMoney(s.total_debit)}</div><div class="l">借方合计</div></div>
+      <div class="stat"><div class="v">¥${fmtMoney(s.total_credit)}</div><div class="l">贷方合计</div></div>
+      <div class="stat"><div class="v" style="color:${s.balanced?'var(--green)':'var(--red)'}">${s.balanced?'✓平衡':'✗不平衡'}</div><div class="l">借贷状态</div></div>
+      <div class="stat"><div class="v" style="color:var(--yellow)">¥${fmtMoney(s.pending_claim_amount)}</div><div class="l">待审批报销(${s.pending_claims||0})</div></div>
+    </div>
+    <div class="card-title" style="margin-top:8px">账户余额</div>
+    ${(s.accounts||[]).map(a => `
+      <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span>${esc(a.account_name)}</span>
+        <span style="color:var(--text2)">${esc(a.account_type)} · ¥${fmtMoney(a.balance)}</span>
+      </div>`).join('') || '<div class="empty">暂无账户</div>'}
+  `;
+}
+function loadFinInvoice(c) {
+  c.innerHTML = `
+    <div class="form-grid">
+      <div><label>供应商</label><input id="fin-supplier" placeholder="如：腾讯云"></div>
+      <div><label>金额（元）</label><input id="fin-amount" type="number" placeholder="12500"></div>
+      <div class="full"><label>描述</label><input id="fin-desc" placeholder="云服务器3个月带宽费用"></div>
+    </div>
+    <div class="btn-group"><button class="btn btn-primary" onclick="runFinanceAI()">🔍 智能分类</button></div>
+    <div id="finResult"></div>`;
+}
+async function runFinanceAI() {
+  const supplier = document.getElementById('fin-supplier').value;
+  const amount = parseFloat(document.getElementById('fin-amount').value || 0);
+  const description = document.getElementById('fin-desc').value;
+  if (!description && !supplier) return toast('请输入描述或供应商', 'error');
+  try {
+    const res = await api('/api/resource/ai/classify_invoice', 'POST', { supplier, amount, description });
+    document.getElementById('finResult').innerHTML = `<div class="ai-result">
+      <div><span class="ok">✓</span> 分类：<strong>${res.category}</strong></div>
+      <div style="margin-top:6px;color:var(--text2)">方式：${res.method} | 金额：¥${fmtMoney(amount)}</div>
+      ${res.method==='unmatched' ? '<div class="risk-flag" style="margin-top:6px">⚠ 未能自动分类，请人工确认</div>' : ''}
+    </div>`;
+  } catch(e) { toast('分类失败: '+e.message, 'error'); }
+}
+
+// ── 采购（多 Tab）─────────────────────────────────────────────
+async function renderProcurement(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">🛒</span> 采购中心</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="po" onclick="switchProTab('po')">采购订单</button>
+        <button class="tab" data-tab="supplier" onclick="switchProTab('supplier')">供应商</button>
+        <button class="tab" data-tab="consult" onclick="switchProTab('consult')">AI 咨询</button>
+      </div>
+      <div id="proTabContent"></div>
+    </div>`;
+  await switchProTab('po');
+}
+async function switchProTab(tab) {
+  document.querySelectorAll('#main .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const c = document.getElementById('proTabContent');
+  if (tab === 'consult') return loadProConsult(c);
+  const dt = tab === 'po' ? 'Purchase Order' : 'Supplier';
+  c.innerHTML = `<div class="empty">⏳ 加载中...</div>`;
+  let rows = [];
+  try { rows = await apiGet(dt); } catch(e) { toast('加载失败: '+e.message, 'error'); }
+  c.innerHTML = renderForm(dt, `createForm-${dt}`) + renderTable(dt, rows, FIELDS[dt]);
+}
+function loadProConsult(c) {
+  c.innerHTML = `
+    <div class="form-grid">
+      <div><label>供应商</label><input id="po-supplier" placeholder="如：华星科技"></div>
+      <div><label>金额（元）</label><input id="po-amount" type="number" placeholder="90000"></div>
+      <div class="full"><label>采购明细/说明</label><input id="po-items" placeholder="笔记本电脑 独家供货 预付全款"></div>
+    </div>
+    <div class="btn-group"><button class="btn btn-primary" onclick="runProConsult()">⚡ AI 采购咨询</button></div>
+    <div id="poResult"></div>`;
+}
+async function runProConsult() {
+  const supplier = document.getElementById('po-supplier').value;
+  const amount = parseFloat(document.getElementById('po-amount').value || 0);
+  const items = document.getElementById('po-items').value;
+  try {
+    const res = await api('/api/resource/ai/po_consult', 'POST', { supplier, amount, items });
+    document.getElementById('poResult').innerHTML = `<div class="ai-result">
+      <div>${res.advice}</div>
+      ${res.risk_flags?.length ? `<div style="margin-top:8px">${res.risk_flags.map(r=>`<div class="risk-flag">⚠ ${r}</div>`).join('')}</div>` : ''}
+      ${res.suggestions?.length ? `<div style="margin-top:8px">${res.suggestions.map(s=>`<div class="ok">✓ ${s}</div>`).join('')}</div>` : ''}
+      <div style="margin-top:8px;color:var(--text3)">评分：${res.score}/100</div>
+    </div>`;
+  } catch(e) { toast('咨询失败: '+e.message, 'error'); }
+}
+
+// ── 资产行政（多 Tab）─────────────────────────────────────────
+async function renderStock(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">📦</span> 资产行政中心</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="item" onclick="switchStockTab('item')">物料</button>
+        <button class="tab" data-tab="se" onclick="switchStockTab('se')">库存流水</button>
+        <button class="tab" data-tab="asset" onclick="switchStockTab('asset')">固定资产</button>
+        <button class="tab" data-tab="summary" onclick="switchStockTab('summary')">库存汇总</button>
+        <button class="tab" data-tab="low" onclick="switchStockTab('low')">低库存预警</button>
+      </div>
+      <div id="stockTabContent"></div>
+    </div>`;
+  await switchStockTab('item');
+}
+async function switchStockTab(tab) {
+  document.querySelectorAll('#main .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const c = document.getElementById('stockTabContent');
+  if (tab === 'summary') return loadStockSummary(c);
+  if (tab === 'low') return loadLowStock(c);
+  const dt = { item:'Item', se:'Stock Entry', asset:'Asset' }[tab];
+  c.innerHTML = `<div class="empty">⏳ 加载中...</div>`;
+  let rows = [];
+  try { rows = await apiGet(dt); } catch(e) { toast('加载失败: '+e.message, 'error'); }
+  c.innerHTML = renderForm(dt, `createForm-${dt}`) + renderTable(dt, rows, FIELDS[dt]);
+}
+async function loadStockSummary(c) {
+  let s = {};
+  try { s = await api('/api/resource/stock_summary'); } catch(e) { toast('汇总失败: '+e.message, 'error'); }
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="v">${s.item_count||0}</div><div class="l">物料种类</div></div>
+      <div class="stat"><div class="v">¥${fmtMoney(s.total_stock_value)}</div><div class="l">库存总值</div></div>
+      <div class="stat"><div class="v">${s.stock_entry_count||0}</div><div class="l">流水笔数</div></div>
+      <div class="stat"><div class="v">${s.asset_count||0}</div><div class="l">固定资产</div></div>
+    </div>
+    <div class="card-title" style="margin-top:8px">库存明细</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>物料编码</th><th>名称</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
+      <tbody>${(s.items||[]).map(r => `<tr><td>${esc(r.item_code)}</td><td>${esc(r.item_name)}</td><td>${r.qty}</td><td>¥${fmtMoney(r.val_rate)}</td><td>¥${fmtMoney(r.value)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">暂无数据</td></tr>'}</tbody>
+    </table></div>`;
+}
+async function loadLowStock(c) {
+  let r = { warnings: [] };
+  try { r = await api('/api/resource/low_stock'); } catch(e) { toast('查询失败: '+e.message, 'error'); }
+  if (!r.warnings.length) {
+    c.innerHTML = `<div class="ai-result"><span class="ok">✓</span> 库存充足，无低库存预警</div>`;
+    return;
+  }
+  c.innerHTML = `<div class="card-title" style="margin-top:8px">⚠ ${r.count} 项预警</div>` +
+    r.warnings.map(w => `<div class="ai-result">
+      <div class="${w.severity==='critical'?'risk-flag':'warn'}">
+        ${w.severity==='critical'?'🔴 缺货':'🟡 偏低'} ${esc(w.item_name)} (${esc(w.item_code)})
+      </div>
+      <div style="margin-top:4px;color:var(--text2)">当前库存：${w.qty} | 安全库存：${w.reorder_level}</div>
+    </div>`).join('');
+}
+
+// ── 通用表单 + 子表 ───────────────────────────────────────────
+function renderForm(doctype, formId) {
+  const fields = FIELDS[doctype] || [];
+  const subtables = {};
+  const html = fields.map(f => {
+    if (f.type === 'subtable') {
+      subtables[f.k] = f.cols;
+      return `<div class="full"><label>${f.l}</label><div class="subtable" id="sub-${f.k}">
+        <div class="subtable-row head" style="grid-template-columns:${f.cols.map(c=>c.w+'fr').join(' ')}">
+          ${f.cols.map(c=>`<span>${c.l}</span>`).join('')}<span></span>
+        </div></div>
+        <button type="button" class="btn btn-secondary" style="margin-top:8px" onclick="addSubRow('sub-${f.k}', ${JSON.stringify(f.cols).replace(/"/g,'&quot;')})">＋ 添加行</button></div>`;
+    }
+    if (f.type === 'select') return `<div><label>${f.l}</label><select name="${f.k}"><option value="">—</option>${f.opts.map(o=>`<option>${o}</option>`).join('')}</select></div>`;
+    if (f.type === 'textarea') return `<div class="full"><label>${f.l}</label><textarea name="${f.k}" placeholder="${f.l}"></textarea></div>`;
+    return `<div><label>${f.l}</label><input name="${f.k}" type="${f.t||'text'}" placeholder="${f.l}"></div>`;
+  }).join('');
+  return `<form id="${formId}" onsubmit="createDoc(event, '${doctype}')"><div class="form-grid">${html}</div>
+    <div class="btn-group"><button type="submit" class="btn btn-primary">＋ 新建</button></div></form>`;
+}
+function addSubRow(id, cols) {
+  const box = document.getElementById(id);
+  const row = document.createElement('div');
+  row.className = 'subtable-row';
+  row.style.gridTemplateColumns = cols.map(c=>c.w+'fr').join(' ');
+  row.innerHTML = cols.map(c => `<input data-k="${c.k}" type="${c.t||'text'}" placeholder="${c.l}">`).join('') +
+    `<button type="button" class="del" onclick="this.parentNode.remove()">✕</button>`;
+  box.appendChild(row);
+}
+function collectSubtable(id) {
+  const rows = [...document.getElementById(id).querySelectorAll('.subtable-row:not(.head)')];
+  return rows.map(r => {
+    const obj = {};
+    r.querySelectorAll('input[data-k]').forEach(inp => {
+      const v = inp.value;
+      obj[inp.dataset.k] = (inp.type === 'number' && v) ? parseFloat(v) : v;
+    });
+    return obj;
+  }).filter(o => Object.values(o).some(v => v !== '' && v != null));
+}
+async function createDoc(e, doctype) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = {};
+  fd.forEach((v, k) => { if (v) data[k] = v; });
+  // 子表收集
+  (FIELDS[doctype]||[]).forEach(f => { if (f.type === 'subtable') data[f.k] = collectSubtable('sub-' + f.k); });
+  try {
+    await apiCreate(doctype, data);
+    toast(`${doctype} 创建成功！`);
+    render();
+  } catch(err) { toast('创建失败: ' + err.message, 'error'); }
+}
+async function deleteDoc(doctype, name) {
+  if (!confirm(`确认删除 ${name}？`)) return;
+  try { await apiDelete(doctype, name); toast('已删除'); render(); }
+  catch(err) { toast('删除失败: ' + err.message, 'error'); }
+}
+
+// ── 通用表格 ──────────────────────────────────────────────────
+function renderTable(doctype, rows, fields) {
+  if (!rows.length) return `<div class="empty"><div class="empty-emoji">📭</div>暂无数据，创建一个吧</div>`;
+  const cols = (fields || []).filter(f => f.type !== 'subtable').slice(0, 6);
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>#</th>${cols.map(c=>`<th>${c.l}</th>`).join('')}<th>操作</th></tr></thead>
+    <tbody>${rows.map((item, i) => `<tr>
+      <td style="color:var(--text3);font-size:12px">${i+1}</td>
+      ${cols.map(c => `<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(item[c.k])}">${esc(item[c.k])}</td>`).join('')}
+      <td class="actions"><button onclick="deleteDoc('${doctype}','${esc(item.name)}')">删除</button></td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+// ── AI 模块 ───────────────────────────────────────────────────
+const AI_MODULES = [
+  { id:'procurement', name:'采购咨询', emoji:'🛒', desc:'价格合理性 / 供应商风险 / 交期', fields:[{k:'amount',l:'金额',t:'number'},{k:'supplier',l:'供应商'},{k:'items',l:'明细',t:'textarea'}] },
+  { id:'finance', name:'财务咨询', emoji:'💰', desc:'发票合规 / 报销规范', fields:[{k:'amount',l:'金额',t:'number'},{k:'category',l:'分类'},{k:'description',l:'描述',t:'textarea'}] },
+  { id:'compliance', name:'合规咨询', emoji:'⚖️', desc:'合同风险 / 条款评估', fields:[{k:'content',l:'内容',t:'textarea'},{k:'type',l:'类型',t:'select',opts:['合同','政策','流程','监管']}] },
+  { id:'project', name:'项目咨询', emoji:'📋', desc:'进度风险 / 资源', fields:[{k:'progress',l:'进度%',t:'number'},{k:'status',l:'状态'},{k:'days_since_start',l:'启动天数',t:'number'},{k:'assigned_count',l:'人数',t:'number'}] },
+  { id:'crm', name:'CRM咨询', emoji:'👥', desc:'线索评分 / 跟进', fields:[{k:'score',l:'评分',t:'number'},{k:'level',l:'等级'}] },
+];
+let aiHistory = [];
+
+// ── 审批工作流 ─────────────────────────────────────────────────
+async function renderWorkflow(el) {
+  el.innerHTML = `<div class="module-header"><h2>📝 审批工作流</h2></div>
+    <div class="wf-tabs" style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="tab-btn active" onclick="switchWfTab('pending',this)">待审批</button>
+      <button class="tab-btn" onclick="switchWfTab('stats',this)">统计</button>
+      <button class="tab-btn" onclick="switchWfTab('mine',this)">我的单据</button>
+    </div>
+    <div id="wf-content">Loading...</div>`;
+
+  await switchWfTab('pending');
+}
+
+let wfCache = { pending: [], stats: {} };
+
+async function switchWfTab(tab, btn) {
+  document.querySelectorAll('.wf-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  else document.querySelector('.wf-tabs .tab-btn')?.classList.add('active');
+  const c = document.getElementById('wf-content');
+  if (tab === 'pending') {
+    c.innerHTML = '<div class="loading">加载中...</div>';
+    const d = await api('/api/workflow/pending');
+    wfCache.pending = d.pending || [];
+    if (!wfCache.pending.length) {
+      c.innerHTML = '<div class="empty"><div class="empty-emoji">🎉</div>暂无待审批事项</div>';
+      return;
+    }
+    // 按 doctype 分组
+    const groups = {};
+    for (const p of wfCache.pending) {
+      if (!groups[p.doctype]) groups[p.doctype] = [];
+      groups[p.doctype].push(p);
+    }
+    const DOCTYPE_LABELS = {
+      ExpenseClaim: '💰 费用报销', PurchaseOrder: '🛒 采购订单',
+      JournalEntry: '📒 记账凭证',
+    };
+    let html = '';
+    for (const [dt, items] of Object.entries(groups)) {
+      const dtTotal = items.reduce((s, p) => s + (p.amount || 0), 0);
+      html += `<div class="wf-section">
+        <div class="wf-section-header">
+          <span>${DOCTYPE_LABELS[dt] || dt}</span>
+          <span class="wf-count">${items.length} 项</span>
+          <span class="wf-total">${fmtMoney(dtTotal)} 元</span>
+        </div>`;
+      for (const p of items) {
+        const actions = p.actions
+          .filter(a => a.from === p.status)
+          .map(a => `<button class="wf-action-btn" style="background:${a.color}"
+            onclick="doWorkflowAction('${p.name}','${p.doctype}','${a.action}','${a.label}')">${a.label}</button>`)
+          .join('');
+        html += `<div class="wf-item">
+          <div class="wf-item-main">
+            <div class="wf-item-title">${esc(p.title || p.name)}</div>
+            <div class="wf-item-meta">${p.created || ''} · ${esc(p.submitter || '')}</div>
+          </div>
+          <div class="wf-item-amount">${p.amount != null ? '¥' + fmtMoney(p.amount) : ''}</div>
+          <div class="wf-item-actions">${actions}</div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    c.innerHTML = html;
+  } else if (tab === 'stats') {
+    c.innerHTML = '<div class="loading">加载中...</div>';
+    const d = await api('/api/workflow/stats');
+    wfCache.stats = d;
+    const STATUS_COLORS = { Draft:'#6b7280', Submitted:'#f59e0b', Approved:'#16a34a', Rejected:'#dc2626', Paid:'#7c3aed', Ordered:'#0891b2', Received:'#059669' };
+    let html = '<div class="wf-stats-grid">';
+    for (const [dt, counts] of Object.entries(d)) {
+      const total = Object.values(counts).reduce((s, v) => s + v, 0);
+      html += `<div class="wf-stats-card">
+        <div class="wf-stats-title">${DOCTYPE_LABELS[dt] || dt}</div>
+        <div class="wf-stats-total">共 ${total} 单</div>`;
+      for (const [st, cnt] of Object.entries(counts)) {
+        const color = STATUS_COLORS[st] || '#6b7280';
+        html += `<div class="wf-stats-row"><span class="wf-status-dot" style="background:${color}"></span>${st}<span class="wf-stats-cnt">${cnt}</span></div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    c.innerHTML = html;
+  } else if (tab === 'mine') {
+    c.innerHTML = '<div class="loading">加载中...</div>';
+    const [exp, po] = await Promise.all([
+      apiGet('ExpenseClaim'),
+      apiGet('PurchaseOrder'),
+    ]);
+    const DOCTYPES_MINE = ['ExpenseClaim','PurchaseOrder'];
+    const cols = [{k:'name',l:'单号'},{k:'approval_status',l:'报销状态'},{k:'status',l:'PO状态'},{k:'claim_amount',l:'金额'},{k:'total',l:'PO金额'}];
+    const ALL = [...exp.map(e=>({...e,_dt:'ExpenseClaim'})),...po.map(p=>({...p,_dt:'PurchaseOrder'}))];
+    if (!ALL.length) { c.innerHTML='<div class="empty"><div class="empty-emoji">📭</div>暂无我的单据</div>'; return; }
+    c.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>类型</th><th>单号</th><th>状态</th><th>金额</th><th>操作</th></tr></thead><tbody>
+      ${ALL.map((r,i)=>`<tr>
+        <td>${i+1}</td><td>${r._dt==='ExpenseClaim'?'费用报销':'采购订单'}</td>
+        <td><a href="#" onclick="showWfDoc('${r._dt}','${r.name}')" style="color:var(--accent)">${r.name}</a></td>
+        <td>${esc(r.approval_status||r.status||'')}</td>
+        <td>${fmtMoney(r.claim_amount||r.total||0)}</td>
+        <td><button class="btn-detail" onclick="showWfDoc('${r._dt}','${r.name}')">详情</button></td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
+  }
+}
+
+// 执行审批动作
+async function doWorkflowAction(name, doctype, action, label) {
+  const comment = prompt(`${label} - 可输入审批意见（可选）：`);
+  try {
+    const r = await api('/api/workflow/action', 'POST', { name, action, comment: comment || null });
+    toast(`${label}成功！`);
+    await switchWfTab('pending');
+  } catch(e) {
+    toast(e.message || JSON.stringify(e), 'error');
+  }
+}
+
+// 查看单据详情（含工作流动作）
+async function showWfDoc(doctype, name) {
+  const d = await api(`/api/workflow/doc/${enc(doctype)}/${enc(name)}`);
+  const doc = d.doc;
+  const actions = (d.available_actions || [])
+    .map(a => `<button class="wf-action-btn" style="background:${a.color}"
+      onclick="doWorkflowAction('${name}','${doctype}','${a.action}','${a.label}')">${a.label}</button>`)
+    .join('');
+  const statusColor = {Draft:'#6b7280',Submitted:'#f59e0b',Approved:'#16a34a',Rejected:'#dc2626',Paid:'#7c3aed',Ordered:'#0891b2',Received:'#059669'}[d.current_status] || '#6b7280';
+  const rows = Object.entries(doc).filter(([k]) => !['name','items_json','modified','modified_by','creation','idx'].includes(k));
+  let html = `<div class="wf-doc-detail">
+    <div class="wf-doc-header">
+      <span class="wf-doc-name">${esc(doc.name)}</span>
+      <span class="wf-doc-status" style="background:${statusColor}">${d.current_status}</span>
+    </div>
+    <div class="wf-doc-fields">`;
+  for (const [k, v] of rows.slice(0, 12)) {
+    if (v == null) continue;
+    html += `<div class="wf-doc-field"><span class="wf-doc-key">${esc(k)}</span><span class="wf-doc-val">${esc(String(v))}</span></div>`;
+  }
+  html += `</div>`;
+  if (actions) html += `<div class="wf-doc-actions">${actions}</div>`;
+  html += `<button class="btn-cancel" onclick="switchWfTab('mine')" style="margin-top:12px">返回列表</button></div>`;
+
+  const c = document.getElementById('wf-content');
+  c.innerHTML = html;
+  document.querySelectorAll('.wf-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+}
+
+// 辅助：编码路径
+function enc(s) { return encodeURIComponent(String(s)); }
+
+function renderAI(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">🤖</span> AI 业务咨询引擎</div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">基于业务规则库的智能咨询，本地实时响应</p>
+      <div class="module-grid" style="margin-bottom:16px">
+        ${AI_MODULES.map(m => `<div class="module-card" onclick="selectAIModule('${m.id}')" id="ai-mod-${m.id}">
+          <div class="m-emoji">${m.emoji}</div><div class="m-name">${m.name}</div><div class="m-count">${m.desc}</div></div>`).join('')}
+      </div>
+      <div id="aiPanel" style="display:none"><div id="aiForm"></div><div id="aiResult"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="emoji">📜</span> 咨询历史</div>
+      <div id="aiHistory">${aiHistory.length ? aiHistory.map(h => `<div class="ai-result" style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">[${h.module}] ${h.time}</div>
+        <div><strong>${h.ctx.amount||h.ctx.content||''}</strong> → ${h.result.advice}</div>
+        ${h.result.risk_flags?.length?`<div style="margin-top:4px">${h.result.risk_flags.map(r=>`<span class="risk-flag">• ${r}</span>`).join('')}</div>`:''}
+      </div>`).join('') : '<div class="empty">暂无咨询记录</div>'}</div>
+    </div>`;
+}
+let selAI = null;
+function selectAIModule(id) {
+  document.querySelectorAll('.module-card').forEach(c => c.style.borderColor='');
+  document.getElementById('ai-mod-'+id).style.borderColor='var(--accent)';
+  selAI = AI_MODULES.find(m=>m.id===id);
+  document.getElementById('aiPanel').style.display='block';
+  document.getElementById('aiForm').innerHTML = `<div class="form-grid" style="margin-bottom:12px">
+    ${selAI.fields.map(f => `<div class="${f.t==='textarea'?'full':''}"><label>${f.l}</label>
+      ${f.t==='select'?`<select id="ai-${f.k}"><option value="">—</option>${(f.opts||[]).map(o=>`<option>${o}</option>`).join('')}</select>`
+      :f.t==='textarea'?`<textarea id="ai-${f.k}" style="min-height:80px"></textarea>`
+      :`<input id="ai-${f.k}" type="${f.t||'text'}">`}</div>`).join('')}
+  </div><button class="btn btn-primary" onclick="runAIConsult()">⚡ 发起咨询</button>`;
+}
+async function runAIConsult() {
+  if (!selAI) return;
+  const ctx = {};
+  selAI.fields.forEach(f => { const e=document.getElementById('ai-'+f.k); if(e) ctx[f.k]=e.value; });
+  try {
+    const res = await api('/api/ai/consult','POST',{module:selAI.id, context:ctx});
+    aiHistory.unshift({ module:selAI.name, ctx, result:res, time:new Date().toLocaleTimeString() });
+    document.getElementById('aiResult').innerHTML = `<div class="ai-result">
+      <div style="margin-bottom:8px"><strong>${selAI.emoji} ${selAI.name}</strong></div>
+      <div>${res.advice}</div>
+      ${res.risk_flags?.length?`<div style="margin-top:8px">${res.risk_flags.map(r=>`<div class="risk-flag">⚠ ${r}</div>`).join('')}</div>`:''}
+      ${res.suggestions?.length?`<div style="margin-top:8px">${res.suggestions.map(s=>`<div class="ok">✓ ${s}</div>`).join('')}</div>`:''}
+    </div>`;
+    toast('咨询完成'); render();
+  } catch(e) { toast('咨询失败: '+e.message,'error'); }
+}
+
+// ── Init ─────────────────────────────────────────────────────
+async function init() {
+  renderNav();
+  try { await api('/api/status'); document.getElementById('statusDot').className='status-dot'; document.getElementById('statusText').textContent='运行中'; }
+  catch { document.getElementById('statusDot').className='status-dot offline'; document.getElementById('statusText').textContent='后端离线'; }
+  render();
+}
+init();
+</script>
+</body>
+</html>

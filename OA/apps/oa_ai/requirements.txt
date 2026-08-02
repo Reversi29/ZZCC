@@ -1,0 +1,17 @@
+# oa_ai — AI Integration
+# ── Frappe App 依赖清单 ──────────────────
+# 需要的 Python 依赖（安装到 ERPNext 容器内）
+# 通过 bench setup requirements 自动安装
+
+# AI / LLM
+openai>=1.0
+httpx>=0.27
+
+# 文档处理
+python-docx>=1.1
+openpyxl>=3.1
+pdfminer.six>=20221105
+
+# 脚本编排
+pydantic>=2.0
+celery>=5.3

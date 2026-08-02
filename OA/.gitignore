@@ -1,0 +1,22 @@
+# Logs
+logs/
+
+# Database files
+*.db
+*.sqlite
+
+# Backup
+backup/
+
+# Build artifacts
+host-bench/
+__pycache__/
+*.pyc
+*.pyo
+
+# Sites (Frappe deployment config, managed separately)
+sites/nginx.conf
+
+# Env
+.env
+.env.*
