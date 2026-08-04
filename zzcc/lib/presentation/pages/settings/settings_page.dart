@@ -490,14 +490,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       IconButton(
                         icon: const Icon(Icons.copy, size: 20),
                         onPressed: () async {
+                          final messenger = ScaffoldMessenger.of(context);
                           await Clipboard.setData(
                             ClipboardData(text: _configService.appDataPath),
                           );
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('路径已复制')),
-                            );
-                          }
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('路径已复制')),
+                          );
                         },
                       ),
                       IconButton(

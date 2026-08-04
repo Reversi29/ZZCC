@@ -1,3 +1,4 @@
+// ignore_for_file: use_build_context_synchronously
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -219,6 +220,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     );
   }
 
+  // ignore_for_function: use_build_context_synchronously
   void _handleDeleteAccount() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -245,8 +247,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     if (confirmed != true) return;
 
     // 二次确认
-    final messenger = ScaffoldMessenger.of(context);
-    final router = GoRouter.of(context);
     final doubleConfirmed = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -273,6 +273,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
 
     // 执行注销
     if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.of(context);
     final chatRepo = getIt<ChatRepository>();
     final storageService = getIt<StorageService>();
 
@@ -280,7 +282,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       await chatRepo.deleteAccount(erase: true);
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('注销失败: $e')),
       );
       return;
