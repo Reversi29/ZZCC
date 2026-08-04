@@ -47,6 +47,7 @@ class StorageService {
   bool get isUserRegistryEmpty => _userRegistryBox.isEmpty;
 
   // 应用数据操作
+  bool get isAppBoxOpen => _appBox.isOpen;
   dynamic getFromAppBox(String key) => _appBox.get(key);
   void saveToAppBox(String key, dynamic value) => _appBox.put(key, value);
   void deleteFromAppBox(String key) => _appBox.delete(key);

@@ -121,3 +121,9 @@ app.*.symbols
 
 资源/
 devlepoment/
+
+
+# AI
+.claude/
+AGENTS.md
+CLAUDE.md

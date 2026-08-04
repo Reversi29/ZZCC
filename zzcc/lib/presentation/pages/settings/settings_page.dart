@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:zzcc/data/models/theme_model.dart';
 import 'package:zzcc/presentation/widgets/theme_selector.dart';
 import 'package:zzcc/presentation/pages/settings/shortcut_settings.dart';
+import 'dart:async';
+import 'package:zzcc/data/models/app_settings_model.dart';
+import 'package:zzcc/core/utils/app_format.dart';
+import 'package:zzcc/core/utils/network_time.dart';
+import 'package:zzcc/presentation/providers/app_settings_provider.dart';
 import 'package:zzcc/core/services/config_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:zzcc/core/di/service_locator.dart';
@@ -234,6 +240,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final localeProvider = ref.watch(appLocaleProvider);
+    final appSettings = ref.watch(appSettingsProvider);
     final appLocalizations = AppLocalizations.of(context)!;
     final supportedLocales = localeProvider.supportedLocales;
     final allLanguagesText = 'Language · Idioma · 语言 · 語言';
@@ -304,7 +311,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               onExpansionChanged: (expanded) => setState(() => _isExpanded[2] = expanded),
               children: [
                 const SizedBox(height: 10),
-                
+
+                // ===== 时间与地区设置（位于「语言」之上）=====
+                _buildTimeRegionSection(context, appSettings, ref),
+                const SizedBox(height: 20),
+
                 // 语言设置行
                 Row(
                   children: [
@@ -469,14 +480,31 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ListTile(
                   leading: const Icon(Icons.folder),
                   title: Text(appLocalizations.currentDataPathWithHint),
-                  subtitle: Text(
+                  subtitle: SelectableText(
                     _configService.appDataPath,
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.edit),
-                    onPressed: _isMigrating ? null : () => _changeDataPath(),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20),
+                        onPressed: () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: _configService.appDataPath),
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('路径已复制')),
+                            );
+                          }
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.edit),
+                        onPressed: _isMigrating ? null : () => _changeDataPath(),
+                      ),
+                    ],
                   ),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                   tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -745,6 +773,231 @@ class MigrationProgressDialog extends StatelessWidget {
           child: Text(appLocalizations.cancel),
         ),
       ],
+    );
+  }
+}
+
+// ===== 时间与地区设置 UI =====
+
+/// 下拉选择行：左侧标签，右侧下拉框。
+Widget _dropdownRow<T>({
+  required String label,
+  required T value,
+  required List<DropdownMenuItem<T>> items,
+  required void Function(T?) onChanged,
+}) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 20),
+    child: Row(
+      children: [
+        Expanded(
+          flex: 2,
+          child: Text(label,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 3,
+          child: DropdownButton<T>(
+            isExpanded: true,
+            value: value,
+            items: items,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// 「应用设置」分组中位于「语言」之上的「时间与地区」设置区块。
+Widget _buildTimeRegionSection(BuildContext context, AppSettings s, WidgetRef ref) {
+  final notifier = ref.read(appSettingsProvider.notifier);
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Padding(
+        padding: EdgeInsets.only(bottom: 12),
+        child: Text('时间与地区',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
+      ),
+      _dropdownRow<CalendarSystem>(
+        label: '历法',
+        value: s.calendar,
+        items: CalendarSystem.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(calendarLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setCalendar(v!),
+      ),
+      _dropdownRow<FirstDayOfWeek>(
+        label: '每周第一天',
+        value: s.firstDayOfWeek,
+        items: FirstDayOfWeek.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(firstDayOfWeekLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setFirstDayOfWeek(v!),
+      ),
+      _dropdownRow<DateFormatPattern>(
+        label: '日期格式',
+        value: s.dateFormat,
+        items: DateFormatPattern.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(dateFormatLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setDateFormat(v!),
+      ),
+      _dropdownRow<HourSystem>(
+        label: '时间制式',
+        value: s.hourFormat,
+        items: HourSystem.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(hourFormatLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setHourFormat(v!),
+      ),
+      _dropdownRow<TimeSource>(
+        label: '时间来源',
+        value: s.timeSource,
+        items: TimeSource.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(timeSourceLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setTimeSource(v!),
+      ),
+      _dropdownRow<String>(
+        label: '时区',
+        value: s.timezone,
+        items: AppFormat.timezoneIds
+            .map((id) => DropdownMenuItem(value: id, child: Text(timezoneLabel(id))))
+            .toList(),
+        onChanged: (v) => notifier.setTimezone(v!),
+      ),
+      _dropdownRow<String>(
+        label: '地区',
+        value: s.region,
+        items: AppFormat.regionCodes
+            .map((code) =>
+                DropdownMenuItem(value: code, child: Text(regionLabels[code]!)))
+            .toList(),
+        onChanged: (v) => notifier.setRegion(v!),
+      ),
+      _dropdownRow<TemperatureUnit>(
+        label: '温度单位',
+        value: s.temperatureUnit,
+        items: TemperatureUnit.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(temperatureUnitLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setTemperatureUnit(v!),
+      ),
+      _dropdownRow<MeasurementSystem>(
+        label: '计量系统',
+        value: s.measurementSystem,
+        items: MeasurementSystem.values
+            .map((e) => DropdownMenuItem(value: e, child: Text(measurementSystemLabels[e]!)))
+            .toList(),
+        onChanged: (v) => notifier.setMeasurementSystem(v!),
+      ),
+      const SizedBox(height: 8),
+      _TimePreview(settings: s),
+    ],
+  );
+}
+
+/// 实时预览：根据当前「时间与地区」设置展示格式化结果。
+class _TimePreview extends StatefulWidget {
+  final AppSettings settings;
+  const _TimePreview({required this.settings});
+
+  @override
+  State<_TimePreview> createState() => _TimePreviewState();
+}
+
+class _TimePreviewState extends State<_TimePreview> {
+  late DateTime _now;
+  Timer? _timer;
+  Duration? _networkOffset;
+  bool _networkFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    _tick();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    _syncNetwork();
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    setState(() {
+      if (widget.settings.timeSource == TimeSource.network && _networkOffset != null) {
+        _now = DateTime.now().toUtc().add(_networkOffset!);
+      } else {
+        _now = DateTime.now();
+      }
+    });
+  }
+
+  Future<void> _syncNetwork() async {
+    if (widget.settings.timeSource != TimeSource.network) return;
+    final utc = await NetworkTime.fetchUtc();
+    if (!mounted) return;
+    setState(() {
+      if (utc != null) {
+        _networkOffset = utc.difference(DateTime.now().toUtc());
+        _networkFailed = false;
+      } else {
+        _networkFailed = true;
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _TimePreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settings.timeSource != widget.settings.timeSource) {
+      _networkOffset = null;
+      _networkFailed = false;
+      _syncNetwork();
+      _tick();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.settings;
+    final dateStr = AppFormat.formatDate(_now, s);
+    final timeStr = AppFormat.formatTime(_now, s);
+    return Card(
+      margin: const EdgeInsets.only(top: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('预览', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 6),
+            Text('日期：$dateStr'),
+            Text('时间：$timeStr  (${timezoneLabel(s.timezone)})'),
+            Text('温度：${AppFormat.formatTemperature(23.5, s)}'),
+            Text('距离：${AppFormat.formatDistance(1234.5, s)}'),
+            Text('重量：${AppFormat.formatWeight(68.2, s)}'),
+            Text('数字：${AppFormat.formatNumber(1234567.89, s)}'),
+            if (s.timeSource == TimeSource.network)
+              Text(
+                _networkFailed
+                    ? '时间来源：网络获取失败，已回退设备时间'
+                    : (_networkOffset != null
+                        ? '时间来源：网络校时已生效'
+                        : '时间来源：网络（获取中…）'),
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

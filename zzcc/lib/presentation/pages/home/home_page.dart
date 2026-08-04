@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as path;
+import 'package:zzcc/core/di/service_locator.dart';
+import 'package:zzcc/core/services/storage_service.dart';
+import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:zzcc/presentation/pages/home/widgets/resizable_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/weather_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/todo_widget.dart';
@@ -9,15 +14,15 @@ import 'package:zzcc/presentation/pages/home/widgets/location_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/calendar_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/hardware_details_widget.dart';
 
-class HomePage extends StatefulWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  late final List<WidgetItem> _widgets = _initWidgets();
+class _HomePageState extends ConsumerState<HomePage> {
+  List<WidgetItem> _widgets = [];
   final List<WidgetItem> _stashBox = [];
 
   // Backup for cancel/restore functionality
@@ -36,6 +41,8 @@ class _HomePageState extends State<HomePage> {
   // Minimap: cache last known viewport rect
   Rect? _lastViewportRect;
   bool _minimapLoopActive = true;
+  static const String _layoutKey = 'home_page_layout';
+  bool _layoutLoaded = false;
 
   // View mode (default): pan/zoom only, click widget triggers function
   // Edit mode: drag widgets, resize, box select, stash box visible
@@ -44,6 +51,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateMinimapViewport());
+    _loadLayout();
   }
 
 
@@ -67,6 +75,87 @@ class _HomePageState extends State<HomePage> {
       if (mounted) setState(() {});
     } catch (_) { /* context may be unavailable during hot reload */ }
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateMinimapViewport());
+  }
+
+  /// 从 user_data.hive 加载画布布局；无数据则用默认。
+  Future<void> _loadLayout() async {
+    try {
+      final storageService = getIt<StorageService>();
+      final user = ref.read(userProvider);
+      if (user.userDataPath == null || user.userDataPath!.isEmpty) {
+        _applyDefaultLayout();
+        return;
+      }
+
+      final ciphertext = path.basename(user.userDataPath!);
+      final raw = await storageService.getUserInfoByKey(ciphertext, _layoutKey);
+      if (raw == null) {
+        _applyDefaultLayout();
+        return;
+      }
+
+      final layout = raw as Map<dynamic, dynamic>;
+      final widgetList = layout['widgets'] as List<dynamic>?;
+      final stashList = (layout['stash_widgets'] as List<dynamic>?)?.cast<int>() ?? [];
+
+      // 解析主画布组件
+      final defaults = _initWidgets();
+      final defaultsMap = {for (final w in defaults) w.type: w};
+
+      final loaded = <WidgetItem>[];
+      for (final entry in widgetList ?? []) {
+        final typeIndex = entry['type'] as int?;
+        final x = (entry['x'] as num?)?.toDouble();
+        final y = (entry['y'] as num?)?.toDouble();
+        final w = (entry['w'] as num?)?.toDouble();
+        final h = (entry['h'] as num?)?.toDouble();
+        if (typeIndex == null || !defaultsMap.containsKey(WidgetType.values[typeIndex])) continue;
+        final def = defaultsMap[WidgetType.values[typeIndex]]!;
+        loaded.add(WidgetItem(
+          key: GlobalKey(),
+          type: def.type,
+          position: Offset(x ?? def.position.dx, y ?? def.position.dy),
+          size: Size(w ?? def.size.width, h ?? def.size.height),
+          minSize: def.minSize,
+        ));
+      }
+
+      // 解析收纳盒组件
+      final stash = <WidgetItem>[];
+      for (final typeIndex in stashList) {
+        if (!defaultsMap.containsKey(WidgetType.values[typeIndex])) continue;
+        final def = defaultsMap[WidgetType.values[typeIndex]]!;
+        stash.add(WidgetItem(
+          key: GlobalKey(),
+          type: def.type,
+          position: def.position,
+          size: def.size,
+          minSize: def.minSize,
+        ));
+      }
+
+      if (mounted) {
+        setState(() {
+          _widgets = loaded;
+          _stashBox
+            ..clear()
+            ..addAll(stash);
+        });
+      }
+      _layoutLoaded = true;
+    } catch (_) {
+      _applyDefaultLayout();
+      _layoutLoaded = true;
+    }
+  }
+
+  void _applyDefaultLayout() {
+    if (mounted) {
+      setState(() {
+        _widgets = _initWidgets();
+        _stashBox.clear();
+      });
+    }
   }
 
   // Multi-selection state
@@ -275,6 +364,12 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_layoutLoaded) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: _buildToolbar(),
       body: Row(
@@ -658,21 +753,55 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  void _saveLayout() {
+  void _saveLayout() async {
     // Clear backup since we're saving
     _backupWidgets = null;
     _backupStashBox = null;
-    
+
     // Exit edit mode
     setState(() {
       _isEditMode = false;
       _selectedWidgetKeys.clear();
     });
-    
-    // TODO: Implement actual persistence
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('布局已保存')),
-    );
+
+    try {
+      final storageService = getIt<StorageService>();
+      final user = ref.read(userProvider);
+      if (user.userDataPath == null || user.userDataPath!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('布局已保存（未登录，存内存）')),
+          );
+        }
+        return;
+      }
+
+      final widgetsData = _widgets.map((w) => {
+        'type': w.type.index,
+        'x': w.position.dx,
+        'y': w.position.dy,
+        'w': w.size.width,
+        'h': w.size.height,
+      }).toList();
+
+      final stashData = _stashBox.map((w) => w.type.index).toList();
+
+      await storageService.updateUserInfo(user.userDataPath!, {
+        _layoutKey: {'widgets': widgetsData, 'stash_widgets': stashData},
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('布局已保存')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存失败: \$e')),
+        );
+      }
+    }
   }
 
   void _cancelEdit() {
