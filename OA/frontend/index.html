@@ -124,8 +124,33 @@
   .wf-doc-key { display: block; font-size: 11px; color: var(--text3); margin-bottom: 3px; text-transform: uppercase; }
   .wf-doc-val { font-size: 14px; font-weight: 500; }
   .wf-doc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .wf-history { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .wf-history-title { font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .wf-history-item { display: flex; gap: 8px; align-items: center; padding: 6px 0; font-size: 13px; color: var(--text2); }
+  .wf-history-action { font-weight: 500; color: var(--text); min-width: 60px; }
+  .wf-history-from { color: #6b7280; }
+  .wf-history-to { color: #16a34a; font-weight: 500; }
+  .wf-history-comment { color: var(--text2); font-style: italic; margin-left: 8px; }
+  .wf-history-time { margin-left: auto; font-size: 12px; color: #9ca3af; }
   .btn-detail { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
   .btn-cancel { background: var(--surface); border: 1px solid var(--border); color: var(--text3); border-radius: 6px; padding: 8px 20px; font-size: 13px; cursor: pointer; }
+
+  .notif-btn { background:none; border:none; cursor:pointer; position:relative; padding:6px 8px; border-radius:6px; color:var(--text); font-size:18px; display:flex; align-items:center; }
+  .notif-btn:hover { background:var(--surface2); }
+  .notif-badge { position:absolute; top:2px; right:2px; min-width:16px; height:16px; border-radius:8px; background:#dc2626; color:white; font-size:10px; display:flex; align-items:center; justify-content:center; font-weight:700; padding:0 3px; line-height:1; }
+  .notif-panel { display:none; position:absolute; top:52px; right:0; width:360px; max-height:480px; overflow-y:auto; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.12); z-index:200; padding:8px; }
+  .notif-panel.open { display:block; }
+  .notif-item { padding:10px 12px; border-radius:8px; cursor:pointer; margin-bottom:4px; display:flex; flex-direction:column; gap:4px; }
+  .notif-item:hover { background:var(--surface2); }
+  .notif-item.unread { border-left:3px solid var(--accent); }
+  .notif-urgent .notif-item-title { color:#dc2626; }
+  .notif-item-title { font-size:13px; font-weight:600; color:var(--text); }
+  .notif-item-body { font-size:12px; color:var(--text2); }
+  .notif-item-time { font-size:11px; color:var(--text3); margin-top:2px; }
+  .notif-empty { text-align:center; padding:24px; color:var(--text3); font-size:13px; }
+  .notif-header { display:flex; align-items:center; justify-content:space-between; padding:4px 4px 8px; border-bottom:1px solid var(--border); margin-bottom:6px; font-size:13px; font-weight:600; color:var(--text); }
+  .notif-mark-read { font-size:11px; color:var(--accent); cursor:pointer; }
+  .notif-mark-read:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -134,16 +159,21 @@
   <div class="header-logo"><span>ZZCC</span> OA</div>
   <div class="header-nav" id="nav"></div>
   <div class="header-right">
+    <button class="notif-btn" id="notifBtn" onclick="toggleNotifPanel()" title="通知">
+      &#128276;
+      <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+    </button>
     <div class="status-dot" id="statusDot"></div>
     <span id="statusText" style="font-size:13px;color:var(--text2)">连接中...</span>
   </div>
+  <div class="notif-panel" id="notifPanel"></div>
 </div>
 
 <div class="main" id="main"></div>
 <div class="toast" id="toast"></div>
 
 <script>
-const API = 'http://localhost:8000';
+const API = '';
 const API_KEY = 'zzcc_oadev_key_2024';
 
 // URL 编码含空格的 doctype（ERPNext 约定）
@@ -280,6 +310,15 @@ const DOCTYPE_API = {
   'StockEntry':      'Stock Entry',
 };
 function toApiDoctype(dt) { return DOCTYPE_API[dt] || dt; }
+function toWfDoctype(dt) {
+  const rev = { 'Expense Claim':'ExpenseClaim', 'Purchase Order':'PurchaseOrder', 'Journal Entry':'JournalEntry' };
+  return rev[dt] || dt;
+}
+const WF_DOCTYPES = ['ExpenseClaim', 'PurchaseOrder', 'JournalEntry'];
+function docStatusOf(item) {
+  if (item.docstatus != null) return ['Draft','Submitted','Approved','Rejected'][item.docstatus] || '';
+  return item.approval_status || item.status || '';
+}
 
 function toast(msg, type='success') {
   const t = document.getElementById('toast');
@@ -584,6 +623,16 @@ async function createDoc(e, doctype) {
   fd.forEach((v, k) => { if (v) data[k] = v; });
   // 子表收集
   (FIELDS[doctype]||[]).forEach(f => { if (f.type === 'subtable') data[f.k] = collectSubtable('sub-' + f.k); });
+  // Journal Entry: __accounts → accounts
+  if (doctype === 'Journal Entry' && data.__accounts) {
+    data.accounts = data.__accounts;
+    delete data.__accounts;
+  }
+  // Purchase Order / Stock Entry: __items → items
+  if ((doctype === 'Purchase Order' || doctype === 'Stock Entry') && data.__items) {
+    data.items = data.__items;
+    delete data.__items;
+  }
   try {
     await apiCreate(doctype, data);
     toast(`${doctype} 创建成功！`);
@@ -600,13 +649,20 @@ async function deleteDoc(doctype, name) {
 function renderTable(doctype, rows, fields) {
   if (!rows.length) return `<div class="empty"><div class="empty-emoji">📭</div>暂无数据，创建一个吧</div>`;
   const cols = (fields || []).filter(f => f.type !== 'subtable').slice(0, 6);
+  const wf = toWfDoctype(doctype);
+  const canWf = WF_DOCTYPES.includes(wf);
   return `<div class="table-wrap"><table>
     <thead><tr><th>#</th>${cols.map(c=>`<th>${c.l}</th>`).join('')}<th>操作</th></tr></thead>
-    <tbody>${rows.map((item, i) => `<tr>
+    <tbody>${rows.map((item, i) => {
+      const st = docStatusOf(item);
+      const submitBtn = (canWf && st === 'Draft')
+        ? `<button onclick="doWorkflowAction('${esc(item.name)}','${wf}','submit','提交审批')">提交审批</button>` : '';
+      return `<tr>
       <td style="color:var(--text3);font-size:12px">${i+1}</td>
       ${cols.map(c => `<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(item[c.k])}">${esc(item[c.k])}</td>`).join('')}
-      <td class="actions"><button onclick="deleteDoc('${doctype}','${esc(item.name)}')">删除</button></td>
-    </tr>`).join('')}
+      <td class="actions">${submitBtn}<button onclick="deleteDoc('${doctype}','${esc(item.name)}')">删除</button></td>
+    </tr>`;
+    }).join('')}
     </tbody></table></div>`;
 }
 
@@ -760,6 +816,24 @@ async function showWfDoc(doctype, name) {
   }
   html += `</div>`;
   if (actions) html += `<div class="wf-doc-actions">${actions}</div>`;
+  // 审批历史
+  try {
+    const hist = await api(`/api/workflow/history/${enc(doctype)}/${enc(name)}`);
+    if (hist && hist.length) {
+      html += `<div class="wf-history"><div class="wf-history-title">审批历史</div>`;
+      hist.forEach(h => {
+        html += `<div class="wf-history-item">
+          <span class="wf-history-action">${h.action}</span>
+          <span class="wf-history-from">${h.from_status||''}</span>
+          <span>→</span>
+          <span class="wf-history-to">${h.to_status}</span>
+          ${h.comment ? `<span class="wf-history-comment">${esc(h.comment)}</span>` : ''}
+          <span class="wf-history-time">${h.created_at||''}</span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+  } catch(e) { /* 无历史记录时静默失败 */ }
   html += `<button class="btn-cancel" onclick="switchWfTab('mine')" style="margin-top:12px">返回列表</button></div>`;
 
   const c = document.getElementById('wf-content');
@@ -767,8 +841,7 @@ async function showWfDoc(doctype, name) {
   document.querySelectorAll('.wf-tabs .tab-btn').forEach(b => b.classList.remove('active'));
 }
 
-// 辅助：编码路径
-function enc(s) { return encodeURIComponent(String(s)); }
+// 辅助：编码路径（复用顶部 const enc）
 
 function renderAI(el) {
   el.innerHTML = `
@@ -828,6 +901,81 @@ async function init() {
   render();
 }
 init();
+
+
+// Notifications
+let notifPanelOpen=false; let _cachedNotifs={items:[],unread_count:0};
+
+async function fetchNotifications(){
+  try{
+    const r=await fetch(API+'/api/workflow/notifications?recipient=admin',opts);
+    if(!r.ok)return;
+    _cachedNotifs=await r.json();
+    renderNotifBadge();
+  }catch(e){}
+}
+
+function renderNotifBadge(){
+  const b=document.getElementById('notifBadge');
+  const c=_cachedNotifs.unread_count||0;
+  if(c>0){
+    b.textContent=c>99?'99+':c;
+    b.style.display='flex';
+  }else{
+    b.style.display='none';
+  }
+}
+
+function toggleNotifPanel(){
+  notifPanelOpen=!notifPanelOpen;
+  const p=document.getElementById('notifPanel');
+  p.classList.toggle('open',notifPanelOpen);
+  if(notifPanelOpen){
+    renderNotifPanel();
+    if(_cachedNotifs.unread_count>0){
+      fetch(API+'/api/workflow/notifications/read-all?recipient=admin',{...opts,method:'POST'}).then(r=>r.ok&&fetchNotifications());
+    }
+  }
+}
+
+function renderNotifPanel(){
+  const p=document.getElementById('notifPanel');
+  const its=_cachedNotifs.items||[];
+  if(its.length===0){
+    p.innerHTML='<div class=notif-empty>暂无通知</div>';
+    return;
+  }
+  const TI={approval_request:'&#128229;',approval_result:'&#9989;',info:'&#128140;',reminder:'&#9200;'};
+  const rows=its.map(n=>{
+    const u=!n.is_read?'unread ':'';
+    const urgent=n.priority==='urgent'?'notif-urgent ':'';
+    const t=n.created?n.created.replace('T',' ').slice(0,16):'';
+    const onclick="onNotifClick('"+n.id+"','"+(n.doctype||'')+"','"+(n.doc_name||'')+"')";
+    return '<div class="notif-item '+u+urgent+'" onclick="'+onclick+'">'+
+      '<div>'+(TI[n.ntype]||'&#128140;')+' <span class=notif-item-title>'+escHtml(n.title)+'</span></div>'+
+      '<div class=notif-item-body>'+escHtml(n.body||'')+'</div>'+
+      (t?'<div class=notif-item-time>'+t+'</div>':'')+'</div>';
+  }).join('');
+  const markAll="fetch('"+API+"/api/workflow/notifications/read-all?recipient=admin',{...opts,method:'POST'}).then(r=>r.ok&&fetchNotifications())";
+  p.innerHTML='<div class=notif-header>通知 <span class=notif-mark-read onclick="event.stopPropagation();'+markAll+'">全部已读</span></div>'+rows;
+}
+
+function onNotifClick(id,dt,dn){
+  notifPanelOpen=false;
+  document.getElementById('notifPanel').classList.remove('open');
+  if(dt&&dn){navigate('wf');setTimeout(function(){showWfDoc(dt,dn);},50);}
+}
+
+function escHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+setInterval(fetchNotifications,30000);
+fetchNotifications();
+document.addEventListener('click',function(e){
+  if(notifPanelOpen&&!e.target.closest('#notifBtn')&&!e.target.closest('#notifPanel')){
+    notifPanelOpen=false;
+    document.getElementById('notifPanel').classList.remove('open');
+  }
+});
 </script>
-</body>
-</html>

@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
+from datetime import datetime
 from typing import Optional
-from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry
+from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry, WorkflowHistory, Notification
 
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
 
@@ -63,9 +64,11 @@ def _get_status(doctype: str, name: str, db: Session) -> str:
     tbl = TABLE_MAP[doctype]
     col = STATUS_COL[doctype]
     row = db.execute(text(f"SELECT {col} FROM {tbl} WHERE name=:n"), {"n": name}).fetchone()
-    if not row or row[0] is None:
-        return "Draft"
+    if not row:
+        raise HTTPException(404, f"单据不存在: {name}")
     val = row[0]
+    if val is None:
+        raise HTTPException(404, f"单据不存在: {name}")
     if doctype == "JournalEntry":
         return JE_TO_STR.get(int(val), "Draft")
     return str(val)
@@ -154,9 +157,50 @@ def do_action(body: WorkflowActionRequest, db: Session = Depends(get_db)):
         new_val = JE_TO_INT[new_val]
 
     db.execute(
-        text(f"UPDATE {tbl} SET {col} = :v, modified = datetime('now') WHERE name = :n"),
-        {"v": new_val, "n": body.name}
+        text(f"UPDATE {tbl} SET {col} = :v, modified = :m WHERE name = :n"),
+        {"v": new_val, "m": datetime.utcnow(), "n": body.name}
     )
+    # 写入审批历史
+    db.add(WorkflowHistory(
+        doc_name=body.name,
+        doctype=doctype,
+        action=body.action,
+        from_status=current,
+        to_status=matched["to"],
+        comment=body.comment,
+        operator="system"  # TODO: 接入认证后改为真实用户
+    ))
+
+    # ── 审批通知 ───────────────────────────────────────────────
+    # 通知审批人（固定发给 admin）
+    ACTION_LABELS = {
+        "submit":  "提交了",
+        "approve": "批准了",
+        "reject":  "拒绝了",
+        "pay":     "确认付款",
+        "order":   "确认订购",
+        "receive": "确认收货",
+    }
+    _actor = ACTION_LABELS.get(body.action, body.action)
+    if body.action in ("submit",):
+        _notify(db,
+            recipient="admin",
+            title=f"【{doctype}】{body.name} 已提交待审批",
+            body=f"{_actor} {body.name}，请及时审批处理。",
+            ntype="approval_request",
+            doctype=doctype, doc_name=body.name, action=body.action,
+            priority="urgent",
+        )
+    elif body.action in ("approve", "reject", "pay", "order", "receive"):
+        _notify(db,
+            recipient="admin",
+            title=f"【{doctype}】{body.name} 已{_actor}",
+            body=f"审批动作「{_actor}」已完成，单据：{body.name}。",
+            ntype="approval_result",
+            doctype=doctype, doc_name=body.name, action=body.action,
+            priority="normal",
+        )
+
     db.commit()
     return {
         "ok":          True,
@@ -180,7 +224,9 @@ def get_doc_workflow(doctype: str, name: str, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(404, f"单据不存在: {name}")
 
-    cols = [c[1] for c in db.execute(text(f"PRAGMA table_info({tbl})")).fetchall()]
+    # 列名从 model 元数据读取，MariaDB/SQLite 通用
+    model_cls = {"ExpenseClaim": ExpenseClaim, "PurchaseOrder": PurchaseOrder, "JournalEntry": JournalEntry}[doctype]
+    cols = [c.name for c in model_cls.__table__.columns]
     data = dict(zip(cols, row))
 
     current = _get_status(doctype, name, db)
@@ -207,3 +253,100 @@ def workflow_stats(db: Session = Depends(get_db)):
             rows = db.execute(text(f"SELECT {col}, COUNT(*) FROM {tbl} GROUP BY {col}")).fetchall()
             stats[doctype] = {str(r[0]): r[1] for r in rows}
     return stats
+
+
+def _notify(db, recipient: str, title: str, body: str, ntype: str = "approval_result",
+              doctype: str = None, doc_name: str = None, action: str = None,
+              priority: str = "normal") -> None:
+    """写一条通知到数据库，由 GET /notifications 拉取"""
+    db.add(Notification(
+        recipient=recipient,
+        title=title,
+        body=body,
+        ntype=ntype,
+        doctype=doctype,
+        doc_name=doc_name,
+        action=action,
+        priority=priority,
+    ))
+
+
+# ── GET /api/workflow/notifications ──────────────────────────────
+@router.get("/notifications")
+def get_notifications(
+    recipient: str = "admin",
+    unread_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    q = db.query(Notification).filter(Notification.recipient == recipient)
+    if unread_only:
+        q = q.filter(Notification.is_read == False)
+    rows = q.order_by(Notification.id.desc()).limit(50).all()
+    unread_count = db.query(Notification).filter(
+        Notification.recipient == recipient,
+        Notification.is_read == False,
+    ).count()
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "body": r.body,
+                "ntype": r.ntype,
+                "doctype": r.doctype,
+                "doc_name": r.doc_name,
+                "action": r.action,
+                "priority": r.priority,
+                "is_read": r.is_read,
+                "created": str(r.creation) if r.creation else None,
+            }
+            for r in rows
+        ],
+        "unread_count": unread_count,
+    }
+
+
+# ── POST /api/workflow/notifications/{id}/read ─────────────────
+@router.post("/notifications/{id}/read")
+def mark_notification_read(id: int, db: Session = Depends(get_db)):
+    n = db.query(Notification).filter(Notification.id == id).first()
+    if not n:
+        raise HTTPException(404, "通知不存在")
+    n.is_read = True
+    db.commit()
+    return {"ok": True}
+
+
+# ── POST /api/workflow/notifications/read-all ─────────────────
+@router.post("/notifications/read-all")
+def mark_all_read(recipient: str = "admin", db: Session = Depends(get_db)):
+    db.query(Notification).filter(
+        Notification.recipient == recipient,
+        Notification.is_read == False,
+    ).update({"is_read": True})
+    db.commit()
+    return {"ok": True}
+
+
+# ── GET /api/workflow/history/{doctype}/{name} ─────────────────
+@router.get("/history/{doctype}/{name}")
+def get_workflow_history(doctype: str, name: str, db: Session = Depends(get_db)):
+    """返回指定单据的审批历史记录"""
+    if doctype not in TABLE_MAP:
+        raise HTTPException(400, f"不支持的 doctype: {doctype}")
+    
+    rows = db.query(WorkflowHistory).filter(
+        WorkflowHistory.doc_name == name,
+        WorkflowHistory.doctype == doctype
+    ).order_by(WorkflowHistory.id.desc()).all()
+    
+    return [{
+        "id": r.id,
+        "action": r.action,
+        "from_status": r.from_status,
+        "to_status": r.to_status,
+        "comment": r.comment,
+        "operator": r.operator,
+        "created_at": r.creation.isoformat() if r.creation else None,
+        "created": str(r.creation) if r.creation else None,
+    } for r in rows]

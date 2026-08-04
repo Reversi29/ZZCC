@@ -275,3 +275,30 @@ class Asset(Base, Timestamped):
     custodian = Column(String(255), nullable=True)
     location = Column(String(255), nullable=True)
     status = Column(String(50), default="Active")
+
+
+class WorkflowHistory(Base, Timestamped):
+    __tablename__ = "workflow_history"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    doc_name = Column(String(255), nullable=False, index=True)
+    doctype = Column(String(50), nullable=False)
+    action = Column(String(50), nullable=False)
+    from_status = Column(String(50), nullable=True)
+    to_status = Column(String(50), nullable=False)
+    comment = Column(Text, nullable=True)
+    operator = Column(String(255), default="system")
+
+
+class Notification(Base, Timestamped):
+    """审批通知"""
+    __tablename__ = "notifications"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recipient = Column(String(255), nullable=False, index=True)  # 接收人/角色
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    ntype = Column(String(50), default="info")  # approval_request | approval_result | info | reminder
+    doctype = Column(String(50), nullable=True)
+    doc_name = Column(String(255), nullable=True)
+    action = Column(String(50), nullable=True)   # submit/approve/reject/pay...
+    is_read = Column(Boolean, default=False)
+    priority = Column(String(20), default="normal")  # low | normal | urgent

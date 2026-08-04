@@ -3,6 +3,7 @@ import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,12 +11,21 @@ from fastapi.responses import JSONResponse
 from database import init_db
 from config import get_settings
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    print("✓ 数据库表已创建 / 更新")
+    yield
+
+
 app = FastAPI(
     title="ZZCC OA API",
     version="1.0.0",
     description="ZZCC 企业 OA 系统后端（SQLAlchemy + SQLite，兼容 ERPNext v15 REST 协议）",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS：允许前端访问
@@ -26,12 +36,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── 启动：建表 ────────────────────────────────────────────────
-@app.on_event("startup")
-def startup():
-    init_db()
-    print("✓ 数据库表已创建 / 更新")
 
 
 # ── 健康检查 ──────────────────────────────────────────────────
@@ -105,4 +109,13 @@ def _register():
         mod = __import__(f, fromlist=["router"])
         app.include_router(mod.router)
 
+
 _register()
+
+
+# ── 静态前端（同源部署：API 在 /api/，前端在 /）───────────────
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path as _P
+_FRONTEND = _P(__file__).parent.parent / "frontend"
+if (_FRONTEND / "index.html").exists():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND), html=True), name="frontend")

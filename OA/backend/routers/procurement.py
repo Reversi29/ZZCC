@@ -76,8 +76,14 @@ def list_pos(db: Session = Depends(get_db), limit=100, x_api_key: str = Header(N
 @router.post("/Purchase Order", response_model=R)
 def create_po(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
     check(x_api_key)
-    items = data.get("items", [])
-    total = round(sum(float(it.get("qty", 0)) * float(it.get("rate", 0)) for it in items), 2)
+    raw = data.get("items", [])
+    # 支持字符串（单行描述）或数组（明细列表）
+    if isinstance(raw, str):
+        items = []
+        total = round(float(data.get("total") or 0), 2)
+    else:
+        items = raw
+        total = round(sum(float(it.get("qty", 0)) * float(it.get("rate", 0)) for it in items), 2)
     name = data.get("name") or seq_for("Purchase Order", db)
     m = PurchaseOrder(name=name, supplier=data.get("supplier",""), total=total,
                       items_json=json.dumps(items), status=data.get("status","Draft"),
