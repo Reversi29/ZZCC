@@ -2,6 +2,7 @@
 import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
+from database import DB_URL
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -41,7 +42,11 @@ app.add_middleware(
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.get("/api/status")
 def status():
-    return {"status": "ok", "version": "1.0.0", "persistence": "sqlite"}
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "persistence": DB_URL.split("+")[0] if "+" in DB_URL else "sqlite",
+    }
 
 
 # ── 兼容 ERPNext 的路由组（AI 业务咨询）──────────────────────

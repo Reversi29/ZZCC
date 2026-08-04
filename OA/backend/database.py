@@ -7,11 +7,13 @@ from pathlib import Path
 import os
 
 # ── 切换数据库只需改这一行 ────────────────────────────────────
-# SQLite（当前，开发/演示）
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///data/zzcc_oa.db")
+# SQLite（开发/演示）
+# DB_URL = os.getenv("DATABASE_URL", "sqlite:///data/zzcc_oa.db")
 
-# MariaDB（未来）示例：
-# DB_URL = "mysql+pymysql://root:zzcc_oa_2024@127.0.0.1:3307/zzcc_oa"
+# MariaDB（生产）
+DB_URL = os.getenv("DATABASE_URL",
+    "mysql+pymysql://root:zzcc_oa_2024@127.0.0.1:3307/zzcc_oa"
+)
 
 engine = create_engine(
     DB_URL,
