@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:zzcc/core/utils/color_utils.dart';
 import 'package:zzcc/presentation/providers/sidebar_provider.dart';
+import 'package:zzcc/presentation/providers/theme_provider.dart';
 import 'package:zzcc/l10n/generated/app_localizations.dart';
 
 class ResizablePanel extends ConsumerStatefulWidget {
@@ -41,7 +42,6 @@ class ResizablePanel extends ConsumerStatefulWidget {
 class ResizablePanelState extends ConsumerState<ResizablePanel> {
   bool _isLocked = false;
   bool _showControls = false;
-  static const Color accentColor = Color(0xFF4361EE);
   static const Color buttonHoverColor = Color(0xFF3A56D4);
 
   double get _panelWidth => ref.watch(sidebarProvider);
@@ -104,8 +104,8 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                       CircleAvatar(
                         radius: isExpanded ? 36 : 24,
                         backgroundColor: widget.isLoggedIn
-                            ? Colors.grey[200]
-                            : ColorUtils.withValues(accentColor, 0.15),
+                            ? _sidebarBg
+                            : ColorUtils.withValues(_primaryColor, 0.15),
                         backgroundImage: widget.isLoggedIn && avatarFile != null
                             ? FileImage(avatarFile)
                             : null,
@@ -129,15 +129,15 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                                 : Container(
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      gradient: const LinearGradient(
-                                        colors: [accentColor, buttonHoverColor],
+                                      gradient: LinearGradient(
+                                        colors: [_primaryColor, buttonHoverColor],
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
                                       ),
                                       boxShadow: [
                                         BoxShadow(
                                           color: ColorUtils.withValues(
-                                              accentColor, 0.3),
+                                              _primaryColor, 0.3),
                                           blurRadius: 4,
                                           offset: const Offset(0, 2),
                                         )
@@ -199,7 +199,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: isSelected ? ColorUtils.withValues(accentColor, 0.2) : null,
+        color: isSelected ? ColorUtils.withValues(_primaryColor, 0.2) : null,
         borderRadius: BorderRadius.circular(8),
       ),
       child: SizedBox(
@@ -224,7 +224,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                           Icon(
                             icon,
                             size: 20,
-                            color: isSelected ? accentColor : Colors.grey[700]!,
+                            color: isSelected ? _primaryColor : _contrastColor(_sidebarBg),
                           ),
                           const SizedBox(width: 8),
                           Flexible(
@@ -233,7 +233,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                               style: TextStyle(
                                 fontSize: 14,
                                 color:
-                                    isSelected ? accentColor : Colors.grey[700],
+                                    isSelected ? _primaryColor : _contrastColor(_sidebarBg),
                                 fontWeight: isSelected
                                     ? FontWeight.bold
                                     : FontWeight.normal,
@@ -248,7 +248,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                         child: Icon(
                           icon,
                           size: 20,
-                          color: isSelected ? accentColor : Colors.grey[700]!,
+                          color: isSelected ? _primaryColor : _contrastColor(_sidebarBg),
                         ),
                       ),
               ),
@@ -264,7 +264,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: ColorUtils.withValues(accentColor, 0.08),
+        color: ColorUtils.withValues(_primaryColor, 0.08),
         borderRadius: BorderRadius.circular(8),
       ),
       child: SizedBox(
@@ -288,15 +288,15 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                     ? Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.bug_report,
-                              size: 20, color: accentColor),
+                          Icon(Icons.bug_report,
+                              size: 20, color: _primaryColor),
                           const SizedBox(width: 8),
                           Flexible(
                             child: Text(
                               appLocalizations.testMenuItem,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 14,
-                                color: accentColor,
+                                color: _primaryColor,
                                 fontWeight: FontWeight.bold,
                               ),
                               overflow: TextOverflow.ellipsis,
@@ -305,11 +305,11 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                           ),
                         ],
                       )
-                    : const Center(
+                    : Center(
                         child: Icon(
                           Icons.bug_report,
                           size: 20,
-                          color: accentColor,
+                          color: _primaryColor,
                         ),
                       ),
               ),
@@ -330,12 +330,22 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
       height: 30,
       child: IconButton(
         icon: Icon(icon, size: 16),
-        color: accentColor,
+        color: _primaryColor,
         padding: EdgeInsets.zero,
         alignment: Alignment.center,
         onPressed: onPressed,
       ),
     );
+  }
+
+  Color get _primaryColor => ref.watch(themeProvider).primaryColor;
+
+  Color get _sidebarBg =>
+      ref.watch(themeProvider).leftSidebarColor ?? Colors.grey[200]!;
+
+  Color _contrastColor(Color bg) {
+    final luminance = bg.computeLuminance();
+    return luminance > 0.5 ? Colors.black87 : Colors.white;
   }
 
   Widget _buildControlButtons() {
@@ -377,6 +387,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
   @override
   Widget build(BuildContext context) {
     final double panelWidth = ref.watch(sidebarProvider);
+    final sidebarBg = _sidebarBg;
     final appLocalizations = AppLocalizations.of(context)!;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -401,7 +412,7 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                 width: effectivePanelWidth,
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.grey[200],
+                    color: sidebarBg,
                     boxShadow: [
                       BoxShadow(
                         color: ColorUtils.withValues(Colors.black, 0.1),
@@ -451,9 +462,9 @@ class ResizablePanelState extends ConsumerState<ResizablePanel> {
                     gradient: panelWidth > 0
                         ? LinearGradient(
                             colors: [
-                              Colors.grey[200]!,
-                              ColorUtils.withValues(Colors.white, 0.5),
-                              Colors.white
+                              sidebarBg,
+                              ColorUtils.withValues(_contrastColor(_sidebarBg), 0.1),
+                              _contrastColor(_sidebarBg)
                             ],
                             stops: const [0.0, 0.5, 1.0],
                             begin: Alignment.centerLeft,

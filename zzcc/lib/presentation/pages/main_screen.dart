@@ -162,7 +162,8 @@ class _MainScreenState extends ConsumerState<_MainScreenContent> {
                 Positioned.fill(
                   left: panelWidth,
                   child: Container(
-                    color: ColorUtils.withValues(Theme.of(context).primaryColor, 0.1),
+                    color: _currentTheme.rightPanelColor ??
+                        ColorUtils.withValues(_currentTheme.primaryColor, 0.1),
                   ),
                 ),
               
