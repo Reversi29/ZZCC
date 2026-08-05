@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, date
 from pathlib import Path
 import os
+import hashlib
 
 # ── 切换数据库只需改这一行 ────────────────────────────────────
 # SQLite（开发/演示）
@@ -24,6 +25,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+
+
+
 def get_db() -> Session:
     """FastAPI 依赖注入：每请求一个 session，用完自动关闭"""
     db = SessionLocal()
@@ -33,12 +37,43 @@ def get_db() -> Session:
         db.close()
 
 
+def _hash_pw(password: str) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), b"zzcc-oa-salt", 310_000).hex()
+
+
 def init_db():
     """启动时创建所有表"""
     # SQLite: 建 data 目录
     if DB_URL.startswith("sqlite"):
         Path("data").mkdir(exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    _seed_default_users()
+
+
+def _seed_default_users():
+    """启动时写入默认用户（仅当表中无数据时）"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.query(User).count() > 0:
+                return
+            defaults = [
+                ("admin", "admin123", "管理员", "admin"),
+                ("user01", "pass01", "张三", "user"),
+            ]
+            for username, password, display_name, role in defaults:
+                db.add(User(
+                    username=username,
+                    hashed_password=_hash_pw(password),
+                    display_name=display_name,
+                    role=role,
+                ))
+            db.commit()
+            print("[init] Default users seeded: admin/admin123, user01/pass01")
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[init] User seed skipped: {e}")
 
 
 # ── 基础字段混入 ──────────────────────────────────────────────
@@ -304,3 +339,15 @@ class Notification(Base, Timestamped):
     action = Column(String(50), nullable=True)   # submit/approve/reject/pay...
     is_read = Column(Boolean, default=False)
     priority = Column(String(20), default="normal")  # low | normal | urgent
+
+
+class User(Base):
+    """认证用户（DB-backed，替代内存 dict）"""
+    __tablename__ = "users"
+    username = Column(String(80), primary_key=True)
+    hashed_password = Column(String(255), nullable=False)
+    display_name = Column(String(120), nullable=False)
+    role = Column(String(50), default="user")  # admin | user
+    is_active = Column(Boolean, default=True)
+    creation = Column(DateTime, default=datetime.utcnow)
+    modified = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
