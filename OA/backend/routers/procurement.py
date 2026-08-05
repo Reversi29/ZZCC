@@ -3,8 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from database import get_db, Supplier, PurchaseOrder
 from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated, Optional
 import json, re
+from routers.auth import require_auth, CurrentUser
 from routers._db import model_to_dict, seq_for, register as _reg
 
 router = APIRouter(prefix="/api/resource", tags=["Procurement"])
@@ -12,10 +13,6 @@ router = APIRouter(prefix="/api/resource", tags=["Procurement"])
 _reg("Supplier", Supplier, "SUP")
 _reg("Purchase Order", PurchaseOrder, "PO")
 
-def check(x_api_key: str = Header(...)):
-    from config import get_settings
-    if x_api_key != get_settings().API_KEY:
-        raise HTTPException(401, "Invalid API Key")
 
 def md(m) -> dict: return model_to_dict(m)
 
@@ -33,49 +30,42 @@ def _upsert(cls, name, data, db, update=True):
 
 # ── Supplier ──────────────────────────────────────────────────
 @router.get("/Supplier", response_model=R)
-def list_suppliers(db: Session = Depends(get_db), limit=100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_suppliers(db: Session = Depends(get_db), limit=100, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(Supplier).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 @router.post("/Supplier", response_model=R)
-def create_supplier(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_supplier(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     name = data.get("name") or seq_for("Supplier", db)
     m = _upsert(Supplier, name, data, db, update=False)
     db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Supplier created")
 
 @router.get("/Supplier/{name}", response_model=R)
-def get_supplier(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_supplier(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Supplier).filter(Supplier.name == name).first()
     if not m: raise HTTPException(404, "Supplier not found")
     return R(data=md(m))
 
 @router.put("/Supplier/{name}", response_model=R)
-def update_supplier(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_supplier(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = _upsert(Supplier, name, data, db); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Supplier updated")
 
 @router.delete("/Supplier/{name}", response_model=R)
-def delete_supplier(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_supplier(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Supplier).filter(Supplier.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Supplier deleted")
 
 # ── Purchase Order ────────────────────────────────────────────
 @router.get("/Purchase Order", response_model=R)
-def list_pos(db: Session = Depends(get_db), limit=100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_pos(db: Session = Depends(get_db), limit=100, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(PurchaseOrder).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 @router.post("/Purchase Order", response_model=R)
-def create_po(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_po(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     raw = data.get("items", [])
     # 支持字符串（单行描述）或数组（明细列表）
     if isinstance(raw, str):
@@ -92,15 +82,13 @@ def create_po(data: dict, db: Session = Depends(get_db), x_api_key: str = Header
     return R(data={"name": m.name, "total": m.total}, message="Purchase Order created")
 
 @router.get("/Purchase Order/{name}", response_model=R)
-def get_po(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_po(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(PurchaseOrder).filter(PurchaseOrder.name == name).first()
     if not m: raise HTTPException(404, "Purchase Order not found")
     return R(data=md(m))
 
 @router.put("/Purchase Order/{name}", response_model=R)
-def update_po(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_po(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(PurchaseOrder).filter(PurchaseOrder.name == name).first()
     if not m: raise HTTPException(404, "Purchase Order not found")
     for k, v in data.items():
@@ -110,8 +98,7 @@ def update_po(name: str, data: dict, db: Session = Depends(get_db), x_api_key: s
     return R(data={"name": m.name}, message="Purchase Order updated")
 
 @router.delete("/Purchase Order/{name}", response_model=R)
-def delete_po(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_po(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(PurchaseOrder).filter(PurchaseOrder.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Purchase Order deleted")
@@ -124,8 +111,7 @@ class POConsultRequest(BaseModel):
     description: str = ""
 
 @router.post("/ai/po_consult")
-def ai_po_consult(req: POConsultRequest, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def ai_po_consult(req: POConsultRequest, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     risk_flags, suggestions = [], []
     score = 80
     if req.amount > 500000:

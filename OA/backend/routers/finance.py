@@ -3,8 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from database import get_db, Account, JournalEntry, PaymentEntry, ExpenseClaim
 from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated, Optional
 import json, re
+from routers.auth import require_auth, CurrentUser
 from routers._db import model_to_dict, seq_for, register as _reg
 
 router = APIRouter(prefix="/api/resource", tags=["Finance"])
@@ -14,9 +15,6 @@ _reg("Journal Entry", JournalEntry, "JE")
 _reg("Payment Entry", PaymentEntry, "PE")
 _reg("Expense Claim", ExpenseClaim, "EXP")
 
-def check(x_api_key: str = Header(...)):
-    from config import get_settings
-    if x_api_key != get_settings().API_KEY: raise HTTPException(401, "Invalid API Key")
 
 def md(m) -> dict: return model_to_dict(m)
 class R(BaseModel):
@@ -32,48 +30,41 @@ def _upsert(cls, name, data, db, update=True):
 
 # ── Account ───────────────────────────────────────────────────
 @router.get("/Account", response_model=R)
-def list_accounts(db: Session = Depends(get_db), limit=100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_accounts(db: Session = Depends(get_db), limit=100, current_user: CurrentUser = Depends(require_auth)):
     return R(data={"data": [md(r) for r in db.query(Account).limit(limit).all()], "length": db.query(Account).count()})
 
 @router.post("/Account", response_model=R)
-def create_account(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_account(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     name = data.get("name") or seq_for("Account", db)
     m = _upsert(Account, name, data, db, update=False)
     db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Account created")
 
 @router.get("/Account/{name}", response_model=R)
-def get_account(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_account(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Account).filter(Account.name == name).first()
     if not m: raise HTTPException(404, "Account not found")
     return R(data=md(m))
 
 @router.put("/Account/{name}", response_model=R)
-def update_account(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_account(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = _upsert(Account, name, data, db); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Account updated")
 
 @router.delete("/Account/{name}", response_model=R)
-def delete_account(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_account(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Account).filter(Account.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Account deleted")
 
 # ── Journal Entry（借贷平衡校验）───────────────────────────────
 @router.get("/Journal Entry", response_model=R)
-def list_journals(db: Session = Depends(get_db), limit=50, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_journals(db: Session = Depends(get_db), limit=50, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(JournalEntry).order_by(JournalEntry.creation.desc()).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 @router.post("/Journal Entry", response_model=R)
-def create_journal(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_journal(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     accounts = data.get("accounts", [])
     if not accounts: raise HTTPException(400, "日记账至少需要一条分录")
     debit = sum(float(a.get("debit", 0) or 0) for a in accounts)
@@ -87,15 +78,13 @@ def create_journal(data: dict, db: Session = Depends(get_db), x_api_key: str = H
     return R(data={"name": m.name}, message="Journal Entry created")
 
 @router.get("/Journal Entry/{name}", response_model=R)
-def get_journal(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_journal(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(JournalEntry).filter(JournalEntry.name == name).first()
     if not m: raise HTTPException(404, "Journal Entry not found")
     return R(data=md(m))
 
 @router.put("/Journal Entry/{name}", response_model=R)
-def update_journal(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_journal(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(JournalEntry).filter(JournalEntry.name == name).first()
     if not m: raise HTTPException(404, "Journal Entry not found")
     for k, v in data.items():
@@ -105,57 +94,49 @@ def update_journal(name: str, data: dict, db: Session = Depends(get_db), x_api_k
     return R(data={"name": m.name}, message="Journal Entry updated")
 
 @router.delete("/Journal Entry/{name}", response_model=R)
-def delete_journal(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_journal(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(JournalEntry).filter(JournalEntry.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Journal Entry deleted")
 
 # ── Payment Entry ─────────────────────────────────────────────
 @router.get("/Payment Entry", response_model=R)
-def list_payments(db: Session = Depends(get_db), limit=50, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_payments(db: Session = Depends(get_db), limit=50, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(PaymentEntry).order_by(PaymentEntry.creation.desc()).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 @router.post("/Payment Entry", response_model=R)
-def create_payment(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_payment(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     name = data.get("name") or seq_for("Payment Entry", db)
     m = _upsert(PaymentEntry, name, data, db, update=False)
     db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Payment Entry created")
 
 @router.get("/Payment Entry/{name}", response_model=R)
-def get_payment(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_payment(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(PaymentEntry).filter(PaymentEntry.name == name).first()
     if not m: raise HTTPException(404, "Payment Entry not found")
     return R(data=md(m))
 
 @router.put("/Payment Entry/{name}", response_model=R)
-def update_payment(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_payment(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = _upsert(PaymentEntry, name, data, db); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Payment Entry updated")
 
 @router.delete("/Payment Entry/{name}", response_model=R)
-def delete_payment(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_payment(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(PaymentEntry).filter(PaymentEntry.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Payment Entry deleted")
 
 # ── Expense Claim ─────────────────────────────────────────────
 @router.get("/Expense Claim", response_model=R)
-def list_claims(db: Session = Depends(get_db), limit=50, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_claims(db: Session = Depends(get_db), limit=50, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(ExpenseClaim).order_by(ExpenseClaim.creation.desc()).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 @router.post("/Expense Claim", response_model=R)
-def create_claim(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_claim(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     amount = float(data.get("claim_amount", 0) or 0)
     if amount <= 0: raise HTTPException(400, "报销金额必须大于 0")
     name = data.get("name") or seq_for("Expense Claim", db)
@@ -164,21 +145,18 @@ def create_claim(data: dict, db: Session = Depends(get_db), x_api_key: str = Hea
     return R(data={"name": m.name}, message="Expense Claim created")
 
 @router.get("/Expense Claim/{name}", response_model=R)
-def get_claim(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_claim(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(ExpenseClaim).filter(ExpenseClaim.name == name).first()
     if not m: raise HTTPException(404, "Expense Claim not found")
     return R(data=md(m))
 
 @router.put("/Expense Claim/{name}", response_model=R)
-def update_claim(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_claim(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = _upsert(ExpenseClaim, name, data, db); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Expense Claim updated")
 
 @router.delete("/Expense Claim/{name}", response_model=R)
-def delete_claim(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_claim(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(ExpenseClaim).filter(ExpenseClaim.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Expense Claim deleted")
@@ -188,8 +166,7 @@ class InvoiceClassifyRequest(BaseModel):
     supplier: str = ""; amount: float = 0; description: str = ""
 
 @router.post("/ai/classify_invoice")
-def ai_classify_invoice(req: InvoiceClassifyRequest, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def ai_classify_invoice(req: InvoiceClassifyRequest, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     desc = req.description.lower(); supplier = req.supplier.lower()
     rules = [
         (r"云计算|服务器|域名|带宽|oss|cdn|云", "IT基础设施"),
@@ -208,8 +185,7 @@ def ai_classify_invoice(req: InvoiceClassifyRequest, db: Session = Depends(get_d
     return {"category": "待分类", "confidence": "low", "method": "unmatched"}
 
 @router.get("/finance_summary")
-def finance_summary(db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def finance_summary(db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     accounts = db.query(Account).all()
     total_debit = total_credit = 0.0
     for je in db.query(JournalEntry).all():

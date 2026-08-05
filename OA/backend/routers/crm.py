@@ -2,18 +2,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from database import get_db, Lead, Contact, Opportunity
+from routers.auth import require_auth, CurrentUser
 from routers._db import register as _reg
 from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated, Optional
 import json
 
 router = APIRouter(prefix="/api/resource", tags=["CRM"])
 
 
-def check(x_api_key: str = Header(...)):
-    from config import get_settings
-    if x_api_key != get_settings().API_KEY:
-        raise HTTPException(401, "Invalid API Key")
 
 
 def md(m) -> dict:
@@ -35,15 +32,13 @@ _reg("Opportunity", Opportunity, "OPP")
 
 
 @router.get("/Lead", response_model=R)
-def list_leads(db: Session = Depends(get_db), limit: int = 100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_leads(db: Session = Depends(get_db), limit: int = 100, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(Lead).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 
 @router.post("/Lead", response_model=R)
-def create_lead(lead: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_lead(lead: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     from routers._db import seq_for
     name = lead.get("name") or seq_for("Lead", db)
     m = Lead(name=name)
@@ -55,8 +50,7 @@ def create_lead(lead: dict, db: Session = Depends(get_db), x_api_key: str = Head
 
 
 @router.get("/Lead/{name}", response_model=R)
-def get_lead(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_lead(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Lead).filter(Lead.name == name).first()
     if not m:
         raise HTTPException(404, "Lead not found")
@@ -64,8 +58,7 @@ def get_lead(name: str, db: Session = Depends(get_db), x_api_key: str = Header(N
 
 
 @router.put("/Lead/{name}", response_model=R)
-def update_lead(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_lead(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Lead).filter(Lead.name == name).first()
     if not m:
         raise HTTPException(404, "Lead not found")
@@ -77,8 +70,7 @@ def update_lead(name: str, data: dict, db: Session = Depends(get_db), x_api_key:
 
 
 @router.delete("/Lead/{name}", response_model=R)
-def delete_lead(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_lead(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Lead).filter(Lead.name == name).first()
     if m:
         db.delete(m); db.commit()
@@ -87,15 +79,13 @@ def delete_lead(name: str, db: Session = Depends(get_db), x_api_key: str = Heade
 
 # ── Contact ───────────────────────────────────────────────────
 @router.get("/Contact", response_model=R)
-def list_contacts(db: Session = Depends(get_db), limit: int = 100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_contacts(db: Session = Depends(get_db), limit: int = 100, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(Contact).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 
 @router.post("/Contact", response_model=R)
-def create_contact(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_contact(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     from routers._db import seq_for
     name = data.get("name") or seq_for("Contact", db)
     m = Contact(name=name)
@@ -107,8 +97,7 @@ def create_contact(data: dict, db: Session = Depends(get_db), x_api_key: str = H
 
 
 @router.get("/Contact/{name}", response_model=R)
-def get_contact(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_contact(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Contact).filter(Contact.name == name).first()
     if not m:
         raise HTTPException(404, "Contact not found")
@@ -116,8 +105,7 @@ def get_contact(name: str, db: Session = Depends(get_db), x_api_key: str = Heade
 
 
 @router.delete("/Contact/{name}", response_model=R)
-def delete_contact(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_contact(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Contact).filter(Contact.name == name).first()
     if m:
         db.delete(m); db.commit()
@@ -126,15 +114,13 @@ def delete_contact(name: str, db: Session = Depends(get_db), x_api_key: str = He
 
 # ── Opportunity ───────────────────────────────────────────────
 @router.get("/Opportunity", response_model=R)
-def list_opportunities(db: Session = Depends(get_db), limit: int = 100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_opportunities(db: Session = Depends(get_db), limit: int = 100, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(Opportunity).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 
 @router.post("/Opportunity", response_model=R)
-def create_opportunity(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_opportunity(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     from routers._db import seq_for
     name = data.get("name") or seq_for("Opportunity", db)
     m = Opportunity(name=name)
@@ -146,8 +132,7 @@ def create_opportunity(data: dict, db: Session = Depends(get_db), x_api_key: str
 
 
 @router.get("/Opportunity/{name}", response_model=R)
-def get_opportunity(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_opportunity(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Opportunity).filter(Opportunity.name == name).first()
     if not m:
         raise HTTPException(404, "Opportunity not found")
@@ -155,8 +140,7 @@ def get_opportunity(name: str, db: Session = Depends(get_db), x_api_key: str = H
 
 
 @router.delete("/Opportunity/{name}", response_model=R)
-def delete_opportunity(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_opportunity(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Opportunity).filter(Opportunity.name == name).first()
     if m:
         db.delete(m); db.commit()

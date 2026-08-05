@@ -1,16 +1,11 @@
 """routers/ai.py — 统一 AI 咨询入口（所有模块通用）"""
-from fastapi import APIRouter, HTTPException, Header
+from routers.auth import require_auth, CurrentUser
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional, Any, Dict
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 
-
-def check(x: str = Header(...)):
-    from config import get_settings
-    s = get_settings()
-    if x != s.API_KEY:
-        raise HTTPException(401, "Invalid API Key")
 
 
 class AIConsultRequest(BaseModel):
@@ -19,14 +14,13 @@ class AIConsultRequest(BaseModel):
 
 
 @router.post("/consult")
-def ai_consult(req: AIConsultRequest, x_api_key: str = Header(None)):
+def ai_consult(req: AIConsultRequest, current_user: CurrentUser = Depends(require_auth)):
     """
     通用 AI 咨询入口
     - module: 业务模块名
     - context: 单据数据上下文字典
     返回: {"advice": "...", "risk_flags": [...], "suggestions": [...]}
     """
-    check(x_api_key)
 
     # 业务规则 + AI 策略库（本地规则引擎，无外部依赖）
     module = req.module.lower()

@@ -3,15 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from database import get_db, Contract
 from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated, Optional
+from routers.auth import require_auth, CurrentUser
 from routers._db import model_to_dict, seq_for, register as _reg
 
 router = APIRouter(prefix="/api/resource", tags=["Compliance"])
 _reg("Contract", Contract, "CONTRACT")
 
-def check(x_api_key: str = Header(...)):
-    from config import get_settings
-    if x_api_key != get_settings().API_KEY: raise HTTPException(401, "Invalid API Key")
 
 def md(m) -> dict: return model_to_dict(m)
 class R(BaseModel):
@@ -25,35 +23,30 @@ def _upsert(cls, name, data, db, update=True):
     return m
 
 @router.get("/Contract", response_model=R)
-def list_contracts(db: Session = Depends(get_db), limit=100, x_api_key: str = Header(None)):
-    check(x_api_key)
+def list_contracts(db: Session = Depends(get_db), limit=100, current_user: CurrentUser = Depends(require_auth)):
     rows = db.query(Contract).limit(limit).all()
     return R(data={"data": [md(r) for r in rows], "length": len(rows)})
 
 @router.post("/Contract", response_model=R)
-def create_contract(data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def create_contract(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     name = data.get("name") or seq_for("Contract", db)
     m = _upsert(Contract, name, data, db, update=False)
     db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Contract created")
 
 @router.get("/Contract/{name}", response_model=R)
-def get_contract(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def get_contract(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Contract).filter(Contract.name == name).first()
     if not m: raise HTTPException(404, "Contract not found")
     return R(data=md(m))
 
 @router.put("/Contract/{name}", response_model=R)
-def update_contract(name: str, data: dict, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def update_contract(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = _upsert(Contract, name, data, db); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Contract updated")
 
 @router.delete("/Contract/{name}", response_model=R)
-def delete_contract(name: str, db: Session = Depends(get_db), x_api_key: str = Header(None)):
-    check(x_api_key)
+def delete_contract(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     m = db.query(Contract).filter(Contract.name == name).first()
     if m: db.delete(m); db.commit()
     return R(message="Contract deleted")
