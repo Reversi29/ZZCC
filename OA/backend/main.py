@@ -49,45 +49,6 @@ def status():
     }
 
 
-# ── 兼容 ERPNext 的路由组（AI 业务咨询）──────────────────────
-@app.post("/api/ai/consult")
-def ai_consult(req: Request):
-    """通用 AI 咨询入口（调度各模块规则引擎）"""
-    body, s = req.json(), get_settings()
-    module = body.get("module", "")
-    ctx = body.get("context", {})
-
-    # 本地规则引擎路由（无 LLM API 依赖）
-    if module == "procurement":
-        amount = float(ctx.get("amount") or 0)
-        supplier = ctx.get("supplier", "")
-        risk, suggestions, score = [], [("采购要素完整，可正常推进", 80)], 80
-        if amount > 500000: risk.append("单笔超50万，需审批流升级"); score = 55
-        elif amount > 100000: suggestions.insert(0, ("建议3家供应商比价", 65)); score = 65
-        elif amount < 10000: suggestions.insert(0, ("建议走快速采购通道", 90))
-        if not supplier: risk.append("缺少供应商信息")
-        import re
-        text = (ctx.get("items", "") + ctx.get("description", "")).lower()
-        if re.search(r"独家|唯一|指定", text): risk.append("指定/独家供货，需说明合理性")
-        if re.search(r"预付|全款|订金", text) and amount > 50000: risk.append("大额预付，建议分期")
-        return {"advice": f"采购 {amount:.2f} 元 | {supplier or '未指定供应商'}",
-                "risk_flags": risk, "suggestions": [s[0] for s in suggestions], "score": score}
-
-    if module == "finance":
-        return {"advice": "财务合规检查通过", "risk_flags": [], "suggestions": ["发票备注项目名称"]}
-
-    if module == "compliance":
-        return {"advice": "合同合规性检查通过", "risk_flags": [], "suggestions": ["建议约定争议仲裁条款"]}
-
-    if module == "project":
-        return {"advice": "项目进展正常", "risk_flags": [], "suggestions": ["定期同步里程碑"]}
-
-    if module == "crm":
-        return {"advice": "线索评分良好", "risk_flags": [], "suggestions": ["建议3日内首次跟进"]}
-
-    return {"advice": "模块未识别", "risk_flags": [], "suggestions": []}
-
-
 # ── 全局错误处理 ──────────────────────────────────────────────
 @app.exception_handler(Exception)
 def global_error(req: Request, exc: Exception):
@@ -98,6 +59,7 @@ def global_error(req: Request, exc: Exception):
 def _register():
     from fastapi import APIRouter
     router_files = [
+        "routers.auth",       # 认证路由（必须排第一，保护其他路由）
         "routers.crm",
         "routers.project",
         "routers.procurement",
