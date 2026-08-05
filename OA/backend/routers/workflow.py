@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Annotated
 from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry, WorkflowHistory, Notification
+from routers.auth import get_current_user, CurrentUser
 
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
 
@@ -133,11 +134,23 @@ def get_pending(db: Session = Depends(get_db)):
 
 # ── POST /api/workflow/action ──────────────────────────────────
 @router.post("/action")
-def do_action(body: WorkflowActionRequest, db: Session = Depends(get_db)):
+def do_action(
+    body: WorkflowActionRequest,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
     prefix_map = {"EXP-": "ExpenseClaim", "PO-": "PurchaseOrder", "JE-": "JournalEntry"}
     doctype = next((d for p, d in prefix_map.items() if body.name.startswith(p)), None)
     if not doctype:
         raise HTTPException(400, f"无法识别单据类型: {body.name}")
+
+    # ── 权限控制：提交（submit）任何登录用户可做；审批类动作仅限管理员 ──
+    APPROVAL_ONLY = ("approve", "reject", "pay", "order", "receive")
+    if body.action in APPROVAL_ONLY and current_user.role not in ("admin", "api"):
+        raise HTTPException(
+            403,
+            f"审批动作「{body.action}」需要管理员权限（当前角色: {current_user.role}）",
+        )
 
     current = _get_status(doctype, body.name, db)
     actions = APPROVAL_ACTIONS.get(doctype, [])
@@ -168,7 +181,7 @@ def do_action(body: WorkflowActionRequest, db: Session = Depends(get_db)):
         from_status=current,
         to_status=matched["to"],
         comment=body.comment,
-        operator="system"  # TODO: 接入认证后改为真实用户
+        operator=current_user.username,
     ))
 
     # ── 审批通知 ───────────────────────────────────────────────
@@ -215,7 +228,11 @@ def do_action(body: WorkflowActionRequest, db: Session = Depends(get_db)):
 
 # ── GET /api/workflow/doc/{doctype}/{name} ─────────────────────
 @router.get("/doc/{doctype}/{name}")
-def get_doc_workflow(doctype: str, name: str, db: Session = Depends(get_db)):
+def get_doc_workflow(
+    doctype: str, name: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
     if doctype not in TABLE_MAP:
         raise HTTPException(400, f"不支持: {doctype}")
 
@@ -242,7 +259,10 @@ def get_doc_workflow(doctype: str, name: str, db: Session = Depends(get_db)):
 
 # ── GET /api/workflow/stats ────────────────────────────────────
 @router.get("/stats")
-def workflow_stats(db: Session = Depends(get_db)):
+def workflow_stats(
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
     stats = {}
     for doctype, tbl in TABLE_MAP.items():
         col = STATUS_COL[doctype]
@@ -274,6 +294,7 @@ def _notify(db, recipient: str, title: str, body: str, ntype: str = "approval_re
 # ── GET /api/workflow/notifications ──────────────────────────────
 @router.get("/notifications")
 def get_notifications(
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
     recipient: str = "admin",
     unread_only: bool = False,
     db: Session = Depends(get_db),
@@ -308,7 +329,11 @@ def get_notifications(
 
 # ── POST /api/workflow/notifications/{id}/read ─────────────────
 @router.post("/notifications/{id}/read")
-def mark_notification_read(id: int, db: Session = Depends(get_db)):
+def mark_notification_read(
+    id: int,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
     n = db.query(Notification).filter(Notification.id == id).first()
     if not n:
         raise HTTPException(404, "通知不存在")
@@ -319,7 +344,11 @@ def mark_notification_read(id: int, db: Session = Depends(get_db)):
 
 # ── POST /api/workflow/notifications/read-all ─────────────────
 @router.post("/notifications/read-all")
-def mark_all_read(recipient: str = "admin", db: Session = Depends(get_db)):
+def mark_all_read(
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    recipient: str = "admin",
+    db: Session = Depends(get_db),
+):
     db.query(Notification).filter(
         Notification.recipient == recipient,
         Notification.is_read == False,
@@ -330,7 +359,11 @@ def mark_all_read(recipient: str = "admin", db: Session = Depends(get_db)):
 
 # ── GET /api/workflow/history/{doctype}/{name} ─────────────────
 @router.get("/history/{doctype}/{name}")
-def get_workflow_history(doctype: str, name: str, db: Session = Depends(get_db)):
+def get_workflow_history(
+    doctype: str, name: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
     """返回指定单据的审批历史记录"""
     if doctype not in TABLE_MAP:
         raise HTTPException(400, f"不支持的 doctype: {doctype}")

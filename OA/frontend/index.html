@@ -159,6 +159,10 @@
   <div class="header-logo"><span>ZZCC</span> OA</div>
   <div class="header-nav" id="nav"></div>
   <div class="header-right">
+    <div id="authArea">
+      <button class="notif-btn" id="loginBtn" onclick="showLoginModal()" title="登录" style="display:none">&#128100;</button>
+      <span id="userDisplay" style="font-size:13px;color:var(--text2);display:none"></span>
+    </div>
     <button class="notif-btn" id="notifBtn" onclick="toggleNotifPanel()" title="通知">
       &#128276;
       <span class="notif-badge" id="notifBadge" style="display:none">0</span>
@@ -171,6 +175,29 @@
 
 <div class="main" id="main"></div>
 <div class="toast" id="toast"></div>
+
+<!-- Login Modal -->
+<div id="loginModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
+    <h2 style="margin:0 0 24px;font-size:20px;color:var(--text)">登录 ZZCC OA</h2>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <input id="loginUsername" type="text" placeholder="用户名" autocomplete="username"
+        style="padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px" />
+      <input id="loginPassword" type="password" placeholder="密码"
+        style="padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px"
+        onkeydown="if(event.key==='Enter')doLogin()" />
+      <button onclick="doLogin()" id="loginSubmit"
+        style="padding:10px;border:none;border-radius:8px;background:var(--primary);color:white;font-size:15px;cursor:pointer;font-weight:600">
+        登录
+      </button>
+      <div id="loginError" style="color:#dc2626;font-size:13px;display:none;min-height:18px"></div>
+      <div style="font-size:12px;color:var(--text2);text-align:center;margin-top:4px">
+        默认账号: admin / admin123
+      </div>
+    </div>
+    <button onclick="closeLoginModal()" style="position:absolute;top:12px;right:16px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">×</button>
+  </div>
+</div>
 
 <script>
 const API = '';
@@ -195,6 +222,7 @@ const MODULES = [
 ];
 
 let currentModule = 'dashboard';
+let pendingLoginModule = null;
 
 // ── 字段配置（与后端模型对齐）─────────────────────────────────
 const FIELDS = {
@@ -326,14 +354,85 @@ function toast(msg, type='success') {
   setTimeout(() => t.className = 'toast', 3000);
 }
 async function api(path, method='GET', body=null) {
-  const opts = { headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' } };
+  const token = localStorage.getItem('oa_token');
+  const hdrs = { 'Content-Type': 'application/json' };
+  if (token) hdrs['Authorization'] = 'Bearer ' + token;
+  else hdrs['X-Api-Key'] = API_KEY;
+  const opts = { headers: hdrs };
   if (method !== 'GET') opts.method = method;
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
   const j = await r.json();
+  if (r.status === 401) { clearAuth(); showLoginModal(); throw new Error('未登录'); }
+  if (r.status === 403) { throw new Error('无权限：' + (j.detail || '需要管理员权限')); }
   if (!r.ok) throw new Error(j.detail || j.message || JSON.stringify(j));
   return j;
 }
+// ── Auth ────────────────────────────────────────────────────────────
+function clearAuth() {
+  localStorage.removeItem('oa_token');
+  localStorage.removeItem('oa_user');
+}
+function getAuthToken() { return localStorage.getItem('oa_token'); }
+function getCurrentUser() { try { return JSON.parse(localStorage.getItem('oa_user') || '{}'); } catch { return {}; } }
+function updateAuthUI() {
+  const user = getCurrentUser();
+  const token = getAuthToken();
+  document.getElementById('loginBtn').style.display = token ? 'none' : 'inline-flex';
+  document.getElementById('userDisplay').style.display = user.username ? 'inline' : 'none';
+  if (user.username) document.getElementById('userDisplay').textContent = user.display_name || user.username;
+}
+function showLoginModal() {
+  pendingLoginModule = currentModule;
+  document.getElementById('loginModal').style.display = 'flex';
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginError').textContent = '';
+  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginUsername').focus();
+}
+function closeLoginModal() { document.getElementById('loginModal').style.display = 'none'; }
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!username || !password) { showLoginError('请输入用户名和密码'); return; }
+  const btn = document.getElementById('loginSubmit');
+  btn.textContent = '登录中...'; btn.disabled = true;
+  try {
+    const r = await fetch(API + '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const j = await r.json();
+    if (!r.ok) { showLoginError(j.detail || '登录失败'); return; }
+    localStorage.setItem('oa_token', j.access_token);
+    // fetch /me to get display_name
+    const meR = await fetch(API + '/api/auth/me', { headers: { 'Authorization': 'Bearer ' + j.access_token } });
+    const me = await meR.json();
+    localStorage.setItem('oa_user', JSON.stringify(me));
+    closeLoginModal();
+    updateAuthUI();
+    if (pendingLoginModule) { const m = pendingLoginModule; pendingLoginModule = null; navigate(m); }
+    else if (typeof afterLogin === 'function') afterLogin();
+    showToast('登录成功', 'success');
+  } catch (e) { showLoginError(e.message); }
+  btn.textContent = '登录'; btn.disabled = false;
+}
+function showLoginError(msg) {
+  const el = document.getElementById('loginError');
+  el.textContent = msg; el.style.display = 'block';
+}
+function logout() {
+  clearAuth();
+  updateAuthUI();
+  showToast('已退出登录', 'info');
+  if (typeof renderModule === 'function') renderModule();
+}
+function initAuth() {
+  if (getAuthToken()) updateAuthUI();
+}
+
 async function apiGet(doctype) { const j = await api(`/api/resource/${enc(toApiDoctype(doctype))}`); return j.data?.data || []; }
 async function apiCreate(doctype, data) { return api(`/api/resource/${enc(toApiDoctype(doctype))}`, 'POST', data); }
 async function apiDelete(doctype, name) { return api(`/api/resource/${enc(toApiDoctype(doctype))}/${enc(name)}`, 'DELETE'); }
@@ -724,11 +823,12 @@ async function switchWfTab(tab, btn) {
           <span class="wf-total">${fmtMoney(dtTotal)} 元</span>
         </div>`;
       for (const p of items) {
-        const actions = p.actions
+        const isAdmin = ['admin','api'].includes((getCurrentUser().role || ''));
+        const actions = isAdmin ? p.actions
           .filter(a => a.from === p.status)
           .map(a => `<button class="wf-action-btn" style="background:${a.color}"
             onclick="doWorkflowAction('${p.name}','${p.doctype}','${a.action}','${a.label}')">${a.label}</button>`)
-          .join('');
+          .join('') : '';
         html += `<div class="wf-item">
           <div class="wf-item-main">
             <div class="wf-item-title">${esc(p.title || p.name)}</div>
@@ -798,7 +898,9 @@ async function doWorkflowAction(name, doctype, action, label) {
 async function showWfDoc(doctype, name) {
   const d = await api(`/api/workflow/doc/${enc(doctype)}/${enc(name)}`);
   const doc = d.doc;
+  const isAdmin = ['admin','api'].includes((getCurrentUser().role || ''));
   const actions = (d.available_actions || [])
+    .filter(a => isAdmin || a.action === 'submit')
     .map(a => `<button class="wf-action-btn" style="background:${a.color}"
       onclick="doWorkflowAction('${name}','${doctype}','${a.action}','${a.label}')">${a.label}</button>`)
     .join('');
@@ -978,4 +1080,5 @@ document.addEventListener('click',function(e){
     document.getElementById('notifPanel').classList.remove('open');
   }
 });
+updateAuthUI();
 </script>
