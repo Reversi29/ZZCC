@@ -1,5 +1,5 @@
 """database.py — SQLAlchemy ORM（SQLite for dev，切换 MariaDB 只需改 URL）"""
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Date, DateTime, Enum, Boolean, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Date, DateTime, Time, Enum, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, date
@@ -109,8 +109,16 @@ class Employee(Base, Timestamped):
     designation = Column(String(255), nullable=True)
     department = Column(String(255), nullable=True)
     employment_type = Column(String(50), default="Full-time")
-    status = Column(String(50), default="Active")
+    status = Column(String(50), default="Draft")
     company = Column(String(255), default="ZZCC")
+    hire_date = Column(Date, nullable=True)
+    leave_annual = Column(Float, default=15.0)
+    leave_sick = Column(Float, default=10.0)
+    leave_annual_used = Column(Float, default=0.0)
+    leave_sick_used = Column(Float, default=0.0)
+    department_id = Column(Integer, nullable=True)
+    bank_account = Column(String(100), nullable=True)
+    tax_id = Column(String(100), nullable=True)
 
 
 class Lead(Base, Timestamped):
@@ -125,6 +133,7 @@ class Lead(Base, Timestamped):
     annual_revenue = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
     docstatus = Column(Integer, default=0)
+    owner = Column(String(255), nullable=True)  # 数据隔离：销售只看自己客户
 
 
 class Contact(Base, Timestamped):
@@ -137,6 +146,7 @@ class Contact(Base, Timestamped):
     company_name = Column(String(255), nullable=True)
     designation = Column(String(255), nullable=True)
     is_primary_contact = Column(Boolean, default=True)
+    owner = Column(String(255), nullable=True)
 
 
 class Opportunity(Base, Timestamped):
@@ -148,6 +158,7 @@ class Opportunity(Base, Timestamped):
     probability = Column(Float, default=0.0)
     amount = Column(Float, default=0.0)
     expected_closing_date = Column(Date, nullable=True)
+    owner = Column(String(255), nullable=True)
 
 
 class Project(Base, Timestamped):
@@ -314,6 +325,46 @@ class Asset(Base, Timestamped):
     status = Column(String(50), default="Active")
 
 
+
+class LeaveRequest(Base, Timestamped):
+    __tablename__ = "leave_requests"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    employee = Column(String(255), nullable=False)
+    leave_type = Column(String(50), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    days = Column(Float, default=1.0)
+    reason = Column(Text, nullable=True)
+    status = Column(String(50), default="Draft")
+    approver = Column(String(255), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    department_id = Column(Integer, nullable=True)
+
+class AttendanceRecord(Base, Timestamped):
+    __tablename__ = "attendance_records"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    employee = Column(String(255), nullable=False)
+    date = Column(Date, nullable=False)
+    check_in = Column(Time, nullable=True)
+    check_out = Column(Time, nullable=True)
+    status = Column(String(50), default="Normal")
+    remark = Column(String(255), nullable=True)
+    department_id = Column(Integer, nullable=True)
+
+class SalaryRecord(Base, Timestamped):
+    __tablename__ = "salary_records"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    employee = Column(String(255), nullable=False)
+    year_month = Column(String(7), nullable=False)
+    base_salary = Column(Float, default=0.0)
+    bonus = Column(Float, default=0.0)
+    deductions = Column(Float, default=0.0)
+    net_salary = Column(Float, default=0.0)
+    pay_date = Column(Date, nullable=True)
+    remark = Column(Text, nullable=True)
+    department_id = Column(Integer, nullable=True)
+
 class WorkflowHistory(Base, Timestamped):
     __tablename__ = "workflow_history"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -324,6 +375,7 @@ class WorkflowHistory(Base, Timestamped):
     to_status = Column(String(50), nullable=False)
     comment = Column(Text, nullable=True)
     operator = Column(String(255), default="system")
+    field_changes = Column(Text, nullable=True)  # JSON 字符串：字段变更明细（如 {"status": {"from":"Draft","to":"Submitted"}}）
 
 
 class Notification(Base, Timestamped):
@@ -348,6 +400,68 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     display_name = Column(String(120), nullable=False)
     role = Column(String(50), default="user")  # admin | user
+    department_id = Column(String(80), ForeignKey("departments.name"), nullable=True)  # nullable: 小团队不强制绑定
     is_active = Column(Boolean, default=True)
+    status = Column(String(50), default="active")  # active | pending | rejected（注册审批流）
+    ext = Column(Text, nullable=True)  # JSON，预留给 title/phone/manager 等未来字段
     creation = Column(DateTime, default=datetime.utcnow)
     modified = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Department(Base, Timestamped):
+    """
+    组织部门（Nested Set Model）。
+    - lft/rgt 形成树的包含区间：子部门的 lft > 父.lft 且 rgt < 父.rgt
+    - 查询某部门所有下属：WHERE lft > :parent_lft AND rgt < :parent_rgt
+    - 查询完整路径（根→当前）：WHERE lft <= :self_lft AND rgt >= :self_rgt ORDER BY lft
+    - ext JSON 预留给 cost_center / approval_limit / manager_title 等未来字段
+    """
+    __tablename__ = "departments"
+    name = Column(String(80), primary_key=True)
+    department_name = Column(String(120), nullable=False)
+    parent = Column(String(80), ForeignKey("departments.name"), nullable=True)  # None=根部门
+    lft = Column(Integer, nullable=False, index=True)   # 左值
+    rgt = Column(Integer, nullable=False, index=True)   # 右值
+    company = Column(String(80), nullable=True)          # 所属公司（多租户场景预留）
+    is_group = Column(Boolean, default=False)            # True=仅作分组/汇总节点
+    ext = Column(Text, nullable=True)                   # JSON，预留给 cost_center / manager_title 等
+
+
+class Budget(Base, Timestamped):
+    """月度预算控制（三维：doctype + period + department）"""
+    __tablename__ = "budgets"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    doctype = Column(String(50), nullable=False, index=True)
+    period = Column(String(20), nullable=False)
+    department_id = Column(String(80), nullable=True)          # None=全局预算（全公司）
+    limit_amount = Column(Float, default=0.0)
+    used_amount = Column(Float, default=0.0)
+    note = Column(String(255), nullable=True)
+
+
+class ApprovalRule(Base, Timestamped):
+    """
+    多级审批规则。
+    - 无 department_id 时为全局规则（所有部门适用）
+    - 有 department_id 时为该部门专用规则，覆盖同名全局规则
+    - 有 level 时按 level 升序执行多级审批
+    """
+    __tablename__ = "approval_rules"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    doctype = Column(String(50), nullable=False, index=True)
+    department_id = Column(String(80), nullable=True)          # None=全局规则
+    level = Column(Integer, nullable=False)
+    approver_role = Column(String(50), default="admin")
+    condition_json = Column(Text, nullable=True)               # 金额阈值等条件（JSON 字符串）
+
+
+class Delegation(Base, Timestamped):
+    """审批代理人：grantor 委托 delegate 代其审批（可限定 doctype + department）"""
+    __tablename__ = "delegations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    grantor = Column(String(80), nullable=False)    # 委托人 username
+    delegate = Column(String(80), nullable=False)   # 代理人 username
+    doctype = Column(String(50), nullable=True)     # 限定单据类型，None=全部
+    department_id = Column(String(80), nullable=True)  # 限定部门，None=全部部门
+    start_date = Column(DateTime, nullable=True)
+    end_date = Column(DateTime, nullable=True)

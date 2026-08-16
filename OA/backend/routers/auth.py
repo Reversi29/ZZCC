@@ -1,5 +1,7 @@
 """auth.py — 认证路由（JWT Bearer Token + DB User）"""
 import os
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -17,9 +19,16 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 # ── 密钥 ──────────────────────────────────────────────────────
 SECRET_KEY = os.getenv("OAUTH_SECRET_KEY", "zzcc-oa-dev-secret-change-in-prod")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = 24
+ACCESS_TOKEN_EXPIRE_HOURS = int(os.getenv("OAUTH_TOKEN_EXPIRE_HOURS", "24"))
 SALT = b"zzcc-oa-salt"
 PBKDF2_ITER = 310_000
+
+# ── 安全状态（demo 用内存字典；生产应换 Redis）──────────────
+TOKEN_BLACKLIST: dict[str, float | None] = {}   # jti -> 过期时间（失效的 token）
+_LOGIN_FAILS: dict[str, dict] = {}                # username -> {count, lock_until}
+MAX_FAILS = 5
+LOCK_SECONDS = 15 * 60
+_ACTIVE_SESSIONS: dict[str, str] = {}             # jti -> username（活跃会话，demo 用内存）
 
 # ── Pydantic 模型 ──────────────────────────────────────────────
 class LoginRequest(BaseModel):
@@ -56,6 +65,7 @@ class CurrentUser(BaseModel):
     username: str
     display_name: str
     role: str
+    status: str = "active"
 
 
 # ── 密码 ──────────────────────────────────────────────────────
@@ -70,6 +80,7 @@ def create_access_token(username: str, display_name: str, role: str = "user") ->
         "sub": username,
         "display_name": display_name,
         "role": role,
+        "jti": str(uuid.uuid4()),
         "iat": datetime.now(timezone.utc),
         "exp": datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
@@ -92,6 +103,8 @@ def get_current_user(
     if token:
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            if "jti" in payload and payload["jti"] in TOKEN_BLACKLIST:
+                raise HTTPException(status_code=401, detail="Token 已失效，请重新登录")
             return CurrentUser(
                 username=payload["sub"],
                 display_name=payload["display_name"],
@@ -112,6 +125,51 @@ def get_current_user(
     )
 
 
+def _check_lock(username: str):
+    f = _LOGIN_FAILS.get(username)
+    if f and f["lock_until"] and f["lock_until"] > time.time():
+        remain = int((f["lock_until"] - time.time()) / 60) + 1
+        raise HTTPException(status_code=423, detail=f"账户已锁定，请 {remain} 分钟后重试")
+
+
+def _record_fail(username: str):
+    f = _LOGIN_FAILS.setdefault(username, {"count": 0, "lock_until": 0.0})
+    f["count"] += 1
+    if f["count"] >= MAX_FAILS:
+        f["lock_until"] = time.time() + LOCK_SECONDS
+        f["count"] = 0
+
+
+def _reset_fail(username: str):
+    _LOGIN_FAILS.pop(username, None)
+
+
+def _register_session(token: str, username: str):
+    """记录活跃会话（jti -> username）"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        jti = payload.get("jti")
+        if jti:
+            _ACTIVE_SESSIONS[jti] = username
+    except jwt.PyJWTError:
+        pass
+
+
+def _blacklist_token(authorization: str | None):
+    """将当前 token 的 jti 加入黑名单并从活跃会话移除（登出 / 改密后失效）"""
+    raw = authorization[len("Bearer "):] if authorization and authorization.startswith("Bearer ") else None
+    if not raw:
+        return
+    try:
+        payload = jwt.decode(raw, SECRET_KEY, algorithms=[ALGORITHM])
+        jti = payload.get("jti")
+        if jti:
+            TOKEN_BLACKLIST[jti] = payload.get("exp")
+            _ACTIVE_SESSIONS.pop(jti, None)
+    except jwt.PyJWTError:
+        pass
+
+
 def _resolve_user(token: str | None, api_key: str | None, authorization: str | None) -> CurrentUser:
     """解析当前用户：Bearer JWT 优先，X-API-Key 兼容。任一有效即返回。"""
     raw = token
@@ -120,6 +178,8 @@ def _resolve_user(token: str | None, api_key: str | None, authorization: str | N
     if raw:
         try:
             payload = jwt.decode(raw, SECRET_KEY, algorithms=[ALGORITHM])
+            if "jti" in payload and payload["jti"] in TOKEN_BLACKLIST:
+                raise HTTPException(status_code=401, detail="Token 已失效，请重新登录")
             return CurrentUser(
                 username=payload["sub"],
                 display_name=payload.get("display_name", ""),
@@ -178,28 +238,40 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         hashed_password=_hash_pw(body.password),
         display_name=body.display_name,
         role="user",
+        status="pending",  # 待管理员审核
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    return CurrentUser(username=user.username, display_name=user.display_name, role=user.role)
+    return CurrentUser(
+        username=user.username,
+        display_name=user.display_name,
+        role=user.role,
+        status=user.status,
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    """用户名 + 密码登录，返回 JWT"""
+    """用户名 + 密码登录，返回 JWT（含失败锁定）"""
+    _check_lock(body.username)
     user: User | None = db.query(User).filter(User.username == body.username).first()
-    if not user or not user.is_active:
+    if not user or not user.is_active or not _verify_pw(body.password, user.hashed_password):
+        _record_fail(body.username)
+        _check_lock(body.username)  # 若刚触发锁定，抛出 423
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
         )
-    if not _verify_pw(body.password, user.hashed_password):
+    _reset_fail(body.username)
+    # 待审核 / 已拒绝账号禁止登录（区别于密码错误，不计入失败锁定）
+    if user.status != "active":
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账户待审核，请联系管理员激活",
         )
     token = create_access_token(user.username, user.display_name, user.role)
+    _register_session(token, user.username)
     return TokenResponse(
         access_token=token,
         expires_in=ACCESS_TOKEN_EXPIRE_HOURS * 3600,
@@ -220,3 +292,80 @@ def refresh(current_user: Annotated[CurrentUser, Depends(get_current_user)]):
         access_token=token,
         expires_in=ACCESS_TOKEN_EXPIRE_HOURS * 3600,
     )
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _pw_strength(cls, v):
+        if len(v) < 6:
+            raise ValueError("密码至少6个字符")
+        return v
+
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    current_user: Annotated[CurrentUser, Depends(require_auth)] = None,
+    db: Session = Depends(get_db),
+):
+    """修改密码：校验旧密码 + 强度，成功后使当前 token 失效"""
+    user: User | None = db.query(User).filter(User.username == current_user.username).first()
+    if not user or not _verify_pw(body.old_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="旧密码错误")
+    if body.old_password == body.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与旧密码相同")
+    user.hashed_password = _hash_pw(body.new_password)
+    db.commit()
+    _blacklist_token(authorization)  # 改密后强制重新登录
+    return {"ok": True, "message": "密码已修改，请重新登录"}
+
+
+@router.post("/logout")
+def logout(authorization: str | None = Header(default=None, alias="Authorization")):
+    """登出：当前 token 加入黑名单"""
+    _blacklist_token(authorization)
+    return {"ok": True, "message": "已登出"}
+
+
+@router.get("/sessions")
+def list_sessions(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    current_user: Annotated[CurrentUser, Depends(require_auth)] = None,
+):
+    """列出当前用户的活跃登录会话（支持多端识别）"""
+    mine = [jti for jti, u in _ACTIVE_SESSIONS.items() if u == current_user.username]
+    cur_jti = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            p = jwt.decode(authorization[len("Bearer "):], SECRET_KEY, algorithms=[ALGORITHM])
+            cur_jti = p.get("jti")
+        except jwt.PyJWTError:
+            pass
+    return [{"jti": j[:8], "is_current": j == cur_jti} for j in mine]
+
+
+@router.post("/logout-all")
+def logout_all(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    current_user: Annotated[CurrentUser, Depends(require_auth)] = None,
+):
+    """踢出除当前设备外的所有该用户会话"""
+    cur_jti = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            p = jwt.decode(authorization[len("Bearer "):], SECRET_KEY, algorithms=[ALGORITHM])
+            cur_jti = p.get("jti")
+        except jwt.PyJWTError:
+            pass
+    killed = 0
+    for jti, u in list(_ACTIVE_SESSIONS.items()):
+        if u == current_user.username and jti != cur_jti:
+            TOKEN_BLACKLIST[jti] = None
+            _ACTIVE_SESSIONS.pop(jti, None)
+            killed += 1
+    return {"ok": True, "revoked": killed}

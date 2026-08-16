@@ -30,6 +30,7 @@ def list_contracts(db: Session = Depends(get_db), limit=100, current_user: Curre
 @router.post("/Contract", response_model=R)
 def create_contract(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     name = data.get("name") or seq_for("Contract", db)
+    data = dict(data); data["status"] = "Draft"  # 新合同默认草稿，走审批流
     m = _upsert(Contract, name, data, db, update=False)
     db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Contract created")

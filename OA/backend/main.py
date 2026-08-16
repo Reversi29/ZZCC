@@ -60,6 +60,7 @@ def _register():
     from fastapi import APIRouter
     router_files = [
         "routers.auth",       # 认证路由（必须排第一，保护其他路由）
+        "routers.users",      # 用户管理（admin CRUD）
         "routers.crm",
         "routers.project",
         "routers.procurement",
@@ -71,6 +72,8 @@ def _register():
         "routers.stock",
         "routers.workflow",
         "routers.ai",
+        "routers.export",
+        "routers.approval",
     ]
     for f in router_files:
         mod = __import__(f, fromlist=["router"])

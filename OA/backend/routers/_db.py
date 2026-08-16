@@ -1,5 +1,6 @@
 """routers/_db.py — DB 路由工具"""
 import json
+import re
 from datetime import date, datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect as sa_inspect
@@ -13,13 +14,25 @@ def register(doctype: str, model_class: type, prefix: str):
     DOCTYPE_MODEL[doctype] = (model_class, prefix)
 
 
-def seq_for(doctype: str, db: Session) -> str:
-    """按 doctype 查询总行数，生成序列名"""
+def seq_for(doctype: str, db: Session, dept: str = "DEFAULT") -> str:
+    """生成企业级单据编号：{类型前缀}-{部门}-{YYYYMM}-{4位序号}
+
+    计数维度为 (doctype, dept, yyyymm)，跨月自动重置。
+    P0 阶段组织架构未上线，dept 默认 DEFAULT；后续从 current_user 推断。
+    """
     if doctype not in DOCTYPE_MODEL:
         return doctype.replace(" ", "") + "-001"
-    _, prefix = DOCTYPE_MODEL[doctype]
-    count = db.query(DOCTYPE_MODEL[doctype][0]).count()
-    return f"{prefix}-{count + 1:04d}"
+    model, prefix = DOCTYPE_MODEL[doctype]
+    ym = datetime.now().strftime("%Y%m")
+    pattern = f"{prefix}-{dept}-{ym}-%"
+    rows = db.query(model.name).filter(model.name.like(pattern)).all()
+    max_seq = 0
+    rx = re.compile(rf"^{re.escape(prefix)}-{re.escape(dept)}-(\d{{6}})-(\d{{4}})$")
+    for (n,) in rows:
+        m = rx.match(n or "")
+        if m:
+            max_seq = max(max_seq, int(m.group(2)))
+    return f"{prefix}-{dept}-{ym}-{max_seq + 1:04d}"
 
 
 def model_to_dict(model: Base) -> dict:

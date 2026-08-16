@@ -3,14 +3,17 @@ routers/workflow.py — 审批工作流引擎
 支持：ExpenseClaim / PurchaseOrder / JournalEntry 状态流转
 表名遵循 SQLite snake_case 约定
 """
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, Annotated
-from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry, WorkflowHistory, Notification
+from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry, LeaveRequest, WorkflowHistory, Notification, ApprovalRule, Delegation, User, Budget
 from routers.auth import get_current_user, CurrentUser
+from routers._org import budget_for
+from sqlalchemy import or_
 
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
 
@@ -19,12 +22,16 @@ TABLE_MAP = {
     "ExpenseClaim":  "expense_claims",
     "PurchaseOrder": "purchase_orders",
     "JournalEntry":  "journal_entries",
+    "LeaveRequest":  "leave_requests",
+    "Contract":     "contracts",
 }
 # 状态字段
 STATUS_COL = {
     "ExpenseClaim":  "approval_status",
     "PurchaseOrder": "status",
     "JournalEntry":  "docstatus",
+    "LeaveRequest":  "status",
+    "Contract":     "status",
 }
 # JournalEntry docstatus: 0=Draft, 1=Submitted, 2=Approved, 3=Rejected
 JE_TO_INT  = {"Draft": 0, "Submitted": 1, "Approved": 2, "Rejected": 3}
@@ -50,6 +57,18 @@ APPROVAL_ACTIONS = {
         {"action": "approve", "from": "Submitted", "to": "Approved",  "label": "批准记账", "color": "#16a34a"},
         {"action": "reject",  "from": "Submitted", "to": "Rejected",  "label": "拒绝",     "color": "#dc2626"},
     ],
+    "LeaveRequest": [
+        {"action": "submit",  "from": "Draft",     "to": "Submitted", "label": "提交审批", "color": "#2563eb"},
+        {"action": "approve", "from": "Submitted", "to": "Approved",  "label": "批准",     "color": "#16a34a"},
+        {"action": "reject",  "from": "Submitted", "to": "Rejected", "label": "拒绝",     "color": "#dc2626"},
+        {"action": "cancel",  "from": "Draft",     "to": "Cancelled", "label": "撤销",     "color": "#6b7280"},
+    ],
+    "Contract": [
+        {"action": "submit",  "from": "Draft",     "to": "Submitted", "label": "提交审批", "color": "#2563eb"},
+        {"action": "approve", "from": "Submitted", "to": "Approved",  "label": "批准生效", "color": "#16a34a"},
+        {"action": "reject",  "from": "Submitted", "to": "Rejected",  "label": "拒绝",     "color": "#dc2626"},
+        {"action": "cancel",  "from": "Draft",     "to": "Cancelled", "label": "撤销",     "color": "#6b7280"},
+    ],
 }
 
 
@@ -64,7 +83,9 @@ class WorkflowActionRequest(BaseModel):
 def _get_status(doctype: str, name: str, db: Session) -> str:
     tbl = TABLE_MAP[doctype]
     col = STATUS_COL[doctype]
-    row = db.execute(text(f"SELECT {col} FROM {tbl} WHERE name=:n"), {"n": name}).fetchone()
+    # LeaveRequest 用 id，其他用 name
+    pk_col = "id" if doctype == "LeaveRequest" else "name"
+    row = db.execute(text(f"SELECT {col} FROM {tbl} WHERE {pk_col}=:pk"), {"pk": name}).fetchone()
     if not row:
         raise HTTPException(404, f"单据不存在: {name}")
     val = row[0]
@@ -83,16 +104,31 @@ def _pending_rows(doctype: str, db: Session) -> list:
         rows = db.execute(text(f"SELECT name, title, posting_date FROM {tbl} WHERE docstatus = 1")).fetchall()
         return [{"name": r[0], "title": r[1], "amount": None, "created": r[2]} for r in rows]
     else:
-        amt_col = "claim_amount" if doctype == "ExpenseClaim" else "total"
+        # LeaveRequest 用 id 列，其他用 name 列；动态探测可用列
+        if doctype == "LeaveRequest":
+            name_col = "id"
+            amt_col = None
+            cols_to_select = "id, creation"
+        else:
+            name_col = "name"
+            amt_col = {
+                "ExpenseClaim": "claim_amount",
+                "PurchaseOrder": "total",
+                "Contract": "contract_value",
+            }.get(doctype, "total")
+            cols_to_select = f"name, {amt_col}, creation"
         rows = db.execute(
-            text(f"SELECT name, {amt_col}, creation FROM {tbl} WHERE {col} = :s"),
+            text(f"SELECT {cols_to_select} FROM {tbl} WHERE {col} = :s"),
             {"s": "Submitted"}
         ).fetchall()
+        if doctype == "LeaveRequest":
+            return [{"name": str(r[0]), "created": r[1]} for r in rows]
         return [{"name": r[0], "amount": r[1], "created": r[2]} for r in rows]
 
 
 def _title(doctype: str, name: str, db: Session) -> str:
     tbl = TABLE_MAP[doctype]
+    pk_col = "id" if doctype == "LeaveRequest" else "name"
     if doctype == "ExpenseClaim":
         r = db.execute(text(
             f"SELECT employee, expense_type, claim_amount FROM {tbl} WHERE name=:n"
@@ -104,6 +140,21 @@ def _title(doctype: str, name: str, db: Session) -> str:
         ), {"n": name}).fetchone()
         total = f"¥{r[1]:,.0f}" if r and r[1] else ""
         return f"PO-{name} | {r[0] if r else ''} | {total}".strip().rstrip("|")
+    elif doctype == "LeaveRequest":
+        r = db.execute(text(
+            f"SELECT leave_type, start_date, end_date, employee FROM {tbl} WHERE id=:pk"
+        ), {"pk": name}).fetchone()
+        if r:
+            return f"请假 {r[0]} | {r[1]}~{r[2]} | {r[3]}"
+        return f"请假申请 {name}"
+    elif doctype == "Contract":
+        r = db.execute(text(
+            f"SELECT contract_name, contract_value, party_a, party_b FROM {tbl} WHERE name=:n"
+        ), {"n": name}).fetchone()
+        if r:
+            val = f"¥{r[1]:,.0f}" if r[1] else ""
+            return f"{r[0]} | {r[2]}↔{r[3]} | {val}".strip().rstrip("|")
+        return name
     else:  # JournalEntry
         r = db.execute(text(
             f"SELECT title, posting_date FROM {tbl} WHERE name=:n"
@@ -139,10 +190,37 @@ def do_action(
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    prefix_map = {"EXP-": "ExpenseClaim", "PO-": "PurchaseOrder", "JE-": "JournalEntry"}
+    prefix_map = {"EXP-": "ExpenseClaim", "PO-": "PurchaseOrder", "JE-": "JournalEntry",
+                  "LR-": "LeaveRequest", "CONTRACT-": "Contract"}
     doctype = next((d for p, d in prefix_map.items() if body.name.startswith(p)), None)
     if not doctype:
         raise HTTPException(400, f"无法识别单据类型: {body.name}")
+
+    # ── 预算控制（ExpenseClaim 提交时校验是否超预算）──
+    if body.action == "submit" and doctype == "ExpenseClaim":
+        _enforce_budget(db, body.name)
+
+    # ── 多级审批规则（仅 ExpenseClaim 支持）───────────────────
+    # 部门专用规则优先（dept_id DESC → NULL 排最后）；同一部门按 level 升序
+    user = db.query(User).filter_by(username=current_user.username).first()
+    user_dept = getattr(user, "department_id", None) if user else None
+    dept_filter = (
+        or_(ApprovalRule.department_id == user_dept, ApprovalRule.department_id.is_(None))
+        if user_dept
+        else True
+    )
+    rules = (
+        db.query(ApprovalRule)
+          .filter_by(doctype=doctype)
+          .filter(dept_filter)
+          .order_by(
+              ApprovalRule.department_id.desc(),   # 非 NULL（部门专用）排前面，NULL（全局）兜底
+              ApprovalRule.level.asc(),
+          )
+          .all()
+    )
+    if rules and doctype == "ExpenseClaim":
+        return _do_multilevel_action(body, current_user, db, doctype, rules)
 
     # ── 权限控制：提交（submit）任何登录用户可做；审批类动作仅限管理员 ──
     APPROVAL_ONLY = ("approve", "reject", "pay", "order", "receive")
@@ -169,9 +247,10 @@ def do_action(
     if doctype == "JournalEntry":
         new_val = JE_TO_INT[new_val]
 
+    pk = "id" if doctype == "LeaveRequest" else "name"
     db.execute(
-        text(f"UPDATE {tbl} SET {col} = :v, modified = :m WHERE name = :n"),
-        {"v": new_val, "m": datetime.utcnow(), "n": body.name}
+        text(f"UPDATE {tbl} SET {col} = :v, modified = :m WHERE {pk} = :pk"),
+        {"v": new_val, "m": datetime.utcnow(), "pk": body.name}
     )
     # 写入审批历史
     db.add(WorkflowHistory(
@@ -182,6 +261,7 @@ def do_action(
         to_status=matched["to"],
         comment=body.comment,
         operator=current_user.username,
+        field_changes=json.dumps({"status": {"from": current, "to": matched["to"]}}),
     ))
 
     # ── 审批通知 ───────────────────────────────────────────────
@@ -214,6 +294,8 @@ def do_action(
             priority="normal",
         )
 
+    if matched["to"] == "Approved" and doctype == "ExpenseClaim":
+        _consume_budget(db, doctype, body.name)
     db.commit()
     return {
         "ok":          True,
@@ -224,6 +306,126 @@ def do_action(
         "to":          matched["to"],
         "comment":     body.comment,
     }
+
+
+def _do_multilevel_action(body, current_user, db, doctype, rules):
+    """多级审批引擎：提交后逐级审批，末级通过方为 Approved。
+    状态序列：Draft → Submitted → Pending-L2 → ... → Pending-LN → Approved / Rejected
+    """
+    current = _get_status(doctype, body.name, db)
+    max_level = len(rules)
+    if body.action == "submit":
+        if current != "Draft":
+            raise HTTPException(400, f"动作 'submit' 不适用于当前状态 '{current}'（{doctype}）")
+        new_status = "Submitted"
+    elif body.action == "approve":
+        if current == "Submitted":
+            level = 1
+        elif current.startswith("Pending-L"):
+            level = int(current.split("-L")[1])
+        else:
+            raise HTTPException(400, f"动作 'approve' 不适用于当前状态 '{current}'（{doctype}）")
+        rule = rules[level - 1]
+        if current_user.role not in (rule.approver_role, "admin", "api"):
+            if not _is_delegate_for_role(db, current_user.username, rule.approver_role, doctype):
+                raise HTTPException(
+                    403,
+                    f"第 {level} 级审批需要角色 '{rule.approver_role}'（当前角色: {current_user.role}）",
+                )
+        new_status = "Approved" if level >= max_level else f"Pending-L{level + 1}"
+    elif body.action == "reject":
+        new_status = "Rejected"
+    else:
+        raise HTTPException(400, f"动作 '{body.action}' 不支持多级审批")
+
+    tbl = TABLE_MAP[doctype]
+    col = STATUS_COL[doctype]
+    pk = "id" if doctype == "LeaveRequest" else "name"
+    db.execute(
+        text(f"UPDATE {tbl} SET {col} = :v, modified = :m WHERE {pk} = :pk"),
+        {"v": new_status, "m": datetime.utcnow(), "pk": body.name},
+    )
+    db.add(WorkflowHistory(
+        doc_name=body.name, doctype=doctype, action=body.action,
+        from_status=current, to_status=new_status, comment=body.comment,
+        operator=current_user.username,
+        field_changes=json.dumps({"status": {"from": current, "to": new_status}}),
+    ))
+    ACTION_LABELS = {
+        "submit": "提交了", "approve": "批准了", "reject": "拒绝了",
+        "pay": "确认付款", "order": "确认订购", "receive": "确认收货",
+    }
+    _actor = ACTION_LABELS.get(body.action, body.action)
+    if body.action == "submit":
+        _notify(db, recipient="admin",
+                title=f"【{doctype}】{body.name} 已提交待审批",
+                body=f"{_actor} {body.name}，请及时审批处理。",
+                ntype="approval_request", doctype=doctype, doc_name=body.name,
+                action=body.action, priority="urgent")
+    elif body.action in ("approve", "reject"):
+        _notify(db, recipient="admin",
+                title=f"【{doctype}】{body.name} 已{_actor}",
+                body=f"审批动作「{_actor}」已完成，单据：{body.name}。",
+                ntype="approval_result", doctype=doctype, doc_name=body.name,
+                action=body.action, priority="normal")
+    if new_status == "Approved" and doctype == "ExpenseClaim":
+        _consume_budget(db, doctype, body.name)
+    db.commit()
+    return {
+        "ok": True, "name": body.name, "doctype": doctype,
+        "action_label": body.action, "from": current, "to": new_status,
+        "comment": body.comment, "multilevel": True, "level": max_level,
+    }
+
+
+def _is_delegate_for_role(db, delegate_username: str, target_role: str, doctype: str) -> bool:
+    """判断 delegate_username 是否是具有 target_role 的某用户的生效代理人（可限定 doctype）"""
+    now = datetime.utcnow()
+    dels = db.query(Delegation).filter_by(delegate=delegate_username).all()
+    for d in dels:
+        if d.doctype and d.doctype != doctype:
+            continue
+        if d.start_date and d.start_date > now:
+            continue
+        if d.end_date and d.end_date < now:
+            continue
+        grantor = db.query(User).filter_by(username=d.grantor).first()
+        if grantor and grantor.role == target_role:
+            return True
+    return False
+
+
+def _enforce_budget(db, name: str):
+    """提交 ExpenseClaim 时校验是否超出月度预算（支持部门级预算，兜底全局）"""
+    exp = db.query(ExpenseClaim).filter_by(name=name).first()
+    if not exp or not exp.claim_amount:
+        return
+    period = datetime.utcnow().strftime("%Y-%m")
+    emp = db.query(User).filter_by(username=exp.employee).first()
+    dept_id = getattr(emp, "department_id", None) if emp else None
+    budget = budget_for(db, "ExpenseClaim", period, dept_id)
+    if budget and budget.limit_amount is not None:
+        remaining = budget.limit_amount - (budget.used_amount or 0)
+        if exp.claim_amount > remaining:
+            raise HTTPException(
+                400,
+                f"超出月度预算：单据金额 {exp.claim_amount}，剩余预算 {remaining:.2f}",
+            )
+
+
+def _consume_budget(db, doctype: str, name: str):
+    """审批通过后扣减预算（支持部门级预算，兜底全局）"""
+    if doctype != "ExpenseClaim":
+        return
+    exp = db.query(ExpenseClaim).filter_by(name=name).first()
+    if not exp or not exp.claim_amount:
+        return
+    period = datetime.utcnow().strftime("%Y-%m")
+    emp = db.query(User).filter_by(username=exp.employee).first()
+    dept_id = getattr(emp, "department_id", None) if emp else None
+    budget = budget_for(db, "ExpenseClaim", period, dept_id)
+    if budget:
+        budget.used_amount = (budget.used_amount or 0) + exp.claim_amount
 
 
 # ── GET /api/workflow/doc/{doctype}/{name} ─────────────────────
@@ -237,12 +439,13 @@ def get_doc_workflow(
         raise HTTPException(400, f"不支持: {doctype}")
 
     tbl = TABLE_MAP[doctype]
-    row = db.execute(text(f"SELECT * FROM {tbl} WHERE name=:n"), {"n": name}).fetchone()
+    pk = "id" if doctype == "LeaveRequest" else "name"
+    row = db.execute(text(f"SELECT * FROM {tbl} WHERE {pk}=:pk"), {"pk": name}).fetchone()
     if not row:
         raise HTTPException(404, f"单据不存在: {name}")
 
     # 列名从 model 元数据读取，MariaDB/SQLite 通用
-    model_cls = {"ExpenseClaim": ExpenseClaim, "PurchaseOrder": PurchaseOrder, "JournalEntry": JournalEntry}[doctype]
+    model_cls = {"ExpenseClaim": ExpenseClaim, "PurchaseOrder": PurchaseOrder, "JournalEntry": JournalEntry, "LeaveRequest": LeaveRequest}[doctype]
     cols = [c.name for c in model_cls.__table__.columns]
     data = dict(zip(cols, row))
 
@@ -289,6 +492,24 @@ def _notify(db, recipient: str, title: str, body: str, ntype: str = "approval_re
         action=action,
         priority=priority,
     ))
+    # 外部渠道推送（配置驱动，失败不影响站内通知）
+    try:
+        _push_external(title, body)
+    except Exception:
+        pass
+
+
+def _push_external(title: str, body: str) -> None:
+    """外部通知推送：配置 OA_WEBHOOK_URL 时推送到企业微信/钉钉机器人 webhook。
+    未配置或失败则静默跳过（站内通知仍保留）。"""
+    import os, json, urllib.request
+    url = os.getenv("OA_WEBHOOK_URL")
+    if not url:
+        return
+    payload = {"msgtype": "text", "text": {"content": f"{title}\n{body}"}}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=5)
 
 
 # ── GET /api/workflow/notifications ──────────────────────────────
@@ -380,6 +601,7 @@ def get_workflow_history(
         "to_status": r.to_status,
         "comment": r.comment,
         "operator": r.operator,
+        "field_changes": r.field_changes,
         "created_at": r.creation.isoformat() if r.creation else None,
         "created": str(r.creation) if r.creation else None,
     } for r in rows]

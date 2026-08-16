@@ -1,5 +1,6 @@
 """test/test_auth.py — 认证路由测试"""
 import pytest
+from routers.auth import create_access_token
 
 BASE = "/api/auth"
 
@@ -46,17 +47,23 @@ class TestMe:
 class TestRegister:
     def test_register_success(self, client, db):
         r = client.post(f"{BASE}/register", json={
-            "username": "alice", "password": "alice123", "display_name": "爱丽丝"
+            "username": "alice2", "password": "alice123", "display_name": "爱丽丝"
         })
         assert r.status_code == 201
         data = r.json()
-        assert data["username"] == "alice"
+        assert data["username"] == "alice2"
         assert data["role"] == "user"
 
     def test_register_then_login(self, client, db):
         client.post(f"{BASE}/register", json={
             "username": "bob", "password": "bob123456", "display_name": "Bob"
         })
+        # 注册后处于待审核状态，登录应被拒（403）
+        r0 = client.post(f"{BASE}/login", json={"username": "bob", "password": "bob123456"})
+        assert r0.status_code == 403
+        # 管理员审批后，登录成功
+        admin_tok = create_access_token("admin", "管理员", "admin")
+        client.post("/api/users/bob/approve", headers={"Authorization": f"Bearer {admin_tok}"})
         r = client.post(f"{BASE}/login", json={"username": "bob", "password": "bob123456"})
         assert r.status_code == 200
         assert "access_token" in r.json()

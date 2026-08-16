@@ -46,6 +46,18 @@ def db():
         display_name="管理员",
         role="admin",
     ))
+    db.add(User(
+        username="alice",
+        hashed_password=_hash_pw("pass01"),
+        display_name="张三",
+        role="user",
+    ))
+    db.add(User(
+        username="user01",
+        hashed_password=_hash_pw("pass01"),
+        display_name="李四",
+        role="user",
+    ))
     db.commit()
     yield db
     db.rollback()
@@ -67,6 +79,14 @@ def admin_token():
 def auth_headers(admin_token):
     """Admin auth headers"""
     return {"Authorization": f"Bearer {admin_token}"}
+
+@pytest.fixture
+def admin_headers(admin_token):
+    return {"Authorization": f"Bearer {admin_token}"}
+
+@pytest.fixture
+def user_headers(user_token):
+    return {"Authorization": f"Bearer {user_token}"}
 
 @pytest.fixture(scope="function")
 def api_key_headers():

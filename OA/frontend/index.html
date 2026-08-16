@@ -21,6 +21,11 @@
   .nav-btn { padding: 6px 14px; border-radius: 6px; cursor: pointer; border: none; background: transparent; color: var(--text2); font-size: 14px; font-weight: 500; white-space: nowrap; transition: all 0.15s; }
   .nav-btn:hover { background: var(--surface2); color: var(--text); }
   .nav-btn.active { background: var(--accent); color: #fff; }
+  .nav-wrapper { position: relative; display: inline-block; }
+  .nav-sub { display: none; position: absolute; top: 100%; left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200; min-width: 120px; }
+  .nav-wrapper:hover .nav-sub, .nav-sub:hover { display: block; }
+  .nav-sub-btn { display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 4px; border: none; background: transparent; color: var(--text2); font-size: 13px; cursor: pointer; margin-bottom: 2px; }
+  .nav-sub-btn:hover { background: var(--accent); color: #fff; }
   .header-right { display: flex; align-items: center; gap: 8px; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
   .status-dot.offline { background: var(--red); }
@@ -34,6 +39,8 @@
   .module-card .m-emoji { font-size: 28px; }
   .module-card .m-name { font-weight: 600; font-size: 15px; }
   .module-card .m-count { font-size: 12px; color: var(--text3); }
+  .fav-btn { cursor: pointer; font-size: 18px; opacity: 0.6; transition: all 0.15s; }
+  .fav-btn:hover { opacity: 1; transform: scale(1.2); }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .form-grid .full { grid-column: 1 / -1; }
   label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 4px; font-weight: 500; }
@@ -161,7 +168,10 @@
   <div class="header-right">
     <div id="authArea">
       <button class="notif-btn" id="loginBtn" onclick="showLoginModal()" title="登录" style="display:none">&#128100;</button>
-      <span id="userDisplay" style="font-size:13px;color:var(--text2);display:none"></span>
+      <span id="userDisplay" style="display:none;align-items:center;gap:4px">
+        <span id="userName" style="font-size:13px;color:var(--text2)"></span>
+        <button onclick="logout()" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:13px;text-decoration:underline;padding:0" title="退出">退出</button>
+      </span>
     </div>
     <button class="notif-btn" id="notifBtn" onclick="toggleNotifPanel()" title="通知">
       &#128276;
@@ -180,7 +190,12 @@
 <div id="loginModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
     <h2 style="margin:0 0 24px;font-size:20px;color:var(--text)">登录 ZZCC OA</h2>
+    <div style="display:flex;gap:0;margin:0 0 16px;border-bottom:1px solid var(--border)">
+      <button id="tabLogin" onclick="switchAuthTab('login')" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid var(--primary);color:var(--primary);font-size:15px;cursor:pointer;font-weight:600">登录</button>
+      <button id="tabReg" onclick="switchAuthTab('register')" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text2);font-size:15px;cursor:pointer">注册</button>
+    </div>
     <div style="display:flex;flex-direction:column;gap:12px">
+      <div id="panelLogin">
       <input id="loginUsername" type="text" placeholder="用户名" autocomplete="username"
         style="padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px" />
       <input id="loginPassword" type="password" placeholder="密码"
@@ -190,6 +205,20 @@
         style="padding:10px;border:none;border-radius:8px;background:var(--primary);color:white;font-size:15px;cursor:pointer;font-weight:600">
         登录
       </button>
+      </div><!-- /panelLogin -->
+      <div id="panelReg" style="display:none">
+      <input id="regUsername" type="text" placeholder="用户名（字母/数字）" autocomplete="username"
+        style="padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px" />
+      <input id="regDisplayName" type="text" placeholder="姓名/昵称" autocomplete="name"
+        style="padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px" />
+      <input id="regPassword" type="password" placeholder="密码（6位以上）"
+        style="padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px"
+        onkeydown="if(event.key==='Enter')doRegister()" />
+      <button onclick="doRegister()" id="regSubmit"
+        style="padding:10px;border:none;border-radius:8px;background:var(--primary);color:white;font-size:15px;cursor:pointer;font-weight:600">
+        注册
+      </button>
+      </div><!-- /panelReg -->
       <div id="loginError" style="color:#dc2626;font-size:13px;display:none;min-height:18px"></div>
       <div style="font-size:12px;color:var(--text2);text-align:center;margin-top:4px">
         默认账号: admin / admin123
@@ -209,6 +238,8 @@ const enc = (s) => encodeURIComponent(s);
 const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
   { id: 'crm',         name: 'CRM',      emoji: '👥', doctype: 'Lead' },
+  { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
+  { id: 'opportunities',name: '商机',     emoji: '💼', doctype: 'Opportunity' },
   { id: 'project',     name: '项目运营',  emoji: '📋', doctype: 'Project' },
   { id: 'procurement', name: '采购',     emoji: '🛒', doctype: 'Purchase Order' },
   { id: 'finance',     name: '财务',     emoji: '💰' },
@@ -216,16 +247,47 @@ const MODULES = [
   { id: 'quality',     name: '质量测试',  emoji: '🔍', doctype: 'Quality Inspection' },
   { id: 'customer',    name: '客服',     emoji: '🎧', doctype: 'Support Ticket' },
   { id: 'hr',          name: '人力资源',  emoji: '👔', doctype: 'Employee' },
-  { id: 'stock',       name: '资产行政',  emoji: '📦', doctype: 'Item' },
+  { id: 'leaves',       name: '请假管理',  emoji: '📅' },
+  { id: 'attendance',   name: '考勤管理',  emoji: '🕐' },
+  { id: 'salary',       name: '薪资记录',  emoji: '💰' },
+  { id: 'stock',        name: '资产行政',  emoji: '📦', doctype: 'Item' },
   { id: 'ai',          name: 'AI 咨询',  emoji: '🤖' },
   { id: 'workflow',    name: '审批',     emoji: '📝' },
+  { id: 'registrations', name: '账号管理', emoji: '👤' },
 ];
+
+// 用户收藏的业务模块（默认：CRM、财务、审批）
+let FAVORITES = JSON.parse(localStorage.getItem('oa_favorites') || '["crm","finance","workflow"]');
+
+function saveFavorites() {
+  localStorage.setItem('oa_favorites', JSON.stringify(FAVORITES));
+}
+
+function toggleFavorite(id) {
+  const idx = FAVORITES.indexOf(id);
+  if (idx >= 0) FAVORITES.splice(idx, 1);
+  else FAVORITES.push(id);
+  saveFavorites();
+  renderNav();
+  if (currentModule === 'dashboard') renderDashboard(document.getElementById('main'));
+}
 
 let currentModule = 'dashboard';
 let pendingLoginModule = null;
 
 // ── 字段配置（与后端模型对齐）─────────────────────────────────
 const FIELDS = {
+  'Contact': [
+    { k: 'first_name', l: '名' }, { k: 'last_name', l: '姓' },
+    { k: 'email_id', l: '邮箱' }, { k: 'phone', l: '电话' },
+    { k: 'company_name', l: '公司' }, { k: 'designation', l: '职位' },
+  ],
+  'Opportunity': [
+    { k: 'opportunity_name', l: '商机名称' }, { k: 'party_name', l: '客户' },
+    { k: 'sales_stage', l: '阶段', type: 'select', opts: ['Prospecting','Qualification','Proposal','Negotiation','Closed Won','Closed Lost'] },
+    { k: 'probability', l: '概率%', type: 'number' }, { k: 'amount', l: '金额', type: 'number' },
+    { k: 'expected_closing_date', l: '预计成交', type: 'date' },
+  ],
   'Lead': [
     { k: 'lead_name', l: '客户名称' }, { k: 'company_name', l: '公司' },
     { k: 'email_id', l: '邮箱' }, { k: 'phone', l: '电话' },
@@ -379,8 +441,8 @@ function updateAuthUI() {
   const user = getCurrentUser();
   const token = getAuthToken();
   document.getElementById('loginBtn').style.display = token ? 'none' : 'inline-flex';
-  document.getElementById('userDisplay').style.display = user.username ? 'inline' : 'none';
-  if (user.username) document.getElementById('userDisplay').textContent = user.display_name || user.username;
+  document.getElementById('userDisplay').style.display = user.username ? 'inline-flex' : 'none';
+  if (user.username) document.getElementById('userName').textContent = user.display_name || user.username;
 }
 function showLoginModal() {
   pendingLoginModule = currentModule;
@@ -390,6 +452,7 @@ function showLoginModal() {
   document.getElementById('loginUsername').value = '';
   document.getElementById('loginPassword').value = '';
   document.getElementById('loginUsername').focus();
+  switchAuthTab('login');
 }
 function closeLoginModal() { document.getElementById('loginModal').style.display = 'none'; }
 async function doLogin() {
@@ -415,7 +478,7 @@ async function doLogin() {
     updateAuthUI();
     if (pendingLoginModule) { const m = pendingLoginModule; pendingLoginModule = null; navigate(m); }
     else if (typeof afterLogin === 'function') afterLogin();
-    showToast('登录成功', 'success');
+    toast('登录成功', 'success');
   } catch (e) { showLoginError(e.message); }
   btn.textContent = '登录'; btn.disabled = false;
 }
@@ -426,11 +489,37 @@ function showLoginError(msg) {
 function logout() {
   clearAuth();
   updateAuthUI();
-  showToast('已退出登录', 'info');
+  toast('已退出登录', 'info');
   if (typeof renderModule === 'function') renderModule();
 }
 function initAuth() {
   if (getAuthToken()) updateAuthUI();
+}
+
+function switchAuthTab(tab) {
+  const isLogin = tab === 'login';
+  document.getElementById('tabLogin').style.borderBottom = isLogin ? '2px solid var(--primary)' : '2px solid transparent';
+  document.getElementById('tabLogin').style.color = isLogin ? 'var(--primary)' : 'var(--text2)';
+  document.getElementById('tabReg').style.borderBottom = isLogin ? '2px solid transparent' : '2px solid var(--primary)';
+  document.getElementById('tabReg').style.color = isLogin ? 'var(--text2)' : 'var(--primary)';
+  document.getElementById('panelLogin').style.display = isLogin ? 'block' : 'none';
+  document.getElementById('panelReg').style.display = isLogin ? 'none' : 'block';
+}
+
+async function doRegister() {
+  const username = document.getElementById('regUsername').value.trim();
+  const displayName = document.getElementById('regDisplayName').value.trim();
+  const password = document.getElementById('regPassword').value;
+  if (!username || !password) { showLoginError('请填写用户名和密码'); return; }
+  if (password.length < 6) { showLoginError('密码至少 6 位'); return; }
+  try {
+    const res = await api('/api/auth/register', 'POST', { username, display_name: displayName, password });
+    toast('注册成功，等待管理员审核', 'success');
+    switchAuthTab('login');
+    document.getElementById('loginUsername').value = username;
+  } catch (e) {
+    showLoginError(e.message || '注册失败');
+  }
 }
 
 async function apiGet(doctype) { const j = await api(`/api/resource/${enc(toApiDoctype(doctype))}`); return j.data?.data || []; }
@@ -441,37 +530,74 @@ function fmtMoney(n) { return (n==null?'0':Number(n).toLocaleString('zh-CN',{min
 
 // ── Nav ──────────────────────────────────────────────────────
 function renderNav() {
-  document.getElementById('nav').innerHTML = MODULES.map(m =>
-    `<button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('${m.id}')">${m.emoji} ${m.name}</button>`
-  ).join('');
+  const isAdmin = ['admin','api'].includes((getCurrentUser().role || ''));
+  // 顶部只显示：总览 + 收藏模块 + 人力资源（带下拉）
+  const visible = MODULES.filter(m => {
+    if (m.id === 'dashboard') return true;
+    if (m.id === 'hr') return true; // 人力资源始终显示，带下拉
+    if (m.id === 'registrations') return isAdmin;
+    // leaves/attendance/salary 作为 hr 的子菜单，不在顶部显示
+    if (['leaves','attendance','salary'].includes(m.id)) return false;
+    return FAVORITES.includes(m.id);
+  });
+  
+  document.getElementById('nav').innerHTML = visible.map(m => {
+    if (m.id === 'hr' && isAdmin) {
+      return `<div class='nav-wrapper'><button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('hr')">${m.emoji} ${m.name}</button>
+        <div class='nav-sub'>
+          <button class='nav-sub-btn' onclick='navigate("leaves")'>📅 请假</button>
+          <button class='nav-sub-btn' onclick='navigate("attendance")'>🕐 考勤</button>
+          <button class='nav-sub-btn' onclick='navigate("salary")'>💰 薪资</button>
+        </div></div>`;
+    }
+    return `<button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('${m.id}')">${m.emoji} ${m.name}</button>`;
+  }).join('');
 }
 function navigate(id) { currentModule = id; renderNav(); render(); }
 
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, crm:renderSimple, project:renderSimple, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, procurement:renderProcurement,
     finance:renderFinance, compliance:renderSimple, quality:renderSimple, customer:renderSimple,
-    hr:renderSimple, stock:renderStock, ai:renderAI, workflow:renderWorkflow };
+    hr:renderSimple, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
+    stock:renderStock, ai:renderAI, workflow:renderWorkflow, registrations:renderRegistrations };
   (map[currentModule] || renderDashboard)(main);
 }
 
 // ── Dashboard ────────────────────────────────────────────────
 async function renderDashboard(el) {
+  const isAdmin = ['admin','api'].includes((getCurrentUser().role || ''));
   el.innerHTML = `<div class="card"><div class="card-title">🏠 系统总览</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>`;
   const doctypes = ['Lead','Project','Purchase Order','Journal Entry','Contract','Quality Inspection','Support Ticket','Employee','Item','Asset'];
   const counts = {};
   await Promise.all(doctypes.map(async d => { try { counts[d] = (await apiGet(d)).length; } catch { counts[d] = 0; } }));
+  
+  // 业务模块（排除 dashboard、registrations、HR子项）
+  const businessModules = MODULES.filter(m => {
+    if (m.id === 'dashboard') return false;
+    if (m.id === 'registrations') return isAdmin;
+    if (['leaves','attendance','salary'].includes(m.id)) return false;
+    return true;
+  });
+  
   el.innerHTML = `
     <div class="card">
-      <div class="card-title"><span class="emoji">🏠</span> 系统总览</div>
+      <div class="card-title"><span class="emoji">🏠</span> 系统总览 — 点击 ⭐ 收藏到顶部导航</div>
       <div class="module-grid">
-        ${MODULES.filter(m=>m.doctype).map(m => `
-          <div class="module-card" onclick="navigate('${m.id}')">
-            <div class="m-emoji">${m.emoji}</div>
+        ${businessModules.map(m => {
+          const isFav = FAVORITES.includes(m.id);
+          const star = isFav ? '⭐' : '☆';
+          const count = m.doctype ? (counts[m.doctype]||0) + ' 条记录' : (isFav ? '已收藏' : '点击收藏');
+          return `<div class="module-card" onclick="navigate('${m.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+              <span class="m-emoji">${m.emoji}</span>
+              <span class="fav-btn" onclick="event.stopPropagation();toggleFavorite('${m.id}')" title="${isFav?'取消收藏':'收藏'}">${star}</span>
+            </div>
             <div class="m-name">${m.name}</div>
-            <div class="m-count">${counts[m.doctype]||0} 条记录</div>
-          </div>`).join('')}
+            <div class="m-count">${count}</div>
+          </div>`;
+        }).join('')}
       </div>
       <p style="margin-top:16px;font-size:13px;color:var(--text3)">API 文档：<a href="http://localhost:8000/docs" target="_blank">/docs</a></p>
     </div>`;
@@ -617,6 +743,71 @@ async function runProConsult() {
 }
 
 // ── 资产行政（多 Tab）─────────────────────────────────────────
+async function renderLeaves(el) {
+  const h = getAuthHeaders(); if(!h) return showLogin();
+  const u = getCurrentUser();
+  let rows = [], myrows = [];
+  try { const r = await api('/api/hr/leaves', null, h); rows = r.data||[]; } catch(e) {}
+  myrows = rows.filter(r => r.employee === u.username || u.role !== 'user');
+  let html = `<div class='section-header'>
+    <h3>📅 请假管理</h3>
+    <button class='btn btn-primary' onclick='showLeaveForm()'>+ 申请请假</button></div>`;
+  if(myrows.length) {
+    html += `<table class='data-table'>
+      <thead><tr><th>单号</th><th>类型</th><th>期间</th><th>天数</th><th>状态</th><th>申请人</th></tr></thead><tbody>`;
+    myrows.forEach(r => {
+      const st = r.status === 'Approved' ? '✅已批准' : r.status === 'Rejected' ? '❌已拒绝' : r.status === 'Submitted' ? '⏳待审批' : '📝草稿';
+      html += `<tr><td>${r.name||r.id}</td><td>${r.leave_type}</td><td>${r.start_date}~${r.end_date}</td>
+        <td>${r.days}天</td><td>${st}</td><td>${r.employee}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  } else { html += `<p class='empty-tip'>暂无请假记录</p>`; }
+  el.innerHTML = html;
+}
+window.showLeaveForm = function() {
+  const h = getAuthHeaders(); if(!h) return;
+  promptForm('申请请假', [
+    {id:'lt',label:'请假类型',type:'select',opts:'Annual, Sick, Personal, Other'},
+    {id:'sd',label:'开始日期',type:'date'},
+    {id:'ed',label:'结束日期',type:'date'},
+    {id:'rs',label:'请假事由',type:'textarea'}
+  ], async vals => {
+    const r = await api('/api/hr/leaves', {method:'POST',body:JSON.stringify({
+      leave_type: vals.lt, start_date: vals.sd, end_date: vals.ed, reason: vals.rs
+    })}, h);
+    toast(r.message||'已提交', 'success');
+    navigate('leaves');
+  });
+};
+async function renderAttendance(el) {
+  const h = getAuthHeaders(); if(!h) return showLogin();
+  let rows = [];
+  try { const r = await api('/api/hr/attendance', null, h); rows = r.data||[]; } catch(e) {}
+  let html = `<div class='section-header'><h3>🕐 考勤管理</h3></div>`;
+  if(rows.length) {
+    html += `<table class='data-table'>
+      <thead><tr><th>日期</th><th>员工</th><th>上班</th><th>下班</th><th>状态</th></tr></thead><tbody>`;
+    rows.forEach(r => { html += `<tr><td>${r.date}</td><td>${r.employee}</td><td>${r.check_in||'-'}</td>
+      <td>${r.check_out||'-'}</td><td>${r.status||'Normal'}</td></tr>`; });
+    html += `</tbody></table>`;
+  } else { html += `<p class='empty-tip'>暂无考勤记录</p>`; }
+  el.innerHTML = html;
+}
+async function renderSalary(el) {
+  const h = getAuthHeaders(); if(!h) return showLogin();
+  let rows = [];
+  try { const r = await api('/api/hr/salary', null, h); rows = r.data||[]; } catch(e) {}
+  let html = `<div class='section-header'><h3>💰 薪资记录</h3></div>`;
+  if(rows.length) {
+    html += `<table class='data-table'>
+      <thead><tr><th>年月</th><th>员工</th><th>基本工资</th><th>奖金</th><th>扣款</th><th>实发</th></tr></thead><tbody>`;
+    rows.forEach(r => { html += `<tr><td>${r.year_month}</td><td>${r.employee}</td>
+      <td>¥${r.base_salary||0}</td><td>¥${r.bonus||0}</td><td>¥${r.deductions||0}</td>
+      <td><b>¥${r.net_salary||0}</b></td></tr>`; });
+    html += `</tbody></table>`;
+  } else { html += `<p class='empty-tip'>暂无薪资记录</p>`; }
+  el.innerHTML = html;
+}
 async function renderStock(el) {
   el.innerHTML = `
     <div class="card">
@@ -895,6 +1086,48 @@ async function doWorkflowAction(name, doctype, action, label) {
 }
 
 // 查看单据详情（含工作流动作）
+async function renderRegistrations(main) {
+  const isAdmin = ['admin','api'].includes((getCurrentUser().role || ''));
+  if (!isAdmin) { main.innerHTML='<div style="padding:24px;color:var(--text2)">需要管理员权限</div>'; return; }
+  main.innerHTML='<div class="section-title">待审核账号</div><div id="regList"><div style="color:var(--text2);padding:16px">加载中...</div></div>';
+  try {
+    const pending = await api('/api/users/registrations/pending');
+    const el = document.getElementById('regList');
+    if (!pending.length) { el.innerHTML='<div style="color:var(--text2);padding:16px">暂无待审核账号</div>'; return; }
+    const rows = pending.map(u => `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px 12px">${esc(u.username)}</td>
+      <td style="padding:10px 12px">${esc(u.display_name||'')}</td>
+      <td style="padding:10px 12px">${esc(u.department_id||'—')}</td>
+      <td style="padding:10px 12px;color:var(--text2)">${u.creation?new Date(u.creation).toLocaleString('zh-CN'):'—'}</td>
+      <td style="padding:10px 12px;text-align:center">
+        <button onclick="approveUser('${u.username}')" style="margin-right:6px;padding:4px 12px;background:#16a34a;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px">通过</button>
+        <button onclick="rejectUser('${u.username}')" style="padding:4px 12px;background:#dc2626;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px">拒绝</button>
+      </td></tr>`).join('');
+    el.innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--surface2)">
+      <th style="padding:10px 12px;text-align:left;font-size:13px;color:var(--text2)">用户名</th>
+      <th style="padding:10px 12px;text-align:left;font-size:13px;color:var(--text2)">姓名</th>
+      <th style="padding:10px 12px;text-align:left;font-size:13px;color:var(--text2)">部门</th>
+      <th style="padding:10px 12px;text-align:left;font-size:13px;color:var(--text2)">申请时间</th>
+      <th style="padding:10px 12px;text-align:center;font-size:13px;color:var(--text2)">操作</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  } catch(e) { document.getElementById('regList').innerHTML=`<div style="color:#dc2626;padding:16px">加载失败: ${esc(e.message)}</div>`; }
+}
+async function approveUser(username) {
+  if (!confirm('批准 ' + username + ' 的注册申请？')) return;
+  try {
+    await api('/api/users/' + username + '/approve', 'POST');
+    toast('已批准 ' + username, 'success');
+    renderRegistrations(document.getElementById('main'));
+  } catch(e) { toast('操作失败: '+e.message, 'error'); }
+}
+async function rejectUser(username) {
+  if (!confirm('拒绝 ' + username + ' 的注册申请？')) return;
+  try {
+    await api('/api/users/' + username + '/reject', 'POST');
+    toast('已拒绝 ' + username, 'success');
+    renderRegistrations(document.getElementById('main'));
+  } catch(e) { toast('操作失败: '+e.message, 'error'); }
+}
 async function showWfDoc(doctype, name) {
   const d = await api(`/api/workflow/doc/${enc(doctype)}/${enc(name)}`);
   const doc = d.doc;
