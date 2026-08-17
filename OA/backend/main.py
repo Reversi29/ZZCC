@@ -65,6 +65,7 @@ def _register():
     from fastapi import APIRouter
     router_files = [
         "routers.auth",       # 认证路由（必须排第一，保护其他路由）
+        "routers.auth_oidc",  # P3.15 SSO（Casdoor OIDC，JIT 建号）
         "routers.users",      # 用户管理（admin CRUD）
         "routers.crm",
         "routers.project",

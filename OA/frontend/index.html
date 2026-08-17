@@ -205,6 +205,15 @@
         style="padding:10px;border:none;border-radius:8px;background:var(--primary);color:white;font-size:15px;cursor:pointer;font-weight:600">
         登录
       </button>
+      <div style="display:flex;align-items:center;gap:8px;margin:2px 0">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <span style="color:var(--text2);font-size:12px">或</span>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+      <button onclick="window.location.href='/api/auth/oidc/login'" id="ssoLoginBtn"
+        style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px;cursor:pointer">
+        🔑 SSO 登录（统一身份）
+      </button>
       </div><!-- /panelLogin -->
       <div id="panelReg" style="display:none">
       <input id="regUsername" type="text" placeholder="用户名（字母/数字）" autocomplete="username"
