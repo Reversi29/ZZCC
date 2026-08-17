@@ -1,0 +1,57 @@
+# ZZCC OA — Casdoor 统一身份提供方（P3.15 SSO）
+#
+# 部署：
+#   cd /Users/mac/ZZCC/OA
+#   docker compose -f docker-compose.casdoor.yml up -d
+# 访问：http://localhost:8004 （Casdoor 控制台，内置管理员 admin/123456，首次登录建议改密）
+#
+# 说明：
+#   - 独立网络/数据卷，与 OA 主 compose 互不影响
+#   - PostgreSQL 持久化用户/组织/应用数据（生产级，非内置 SQLite）
+#   - OA 作为 OIDC 客户端（RP）通过 8004 与 Casdoor 交互
+#   - 后续如需对接企业微信/钉钉，在 Casdoor 控制台配置上游 IdP 即可，OA 代码零改动
+
+services:
+  # ── Casdoor 数据库 ──────────────────────────────────────────
+  casdoor-postgres:
+    image: postgres:16-alpine  # 固定大版本，避免 latest 漂移导致 pg 数据目录不兼容
+    container_name: zzcc-casdoor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: casdoor
+      POSTGRES_PASSWORD: casdoor_2024
+      POSTGRES_DB: casdoor
+    volumes:
+      - casdoor-pg-data:/var/lib/postgresql/data
+    networks:
+      - casdoor-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casdoor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Casdoor 服务 ────────────────────────────────────────────
+  casdoor:
+    image: casbin/casdoor:latest
+    container_name: zzcc-casdoor
+    restart: unless-stopped
+    depends_on:
+      casdoor-postgres:
+        condition: service_healthy
+    environment:
+      # beego 配置：环境变量覆盖 app.conf（官方支持的覆盖方式）
+      driverName: postgres
+      dataSourceName: "user=casdoor password=casdoor_2024 host=casdoor-postgres port=5432 dbname=casdoor sslmode=disable"
+      runSync: "true"
+    ports:
+      - "8004:8000"
+    networks:
+      - casdoor-net
+
+networks:
+  casdoor-net:
+    driver: bridge
+
+volumes:
+  casdoor-pg-data:
