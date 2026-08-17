@@ -39,6 +39,11 @@ app.add_middleware(
 )
 
 
+# ── API 限流（P3.16）──────────────────────────────────────────
+from middleware.ratelimit import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
+
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.get("/api/status")
 def status():

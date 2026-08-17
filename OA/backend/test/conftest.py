@@ -3,6 +3,9 @@ import pytest
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 测试环境关闭 API 限流（TestClient 所有请求共享同一 IP，全量跑易触发 429）
+os.environ["RATELIMIT_ENABLED"] = "false"
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
