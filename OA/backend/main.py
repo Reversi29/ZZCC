@@ -75,6 +75,7 @@ def _register():
         "routers.export",
         "routers.approval",
         "routers.notifications",
+        "routers.analytics",
     ]
     for f in router_files:
         mod = __import__(f, fromlist=["router"])
