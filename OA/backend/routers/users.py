@@ -9,7 +9,7 @@ from sqlalchemy import or_
 
 from database import get_db, User, Department
 from routers.auth import require_admin, CurrentUser, _hash_pw
-from routers.workflow import _notify
+from routers.notifications import notify
 
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
 
@@ -289,7 +289,7 @@ def approve_registration(
         raise HTTPException(status_code=400, detail="该账号不在待审核状态，无法审批")
     user.status = "active"
     user.is_active = True
-    _notify(
+    notify(
         db,
         recipient=username,
         title="账号已激活",
@@ -315,7 +315,7 @@ def reject_registration(
         raise HTTPException(status_code=400, detail="该账号不在待审核状态，无法审批")
     user.status = "rejected"
     user.is_active = False
-    _notify(
+    notify(
         db,
         recipient=username,
         title="注册申请未通过",

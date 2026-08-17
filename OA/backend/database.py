@@ -1,5 +1,5 @@
 """database.py — SQLAlchemy ORM（SQLite for dev，切换 MariaDB 只需改 URL）"""
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Date, DateTime, Time, Enum, Boolean, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Date, DateTime, Time, Enum, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, date
@@ -165,7 +165,7 @@ class Project(Base, Timestamped):
     __tablename__ = "projects"
     name = Column(String(255), primary_key=True)
     project_name = Column(String(255), nullable=False)
-    status = Column(String(50), default="Open")
+    status = Column(String(50), default="Draft")  # Draft/Submitted/Approved/Rejected/Cancelled
     priority = Column(String(50), default="Medium")
     percent_complete = Column(Float, default=0.0)
     start_date = Column(Date, nullable=True)
@@ -174,7 +174,6 @@ class Project(Base, Timestamped):
     department = Column(String(255), nullable=True)
     company = Column(String(255), default="ZZCC")
     notes = Column(Text, nullable=True)
-    docstatus = Column(Integer, default=0)
 
 
 class Task(Base, Timestamped):
@@ -300,6 +299,8 @@ class Item(Base, Timestamped):
     reorder_levels_json = Column(Text, default="[]")
     is_purchase_item = Column(Boolean, default=True)
     is_sales_item = Column(Boolean, default=True)
+    reorder_level = Column(Float, default=0.0)   # 全局库存预警阈值
+    warehouse = Column(String(255), nullable=True)
 
 
 class StockEntry(Base, Timestamped):
@@ -310,6 +311,9 @@ class StockEntry(Base, Timestamped):
     to_warehouse = Column(String(255), nullable=True)
     items_json = Column(Text, default="[]")
     status = Column(String(50), default="Draft")
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(String(255), nullable=True)
+    department_id = Column(Integer, nullable=True)
 
 
 class Asset(Base, Timestamped):
@@ -324,6 +328,58 @@ class Asset(Base, Timestamped):
     location = Column(String(255), nullable=True)
     status = Column(String(50), default="Active")
 
+
+
+class Warehouse(Base, Timestamped):
+    """仓库"""
+    __tablename__ = "warehouses"
+    name = Column(String(255), primary_key=True)
+    warehouse_name = Column(String(255), nullable=False)
+    warehouse_type = Column(String(50), default="Physical")   # Physical / Virtual
+    address = Column(Text, nullable=True)
+    is_default = Column(Boolean, default=False)
+    status = Column(String(50), default="Active")
+    department_id = Column(Integer, nullable=True)
+
+
+class StockLedger(Base, Timestamped):
+    """库存台账 — 每笔库存变动记录"""
+    __tablename__ = "stock_ledger"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_code = Column(String(255), nullable=False)
+    warehouse = Column(String(255), nullable=False)
+    stock_entry_type = Column(String(100), nullable=False)   # Material Receipt / Material Issue / Material Transfer
+    stock_entry_name = Column(String(255), nullable=True)
+    voucher_type = Column(String(100), default="Stock Entry")
+    voucher_no = Column(String(255), nullable=True)
+    posting_date = Column(Date, nullable=False)
+    posting_time = Column(Time, nullable=True)
+    incoming_qty = Column(Float, default=0.0)
+    outgoing_qty = Column(Float, default=0.0)
+    balance_qty = Column(Float, default=0.0)
+    valuation_rate = Column(Float, default=0.0)
+    stock_value = Column(Float, default=0.0)
+    party_type = Column(String(50), nullable=True)
+    party = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+
+
+class StockBalance(Base, Timestamped):
+    """库存余额 — 当前各仓库各物料的库存快照"""
+    __tablename__ = "stock_balances"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_code = Column(String(255), nullable=False)
+    warehouse = Column(String(255), nullable=False)
+    actual_qty = Column(Float, default=0.0)
+    reserved_qty = Column(Float, default=0.0)
+    ordered_qty = Column(Float, default=0.0)
+    valuation_rate = Column(Float, default=0.0)
+    stock_value = Column(Float, default=0.0)
+    last_updated = Column(Date, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('item_code', 'warehouse', name='uq_item_warehouse'),
+    )
 
 
 class LeaveRequest(Base, Timestamped):

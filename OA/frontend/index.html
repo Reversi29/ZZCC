@@ -241,6 +241,7 @@ const MODULES = [
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
   { id: 'opportunities',name: '商机',     emoji: '💼', doctype: 'Opportunity' },
   { id: 'project',     name: '项目运营',  emoji: '📋', doctype: 'Project' },
+  { id: 'tasks',       name: '任务管理',  emoji: '✅', doctype: 'Task' },
   { id: 'procurement', name: '采购',     emoji: '🛒', doctype: 'Purchase Order' },
   { id: 'finance',     name: '财务',     emoji: '💰' },
   { id: 'compliance',  name: '法务合规',  emoji: '⚖️',  doctype: 'Contract' },
@@ -296,12 +297,23 @@ const FIELDS = {
   ],
   'Project': [
     { k: 'project_name', l: '项目名称' },
-    { k: 'status', l: '状态', type: 'select', opts: ['Open','Completed','Cancelled','On Hold'] },
+    { k: 'status', l: '状态', type: 'select', opts: ['Draft','Submitted','Approved','Rejected','Cancelled'] },
     { k: 'priority', l: '优先级', type: 'select', opts: ['Low','Medium','High','Urgent'] },
     { k: 'percent_complete', l: '进度%', type: 'number' },
     { k: 'start_date', l: '开始日期', type: 'date' },
     { k: 'end_date', l: '结束日期', type: 'date' },
     { k: 'notes', l: '备注', type: 'textarea' },
+  ],
+  'Task': [
+    { k: 'subject', l: '任务主题' },
+    { k: 'project', l: '所属项目' },
+    { k: 'status', l: '状态', type: 'select', opts: ['Open','In Progress','Completed','Cancelled'] },
+    { k: 'priority', l: '优先级', type: 'select', opts: ['Low','Medium','High','Urgent'] },
+    { k: 'progress', l: '进度%', type: 'number' },
+    { k: 'start_date', l: '开始日期', type: 'date' },
+    { k: 'end_date', l: '截止日期', type: 'date' },
+    { k: 'assigned_to', l: '负责人' },
+    { k: 'description', l: '描述', type: 'textarea' },
   ],
   'Contract': [
     { k: 'contract_name', l: '合同名称' }, { k: 'party_a', l: '甲方' },
@@ -373,12 +385,18 @@ const FIELDS = {
     { k: 'item_group', l: '分组', type: 'select', opts: ['原材料','半成品','成品','消耗品','固定资产'] },
     { k: 'stock_uom', l: '单位', type: 'select', opts: ['Nos','Kg','Set','Box','Meter'] },
     { k: 'val_rate', l: '单价', type: 'number' }, { k: 'opening_stock', l: '期初库存', type: 'number' },
+    { k: 'reorder_level', l: '预警阈值', type: 'number', t: 'number' },
   ],
   'Stock Entry': [
     { k: 'stock_entry_type', l: '类型', type: 'select', opts: ['Material Receipt','Material Issue','Material Transfer','Manufacture'] },
     { k: 'from_warehouse', l: '调出仓库' }, { k: 'to_warehouse', l: '调入仓库' },
     { k: '__items', l: '明细', type: 'subtable', cols: [
-      { k: 'item_code', l: '物料', w: 2 }, { k: 'qty', l: '数量', w: 1, t: 'number' } ] },
+      { k: 'item_code', l: '物料', w: 2 }, { k: 'qty', l: '数量', w: 1, t: 'number' },
+      { k: 'rate', l: '单价', w: 1, t: 'number' } ] },
+  ],
+  'Warehouse': [
+    { k: 'warehouse_name', l: '仓库名称' }, { k: 'warehouse_type', l: '类型', type: 'select' },
+    { k: 'address', l: '地址', type: 'textarea' }, { k: 'status', l: '状态', type: 'select' },
   ],
   'Asset': [
     { k: 'asset_name', l: '资产名称' },
@@ -543,7 +561,7 @@ function renderNav() {
   
   document.getElementById('nav').innerHTML = visible.map(m => {
     if (m.id === 'hr' && isAdmin) {
-      return `<div class='nav-wrapper'><button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('hr')">${m.emoji} ${m.name}</button>
+      return `<div class='nav-wrapper'><button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('leaves')">${m.emoji} ${m.name}</button>
         <div class='nav-sub'>
           <button class='nav-sub-btn' onclick='navigate("leaves")'>📅 请假</button>
           <button class='nav-sub-btn' onclick='navigate("attendance")'>🕐 考勤</button>
@@ -558,7 +576,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderSimple, procurement:renderProcurement,
     finance:renderFinance, compliance:renderSimple, quality:renderSimple, customer:renderSimple,
     hr:renderSimple, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, workflow:renderWorkflow, registrations:renderRegistrations };
@@ -744,10 +762,9 @@ async function runProConsult() {
 
 // ── 资产行政（多 Tab）─────────────────────────────────────────
 async function renderLeaves(el) {
-  const h = getAuthHeaders(); if(!h) return showLogin();
   const u = getCurrentUser();
   let rows = [], myrows = [];
-  try { const r = await api('/api/hr/leaves', null, h); rows = r.data||[]; } catch(e) {}
+  try { rows = await api('/api/hr/leaves'); rows = rows.data||[]; } catch(e) {}
   myrows = rows.filter(r => r.employee === u.username || u.role !== 'user');
   let html = `<div class='section-header'>
     <h3>📅 请假管理</h3>
@@ -765,24 +782,20 @@ async function renderLeaves(el) {
   el.innerHTML = html;
 }
 window.showLeaveForm = function() {
-  const h = getAuthHeaders(); if(!h) return;
-  promptForm('申请请假', [
-    {id:'lt',label:'请假类型',type:'select',opts:'Annual, Sick, Personal, Other'},
-    {id:'sd',label:'开始日期',type:'date'},
-    {id:'ed',label:'结束日期',type:'date'},
-    {id:'rs',label:'请假事由',type:'textarea'}
-  ], async vals => {
-    const r = await api('/api/hr/leaves', {method:'POST',body:JSON.stringify({
-      leave_type: vals.lt, start_date: vals.sd, end_date: vals.ed, reason: vals.rs
-    })}, h);
-    toast(r.message||'已提交', 'success');
-    navigate('leaves');
-  });
+  const lt = prompt('请假类型 (Annual/Sick/Personal/Other):');
+  if(!lt) return;
+  const sd = prompt('开始日期 (YYYY-MM-DD):');
+  if(!sd) return;
+  const ed = prompt('结束日期 (YYYY-MM-DD):');
+  if(!ed) return;
+  const rs = prompt('请假事由:') || '';
+  api('/api/hr/leaves', 'POST', {leave_type: lt, start_date: sd, end_date: ed, reason: rs})
+    .then(r => { toast(r.message||'已提交', 'success'); navigate('leaves'); })
+    .catch(e => toast('提交失败: '+e.message, 'error'));
 };
 async function renderAttendance(el) {
-  const h = getAuthHeaders(); if(!h) return showLogin();
   let rows = [];
-  try { const r = await api('/api/hr/attendance', null, h); rows = r.data||[]; } catch(e) {}
+  try { rows = await api('/api/hr/attendance'); rows = rows.data||[]; } catch(e) {}
   let html = `<div class='section-header'><h3>🕐 考勤管理</h3></div>`;
   if(rows.length) {
     html += `<table class='data-table'>
@@ -794,9 +807,8 @@ async function renderAttendance(el) {
   el.innerHTML = html;
 }
 async function renderSalary(el) {
-  const h = getAuthHeaders(); if(!h) return showLogin();
   let rows = [];
-  try { const r = await api('/api/hr/salary', null, h); rows = r.data||[]; } catch(e) {}
+  try { rows = await api('/api/hr/salary'); rows = rows.data||[]; } catch(e) {}
   let html = `<div class='section-header'><h3>💰 薪资记录</h3></div>`;
   if(rows.length) {
     html += `<table class='data-table'>
@@ -814,10 +826,12 @@ async function renderStock(el) {
       <div class="card-title"><span class="emoji">📦</span> 资产行政中心</div>
       <div class="tabs">
         <button class="tab active" data-tab="item" onclick="switchStockTab('item')">物料</button>
-        <button class="tab" data-tab="se" onclick="switchStockTab('se')">库存流水</button>
+        <button class="tab" data-tab="se" onclick="switchStockTab('se')">库存单</button>
+        <button class="tab" data-tab="warehouse" onclick="switchStockTab('warehouse')">仓库</button>
+        <button class="tab" data-tab="ledger" onclick="switchStockTab('ledger')">台账</button>
         <button class="tab" data-tab="asset" onclick="switchStockTab('asset')">固定资产</button>
-        <button class="tab" data-tab="summary" onclick="switchStockTab('summary')">库存汇总</button>
-        <button class="tab" data-tab="low" onclick="switchStockTab('low')">低库存预警</button>
+        <button class="tab" data-tab="summary" onclick="switchStockTab('summary')">汇总</button>
+        <button class="tab" data-tab="low" onclick="switchStockTab('low')">预警</button>
       </div>
       <div id="stockTabContent"></div>
     </div>`;
@@ -828,6 +842,8 @@ async function switchStockTab(tab) {
   const c = document.getElementById('stockTabContent');
   if (tab === 'summary') return loadStockSummary(c);
   if (tab === 'low') return loadLowStock(c);
+  if (tab === 'warehouse') return loadWarehouses(c);
+  if (tab === 'ledger') return loadLedger(c);
   const dt = { item:'Item', se:'Stock Entry', asset:'Asset' }[tab];
   c.innerHTML = `<div class="empty">⏳ 加载中...</div>`;
   let rows = [];
@@ -843,11 +859,18 @@ async function loadStockSummary(c) {
       <div class="stat"><div class="v">¥${fmtMoney(s.total_stock_value)}</div><div class="l">库存总值</div></div>
       <div class="stat"><div class="v">${s.stock_entry_count||0}</div><div class="l">流水笔数</div></div>
       <div class="stat"><div class="v">${s.asset_count||0}</div><div class="l">固定资产</div></div>
+      <div class="stat"><div class="v">${s.warehouse_count||0}</div><div class="l">仓库</div></div>
     </div>
     <div class="card-title" style="margin-top:8px">库存明细</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>物料编码</th><th>名称</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
-      <tbody>${(s.items||[]).map(r => `<tr><td>${esc(r.item_code)}</td><td>${esc(r.item_name)}</td><td>${r.qty}</td><td>¥${fmtMoney(r.val_rate)}</td><td>¥${fmtMoney(r.value)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">暂无数据</td></tr>'}</tbody>
+      <thead><tr><th>物料</th><th>仓库</th><th>实库存</th><th>预留</th><th>可用</th><th>单价</th><th>金额</th><th>更新时间</th></tr></thead>
+      <tbody>${(s.items||[]).map(r => `<tr>
+        <td>${esc(r.item_code||'')}</td><td>${esc(r.warehouse||'')}</td>
+        <td style="color:${(r.actual_qty||0)<=0?'var(--red)':'inherit'}">${r.actual_qty||0}</td>
+        <td>${r.reserved_qty||0}</td><td>${r.available_qty||r.actual_qty||0}</td>
+        <td>¥${fmtMoney(r.valuation_rate||0)}</td><td>¥${fmtMoney(r.stock_value||0)}</td>
+        <td>${esc(r.last_updated||'')}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="empty">暂无数据</td></tr>'}</tbody>
     </table></div>`;
 }
 async function loadLowStock(c) {
@@ -862,8 +885,52 @@ async function loadLowStock(c) {
       <div class="${w.severity==='critical'?'risk-flag':'warn'}">
         ${w.severity==='critical'?'🔴 缺货':'🟡 偏低'} ${esc(w.item_name)} (${esc(w.item_code)})
       </div>
-      <div style="margin-top:4px;color:var(--text2)">当前库存：${w.qty} | 安全库存：${w.reorder_level}</div>
+      <div style="margin-top:4px;color:var(--text2)">当前库存：${w.actual_qty} | 安全库存：${w.reorder_level} | 仓库：${esc(w.warehouse||'')}</div>
     </div>`).join('');
+}
+
+async function loadWarehouses(c) {
+  c.innerHTML = `<div class="empty">⏳ 加载中...</div>`;
+  let rows = [];
+  try { rows = (await api('/api/resource/Warehouse')).data?.data || []; } catch(e) { toast('加载失败: '+e.message, 'error'); }
+  const whFields = [
+    { k:'warehouse_name', l:'仓库名' }, { k:'warehouse_type', l:'类型' },
+    { k:'address', l:'地址' }, { k:'status', l:'状态' },
+  ];
+  c.innerHTML = renderForm('Warehouse', 'createForm-Warehouse') + renderTable('Warehouse', rows, whFields);
+}
+
+async function loadLedger(c) {
+  c.innerHTML = `<div style="display:flex;gap:8px;margin-bottom:12px">
+    <input id="ledger-item" placeholder="物料编码" style="flex:1">
+    <input id="ledger-wh" placeholder="仓库" style="flex:1">
+    <button class="btn btn-primary" onclick="doLoadLedger()">查询</button>
+  </div><div id="ledger-body"><div class="empty">⏳ 加载中...</div></div>`;
+  await doLoadLedger();
+}
+
+async function doLoadLedger() {
+  const ic = document.getElementById('ledger-item')?.value || '';
+  const wh = document.getElementById('ledger-wh')?.value || '';
+  const body = document.getElementById('ledger-body');
+  body.innerHTML = `<div class="empty">⏳ 加载中...</div>`;
+  let url = '/api/resource/stock_ledger';
+  const params = [];
+  if (ic) params.push(`item_code=${encodeURIComponent(ic)}`);
+  if (wh) params.push(`warehouse=${encodeURIComponent(wh)}`);
+  if (params.length) url += '?' + params.join('&');
+  let r = { entries: [] };
+  try { r = await api(url); } catch(e) { toast('查询失败: '+e.message, 'error'); }
+  body.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>日期</th><th>物料</th><th>仓库</th><th>类型</th><th>入库</th><th>出库</th><th>余额</th><th>单价</th><th>金额</th></tr></thead>
+    <tbody>${(r.entries||[]).map(e => `<tr>
+      <td>${esc(e.posting_date||'')}</td><td>${esc(e.item_code||'')}</td><td>${esc(e.warehouse||'')}</td>
+      <td>${esc(e.stock_entry_type||'')}</td>
+      <td style="color:var(--green)">${(e.incoming_qty||0)>0?'+'+e.incoming_qty:''}</td>
+      <td style="color:var(--red)">${(e.outgoing_qty||0)>0?'-'+e.outgoing_qty:''}</td>
+      <td>${e.balance_qty}</td><td>¥${fmtMoney(e.valuation_rate||0)}</td><td>¥${fmtMoney(e.stock_value||0)}</td>
+    </tr>`).join('') || '<tr><td colspan="9" class="empty">暂无数据</td></tr>'}
+  </table></div>`;
 }
 
 // ── 通用表单 + 子表 ───────────────────────────────────────────
@@ -1243,7 +1310,9 @@ let notifPanelOpen=false; let _cachedNotifs={items:[],unread_count:0};
 
 async function fetchNotifications(){
   try{
-    const r=await fetch(API+'/api/workflow/notifications?recipient=admin',opts);
+    const u = JSON.parse(atob(localStorage.getItem('oa_user')||'{}'));
+    const me = u.username || 'admin';
+    const r=await fetch(API+'/api/workflow/notifications?recipient='+encodeURIComponent(me),opts);
     if(!r.ok)return;
     _cachedNotifs=await r.json();
     renderNotifBadge();
@@ -1268,7 +1337,7 @@ function toggleNotifPanel(){
   if(notifPanelOpen){
     renderNotifPanel();
     if(_cachedNotifs.unread_count>0){
-      fetch(API+'/api/workflow/notifications/read-all?recipient=admin',{...opts,method:'POST'}).then(r=>r.ok&&fetchNotifications());
+      const u2=JSON.parse(atob(localStorage.getItem('oa_user')||'{}'));fetch(API+'/api/workflow/notifications/read-all?recipient='+encodeURIComponent(u2.username||'admin'),{...opts,method:'POST'}).then(r=>r.ok&&fetchNotifications());
     }
   }
 }

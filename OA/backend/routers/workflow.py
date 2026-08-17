@@ -10,8 +10,9 @@ from sqlalchemy import text
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, Annotated
-from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry, LeaveRequest, WorkflowHistory, Notification, ApprovalRule, Delegation, User, Budget
+from database import get_db, ExpenseClaim, PurchaseOrder, JournalEntry, LeaveRequest, WorkflowHistory, Notification, ApprovalRule, Delegation, User, Budget, StockEntry, StockLedger, StockBalance
 from routers.auth import get_current_user, CurrentUser
+from routers.notifications import notify
 from routers._org import budget_for
 from sqlalchemy import or_
 
@@ -24,6 +25,8 @@ TABLE_MAP = {
     "JournalEntry":  "journal_entries",
     "LeaveRequest":  "leave_requests",
     "Contract":     "contracts",
+    "StockEntry":   "stock_entries",
+    "Project":      "projects",
 }
 # 状态字段
 STATUS_COL = {
@@ -32,6 +35,8 @@ STATUS_COL = {
     "JournalEntry":  "docstatus",
     "LeaveRequest":  "status",
     "Contract":     "status",
+    "StockEntry":   "status",
+    "Project":      "status",
 }
 # JournalEntry docstatus: 0=Draft, 1=Submitted, 2=Approved, 3=Rejected
 JE_TO_INT  = {"Draft": 0, "Submitted": 1, "Approved": 2, "Rejected": 3}
@@ -66,6 +71,18 @@ APPROVAL_ACTIONS = {
     "Contract": [
         {"action": "submit",  "from": "Draft",     "to": "Submitted", "label": "提交审批", "color": "#2563eb"},
         {"action": "approve", "from": "Submitted", "to": "Approved",  "label": "批准生效", "color": "#16a34a"},
+        {"action": "reject",  "from": "Submitted", "to": "Rejected",  "label": "拒绝",     "color": "#dc2626"},
+        {"action": "cancel",  "from": "Draft",     "to": "Cancelled", "label": "撤销",     "color": "#6b7280"},
+    ],
+    "StockEntry": [
+        {"action": "submit",  "from": "Draft",     "to": "Submitted", "label": "提交审批", "color": "#2563eb"},
+        {"action": "approve", "from": "Submitted", "to": "Approved",  "label": "批准执行", "color": "#16a34a"},
+        {"action": "reject",  "from": "Submitted", "to": "Rejected",  "label": "拒绝",     "color": "#dc2626"},
+        {"action": "cancel",  "from": "Draft",     "to": "Cancelled", "label": "撤销",     "color": "#6b7280"},
+    ],
+    "Project": [
+        {"action": "submit",  "from": "Draft",     "to": "Submitted", "label": "提交立项", "color": "#2563eb"},
+        {"action": "approve", "from": "Submitted", "to": "Approved",  "label": "批准立项", "color": "#16a34a"},
         {"action": "reject",  "from": "Submitted", "to": "Rejected",  "label": "拒绝",     "color": "#dc2626"},
         {"action": "cancel",  "from": "Draft",     "to": "Cancelled", "label": "撤销",     "color": "#6b7280"},
     ],
@@ -115,14 +132,18 @@ def _pending_rows(doctype: str, db: Session) -> list:
                 "ExpenseClaim": "claim_amount",
                 "PurchaseOrder": "total",
                 "Contract": "contract_value",
+                "StockEntry": "items_json",   # items_json 无金额汇总，pending 列表不显示金额
+                "Project": None,              # 项目无金额
             }.get(doctype, "total")
-            cols_to_select = f"name, {amt_col}, creation"
+            cols_to_select = f"name, creation" if amt_col is None else f"name, {amt_col}, creation"
         rows = db.execute(
             text(f"SELECT {cols_to_select} FROM {tbl} WHERE {col} = :s"),
             {"s": "Submitted"}
         ).fetchall()
         if doctype == "LeaveRequest":
             return [{"name": str(r[0]), "created": r[1]} for r in rows]
+        if amt_col is None:
+            return [{"name": r[0], "created": r[1]} for r in rows]
         return [{"name": r[0], "amount": r[1], "created": r[2]} for r in rows]
 
 
@@ -155,6 +176,13 @@ def _title(doctype: str, name: str, db: Session) -> str:
             val = f"¥{r[1]:,.0f}" if r[1] else ""
             return f"{r[0]} | {r[2]}↔{r[3]} | {val}".strip().rstrip("|")
         return name
+    elif doctype == "Project":
+        r = db.execute(text(
+            f"SELECT project_name, priority, percent_complete FROM {tbl} WHERE name=:n"
+        ), {"n": name}).fetchone()
+        if r:
+            return f"{r[0]} | {r[1]} | {r[2]:.0f}%"
+        return name
     else:  # JournalEntry
         r = db.execute(text(
             f"SELECT title, posting_date FROM {tbl} WHERE name=:n"
@@ -184,6 +212,78 @@ def get_pending(db: Session = Depends(get_db)):
 
 
 # ── POST /api/workflow/action ──────────────────────────────────
+def _post_stock_ledger(db: Session, stock_entry_name: str) -> None:
+    """StockEntry 审批通过后，将 items_json 解析并写入库存台账和余额表"""
+    import json
+    from datetime import date
+    entry = db.query(StockEntry).filter_by(name=stock_entry_name).first()
+    if not entry:
+        return
+    items = []
+    try:
+        items = json.loads(entry.items_json or "[]")
+    except Exception:
+        return
+    if not items:
+        return
+
+    posting_date = entry.modified.date() if entry.modified else date.today()
+    warehouse = entry.to_warehouse or entry.from_warehouse or "Default"
+
+    for item_row in items:
+        item_code = item_row.get("item_code") or item_row.get("item")
+        qty = float(item_row.get("qty") or item_row.get("quantity") or 0)
+        rate = float(item_row.get("rate") or item_row.get("valuation_rate") or 0)
+        if not item_code or qty == 0:
+            continue
+
+        # 计算 IN/OUT
+        if entry.stock_entry_type == "Material Receipt":
+            incoming, outgoing = qty, 0.0
+        elif entry.stock_entry_type == "Material Issue":
+            incoming, outgoing = 0.0, qty
+        elif entry.stock_entry_type == "Material Transfer":
+            # 转出先减，转入后加（这里只处理入库侧）
+            incoming, outgoing = qty, 0.0
+        else:
+            incoming, outgoing = qty, 0.0
+
+        # 查询当前余额
+        bal = db.query(StockBalance).filter_by(
+            item_code=item_code, warehouse=warehouse
+        ).first()
+
+        if bal:
+            bal.actual_qty = float(bal.actual_qty or 0) + incoming - outgoing
+            bal.stock_value = bal.actual_qty * rate
+            bal.last_updated = posting_date
+            bal.modified = datetime.utcnow()
+        else:
+            bal = StockBalance(
+                item_code=item_code, warehouse=warehouse,
+                actual_qty=incoming - outgoing,
+                reserved_qty=0.0, ordered_qty=0.0,
+                valuation_rate=rate,
+                stock_value=(incoming - outgoing) * rate,
+                last_updated=posting_date,
+            )
+            db.add(bal)
+
+        # 写入台账明细
+        balance_qty = (bal.actual_qty if bal.id else (incoming - outgoing))
+        db.add(StockLedger(
+            item_code=item_code, warehouse=warehouse,
+            stock_entry_type=entry.stock_entry_type,
+            stock_entry_name=entry.name,
+            posting_date=posting_date,
+            incoming_qty=incoming, outgoing_qty=outgoing,
+            balance_qty=balance_qty,
+            valuation_rate=rate,
+            stock_value=balance_qty * rate,
+            description=f"{entry.stock_entry_type}: {entry.name}",
+        ))
+
+
 @router.post("/action")
 def do_action(
     body: WorkflowActionRequest,
@@ -191,7 +291,7 @@ def do_action(
     db: Session = Depends(get_db),
 ):
     prefix_map = {"EXP-": "ExpenseClaim", "PO-": "PurchaseOrder", "JE-": "JournalEntry",
-                  "LR-": "LeaveRequest", "CONTRACT-": "Contract"}
+                  "LR-": "LeaveRequest", "CONTRACT-": "Contract", "SE-": "StockEntry", "PRJ-": "Project"}
     doctype = next((d for p, d in prefix_map.items() if body.name.startswith(p)), None)
     if not doctype:
         raise HTTPException(400, f"无法识别单据类型: {body.name}")
@@ -276,7 +376,7 @@ def do_action(
     }
     _actor = ACTION_LABELS.get(body.action, body.action)
     if body.action in ("submit",):
-        _notify(db,
+        notify(db,
             recipient="admin",
             title=f"【{doctype}】{body.name} 已提交待审批",
             body=f"{_actor} {body.name}，请及时审批处理。",
@@ -285,7 +385,7 @@ def do_action(
             priority="urgent",
         )
     elif body.action in ("approve", "reject", "pay", "order", "receive"):
-        _notify(db,
+        notify(db,
             recipient="admin",
             title=f"【{doctype}】{body.name} 已{_actor}",
             body=f"审批动作「{_actor}」已完成，单据：{body.name}。",
@@ -296,6 +396,11 @@ def do_action(
 
     if matched["to"] == "Approved" and doctype == "ExpenseClaim":
         _consume_budget(db, doctype, body.name)
+
+    # StockEntry 审批通过后更新库存台账和余额
+    if matched["to"] == "Approved" and doctype == "StockEntry":
+        _post_stock_ledger(db, body.name)
+
     db.commit()
     return {
         "ok":          True,
@@ -357,13 +462,13 @@ def _do_multilevel_action(body, current_user, db, doctype, rules):
     }
     _actor = ACTION_LABELS.get(body.action, body.action)
     if body.action == "submit":
-        _notify(db, recipient="admin",
+        notify(db, recipient="admin",
                 title=f"【{doctype}】{body.name} 已提交待审批",
                 body=f"{_actor} {body.name}，请及时审批处理。",
                 ntype="approval_request", doctype=doctype, doc_name=body.name,
                 action=body.action, priority="urgent")
     elif body.action in ("approve", "reject"):
-        _notify(db, recipient="admin",
+        notify(db, recipient="admin",
                 title=f"【{doctype}】{body.name} 已{_actor}",
                 body=f"审批动作「{_actor}」已完成，单据：{body.name}。",
                 ntype="approval_result", doctype=doctype, doc_name=body.name,
@@ -478,31 +583,6 @@ def workflow_stats(
     return stats
 
 
-def _notify(db, recipient: str, title: str, body: str, ntype: str = "approval_result",
-              doctype: str = None, doc_name: str = None, action: str = None,
-              priority: str = "normal") -> None:
-    """写一条通知到数据库，由 GET /notifications 拉取"""
-    db.add(Notification(
-        recipient=recipient,
-        title=title,
-        body=body,
-        ntype=ntype,
-        doctype=doctype,
-        doc_name=doc_name,
-        action=action,
-        priority=priority,
-    ))
-    # 外部渠道推送（配置驱动，失败不影响站内通知）
-    try:
-        _push_external(title, body)
-    except Exception:
-        pass
-
-
-def _push_external(title: str, body: str) -> None:
-    """外部通知推送：配置 OA_WEBHOOK_URL 时推送到企业微信/钉钉机器人 webhook。
-    未配置或失败则静默跳过（站内通知仍保留）。"""
-    import os, json, urllib.request
     url = os.getenv("OA_WEBHOOK_URL")
     if not url:
         return

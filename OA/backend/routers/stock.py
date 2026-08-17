@@ -1,7 +1,7 @@
 """routers/stock.py — 库存/资产行政（SQLAlchemy）"""
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
-from database import get_db, Item, StockEntry, Asset
+from database import get_db, Item, StockEntry, Asset, Warehouse, StockLedger, StockBalance
 from pydantic import BaseModel
 from typing import Annotated, Optional
 import json
@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/resource", tags=["Stock / Asset"])
 _reg("Item", Item, "ITEM")
 _reg("Stock Entry", StockEntry, "SE")
 _reg("Asset", Asset, "AST")
+_reg("Warehouse", Warehouse, "WH")
 
 
 def md(m) -> dict: return model_to_dict(m)
@@ -131,34 +132,112 @@ def delete_asset(name: str, db: Session = Depends(get_db), current_user: Current
     if m: db.delete(m); db.commit()
     return R(message="Asset deleted")
 
+# ── Warehouse ───────────────────────────────────────────────
+@router.get("/Warehouse", response_model=R)
+def list_warehouses(db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    rows = db.query(Warehouse).all()
+    return R(data={"data": [md(r) for r in rows], "length": len(rows)})
+
+@router.post("/Warehouse", response_model=R)
+def create_warehouse(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    name = data.get("name") or data.get("warehouse_name") or seq_for("Warehouse", db)
+    m = Warehouse(name=name, warehouse_name=data.get("warehouse_name", name),
+                  warehouse_type=data.get("warehouse_type", "Physical"),
+                  address=data.get("address"), is_default=data.get("is_default", False),
+                  status=data.get("status", "Active"),
+                  department_id=data.get("department_id"))
+    db.add(m); db.commit(); db.refresh(m)
+    return R(data={"name": m.name}, message="Warehouse created")
+
+@router.get("/Warehouse/{name}", response_model=R)
+def get_warehouse(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    m = db.query(Warehouse).filter(Warehouse.name == name).first()
+    if not m: raise HTTPException(404, "Warehouse not found")
+    return R(data=md(m))
+
+@router.put("/Warehouse/{name}", response_model=R)
+def update_warehouse(name: str, data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    m = db.query(Warehouse).filter(Warehouse.name == name).first()
+    if not m: raise HTTPException(404, "Warehouse not found")
+    for k, v in data.items():
+        if k not in ("name",) and hasattr(m, k): setattr(m, k, v)
+    db.commit(); db.refresh(m)
+    return R(data={"name": m.name}, message="Warehouse updated")
+
+@router.delete("/Warehouse/{name}", response_model=R)
+def delete_warehouse(name: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    m = db.query(Warehouse).filter(Warehouse.name == name).first()
+    if m: db.delete(m); db.commit()
+    return R(message="Warehouse deleted")
+
 # ── 库存汇总 / 低库存预警 ─────────────────────────────────────
 @router.get("/stock_summary")
 def stock_summary(db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    """实时库存余额（来自 StockBalance 台账汇总）"""
     rows, total = [], 0.0
-    for it in db.query(Item).all():
-        qty = float(it.opening_stock or 0); rate = float(it.val_rate or 0)
-        val = round(qty * rate, 2); total += val
-        rows.append({"item_code": it.item_code or it.name, "item_name": it.item_name or it.name,
-                     "qty": qty, "val_rate": rate, "value": val})
+    for bal in db.query(StockBalance).all():
+        val = round(float(bal.actual_qty or 0) * float(bal.valuation_rate or 0), 2)
+        total += val
+        rows.append({
+            "item_code": bal.item_code, "warehouse": bal.warehouse,
+            "actual_qty": float(bal.actual_qty or 0),
+            "reserved_qty": float(bal.reserved_qty or 0),
+            "available_qty": float(bal.actual_qty or 0) - float(bal.reserved_qty or 0),
+            "valuation_rate": float(bal.valuation_rate or 0),
+            "stock_value": val,
+            "last_updated": str(bal.last_updated) if bal.last_updated else None,
+        })
     return {
         "items": rows, "item_count": len(rows),
         "total_stock_value": round(total, 2),
         "stock_entry_count": db.query(StockEntry).count(),
         "asset_count": db.query(Asset).count(),
+        "warehouse_count": db.query(Warehouse).count(),
     }
 
 @router.get("/low_stock")
 def low_stock(db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
+    """基于 StockBalance 实时库存 + Item.reorder_level 的库存预警"""
     warnings = []
-    for it in db.query(Item).all():
-        qty = float(it.opening_stock or 0)
-        levels = json.loads(it.reorder_levels_json or "[]")
-        threshold = float(levels[0].get("warehouse_reorder_level", 0)) if levels else 0
-        if qty <= threshold:
+    items_map = {it.name: it for it in db.query(Item).all()}
+    for bal in db.query(StockBalance).all():
+        it = items_map.get(bal.item_code)
+        threshold = float(it.reorder_level or 0) if it else 0
+        actual = float(bal.actual_qty or 0)
+        if actual <= threshold:
             warnings.append({
-                "item_code": it.item_code or it.name,
-                "item_name": it.item_name or it.name,
-                "qty": qty, "reorder_level": threshold,
-                "severity": "critical" if qty == 0 else "warning",
+                "item_code": bal.item_code,
+                "item_name": it.item_name if it else bal.item_code,
+                "warehouse": bal.warehouse,
+                "actual_qty": actual,
+                "reorder_level": threshold,
+                "severity": "critical" if actual == 0 else "warning",
             })
     return {"warnings": warnings, "count": len(warnings)}
+
+# ── 库存台账 / 明细 ─────────────────────────────────────────
+@router.get("/stock_ledger")
+def stock_ledger(
+    db: Session = Depends(get_db),
+    item_code: str = None,
+    warehouse: str = None,
+    current_user: CurrentUser = Depends(require_auth),
+):
+    q = db.query(StockLedger)
+    if item_code: q = q.filter(StockLedger.item_code == item_code)
+    if warehouse: q = q.filter(StockLedger.warehouse == warehouse)
+    rows = q.order_by(StockLedger.posting_date.desc(), StockLedger.id.desc()).limit(200).all()
+    return {
+        "entries": [{
+            "id": r.id, "item_code": r.item_code, "warehouse": r.warehouse,
+            "stock_entry_type": r.stock_entry_type,
+            "posting_date": str(r.posting_date) if r.posting_date else None,
+            "incoming_qty": float(r.incoming_qty or 0),
+            "outgoing_qty": float(r.outgoing_qty or 0),
+            "balance_qty": float(r.balance_qty or 0),
+            "valuation_rate": float(r.valuation_rate or 0),
+            "stock_value": float(r.stock_value or 0),
+            "description": r.description,
+        } for r in rows],
+        "count": len(rows),
+    }
