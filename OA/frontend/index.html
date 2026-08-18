@@ -1423,7 +1423,7 @@ let notifPanelOpen=false; let _cachedNotifs={items:[],unread_count:0};
 
 async function fetchNotifications(){
   try{
-    const u = JSON.parse(atob(localStorage.getItem('oa_user')||'{}'));
+    const u = getCurrentUser();
     const me = u.username || 'admin';
     const r=await fetch(API+'/api/workflow/notifications?recipient='+encodeURIComponent(me),opts);
     if(!r.ok)return;
@@ -1450,7 +1450,7 @@ function toggleNotifPanel(){
   if(notifPanelOpen){
     renderNotifPanel();
     if(_cachedNotifs.unread_count>0){
-      const u2=JSON.parse(atob(localStorage.getItem('oa_user')||'{}'));fetch(API+'/api/workflow/notifications/read-all?recipient='+encodeURIComponent(u2.username||'admin'),{...opts,method:'POST'}).then(r=>r.ok&&fetchNotifications());
+      const u2=getCurrentUser();fetch(API+'/api/workflow/notifications/read-all?recipient='+encodeURIComponent(u2.username||'admin'),{...opts,method:'POST'}).then(r=>r.ok&&fetchNotifications());
     }
   }
 }
