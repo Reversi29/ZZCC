@@ -1,0 +1,19 @@
+# Environment (contains secrets — never commit)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Data
+data/
+*.db
+*.sqlite
+
+# Node (if any)
+node_modules/
+
+# OS
+.DS_Store

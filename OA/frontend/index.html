@@ -246,6 +246,7 @@ const enc = (s) => encodeURIComponent(s);
 
 const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
+  { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM',      emoji: '👥', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
   { id: 'opportunities',name: '商机',     emoji: '💼', doctype: 'Opportunity' },
@@ -588,8 +589,35 @@ function render() {
   const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderSimple, procurement:renderProcurement,
     finance:renderFinance, compliance:renderSimple, quality:renderSimple, customer:renderSimple,
     hr:renderSimple, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, workflow:renderWorkflow, registrations:renderRegistrations };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, registrations:renderRegistrations };
   (map[currentModule] || renderDashboard)(main);
+}
+
+
+// ── Analytics 统计概览 ────────────────────────────────────────
+async function renderAnalytics(el) {
+  el.innerHTML = `<div class="card"><div class="card-title">📊 全局经营概览</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>`;
+  let d;
+  try { d = await api("/api/analytics/overview"); } catch(e) { return; }
+  const fmt = v => (v == null) ? "—" : v;
+  const row = (k, v) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2);font-size:13px">${k}</span><span style="font-weight:600">${fmt(v)}</span></div>`;
+  const panel = (emoji, title, rows) => `<div class="card" style="min-width:200px;flex:1"><div class="card-title"><span class="emoji">${emoji}</span> ${title}</div><div style="padding:6px 4px">${rows}</div></div>`;
+  const wf = d.workflow || {};
+  const hr = d.hr || {};
+  const crm = d.crm || {};
+  const stk = d.stock || {};
+  const pending_total = wf.total_pending || 0;
+  const pending_items = Object.entries(wf.pending_by_type || {}).filter(([,v])=>v>0);
+  el.innerHTML = `<div class="card">
+    <div class="card-title"><span class="emoji">📊</span> 全局经营概览 <span style="font-size:12px;color:var(--text2);margin-left:8px">更新于 ${d.generated_at ? d.generated_at.replace('T',' ').slice(0,19) : '—'}</span></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px">
+      ${panel('⚡','审批流',[row('待审批总数',pending_total),row('本月已通过',fmt(wf.approved_this_month)),row('本月已驳回',fmt(wf.rejected_this_month))])}
+      ${panel('👔','人力资源',[row('员工总数',fmt(hr.total_employees)),row('今日请假',fmt(hr.on_leave_today)),row('待审请假',fmt(hr.pending_leave_requests))])}
+      ${panel('💼','客户关系',[row('线索',fmt(crm.leads)),row('联系人',fmt(crm.contacts)),row('商机',fmt(crm.opportunities)),row('本月签约合同',fmt(crm.contracts_signed_this_month))])}
+      ${panel('📦','仓储库存',[row('物料总数',fmt(stk.total_items)),row('仓库数量',fmt(stk.total_warehouses)),row('低库存预警',fmt(stk.low_stock_items))])}
+    </div>
+    ${pending_items.length > 0 ? `<div style="margin-top:12px"><div class="card-title"><span class="emoji">⚡</span> 待审批明细</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${pending_items.map(([k,v])=>`<span style="background:var(--accent);color:#fff;padding:4px 12px;border-radius:16px;font-size:13px">${k}: <b>${v}</b></span>`).join('')}</div></div>` : ''}
+  </div>`;
 }
 
 // ── Dashboard ────────────────────────────────────────────────

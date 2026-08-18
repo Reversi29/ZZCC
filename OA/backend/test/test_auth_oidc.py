@@ -57,8 +57,8 @@ def _make_id_token(sub: str = "alice.sso", email: str = "alice.sso@zzcc.local",
             "email": email,
             "name": name,
             "preferred_username": sub,
-            "iss": iss or oidc.OIDC_ISSUER,
-            "aud": aud or oidc.OIDC_CLIENT_ID,
+            "iss": iss or oidc.get_settings().OAUTH_CASDOOR_URL,
+            "aud": aud or oidc.get_settings().OAUTH_CLIENT_ID,
             "iat": now,
             "exp": now + timedelta(minutes=5),
         },
@@ -81,12 +81,12 @@ def test_oidc_login_redirects_to_idp(client):
     r = client.get("/api/auth/oidc/login", follow_redirects=False)
     assert r.status_code == 307
     loc = r.headers["location"]
-    assert loc.startswith(oidc.OIDC_AUTH_URL)
-    assert f"client_id={oidc.OIDC_CLIENT_ID}" in loc
+    assert loc.startswith(f"{oidc.get_settings().OAUTH_CASDOOR_URL}/login/oauth/authorize")
+    assert f"client_id={oidc.get_settings().OAUTH_CLIENT_ID}" in loc
     assert "response_type=code" in loc
     assert "state=" in loc
     from urllib.parse import quote
-    assert quote(oidc.OIDC_REDIRECT_URI, safe="") in loc
+    assert quote(oidc.get_settings().OAUTH_REDIRECT_URI, safe="") in loc
 
 
 def test_oidc_callback_jit_creates_user(client, db):
@@ -155,8 +155,8 @@ def test_oidc_callback_rejects_inactive_user(client, db):
 def test_oidc_callback_rejects_bad_signature(client, monkeypatch):
     """id_token 签名/发行方错误 → 401"""
     bad = pyjwt.encode(
-        {"sub": "x", "email": "x@y.z", "iss": oidc.OIDC_ISSUER,
-         "aud": oidc.OIDC_CLIENT_ID, "iat": datetime.now(timezone.utc),
+        {"sub": "x", "email": "x@y.z", "iss": oidc.get_settings().OAUTH_CASDOOR_URL,
+         "aud": oidc.get_settings().OAUTH_CLIENT_ID, "iat": datetime.now(timezone.utc),
          "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
         "not-a-key", algorithm="HS256",  # 用错误算法/密钥签名
     )

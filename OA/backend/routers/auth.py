@@ -1,5 +1,4 @@
 """auth.py — 认证路由（JWT Bearer Token + DB User）"""
-import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,15 +12,12 @@ import jwt
 import hashlib
 
 from database import get_db, User
+from config import get_settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
-# ── 密钥 ──────────────────────────────────────────────────────
-SECRET_KEY = os.getenv("OAUTH_SECRET_KEY", "zzcc-oa-dev-secret-change-in-prod")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = int(os.getenv("OAUTH_TOKEN_EXPIRE_HOURS", "24"))
-SALT = b"zzcc-oa-salt"
-PBKDF2_ITER = 310_000
+# ── 密钥（从 config.py 读取 .env，生产必须改）─────────────────────
+ACCESS_TOKEN_EXPIRE_HOURS = 24   # 非敏感配置，可直接写死或改为 env
 
 # ── 安全状态（demo 用内存字典；生产应换 Redis）──────────────
 TOKEN_BLACKLIST: dict[str, float | None] = {}   # jti -> 过期时间（失效的 token）
@@ -70,12 +66,16 @@ class CurrentUser(BaseModel):
 
 # ── 密码 ──────────────────────────────────────────────────────
 def _hash_pw(password: str) -> str:
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), SALT, PBKDF2_ITER).hex()
+    """Hash password using salt from settings (lazy eval)."""
+    from config import get_settings
+    salt = bytes.fromhex(get_settings().PASSWORD_SALT_HEX)
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310_000).hex()
 
 def _verify_pw(password: str, stored_hash: str) -> bool:
     return _hash_pw(password) == stored_hash
 
 def create_access_token(username: str, display_name: str, role: str = "user") -> str:
+    from config import get_settings
     payload = {
         "sub": username,
         "display_name": display_name,
@@ -84,7 +84,7 @@ def create_access_token(username: str, display_name: str, role: str = "user") ->
         "iat": datetime.now(timezone.utc),
         "exp": datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(payload, get_settings().JWT_SECRET_KEY, algorithm="HS256")
 
 
 # ── OAuth2 Bearer 依赖 ────────────────────────────────────────
@@ -102,7 +102,7 @@ def get_current_user(
     """
     if token:
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(token, get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
             if "jti" in payload and payload["jti"] in TOKEN_BLACKLIST:
                 raise HTTPException(status_code=401, detail="Token 已失效，请重新登录")
             return CurrentUser(
@@ -115,7 +115,7 @@ def get_current_user(
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401, detail="无效的 Token")
 
-    if api_key == os.getenv("API_KEY", "zzcc_oadev_key_2024"):
+    if api_key == get_settings().API_KEY:
         return CurrentUser(username="api-key-user", display_name="API 用户", role="api")
 
     raise HTTPException(
@@ -147,7 +147,7 @@ def _reset_fail(username: str):
 def _register_session(token: str, username: str):
     """记录活跃会话（jti -> username）"""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
         jti = payload.get("jti")
         if jti:
             _ACTIVE_SESSIONS[jti] = username
@@ -161,7 +161,7 @@ def _blacklist_token(authorization: str | None):
     if not raw:
         return
     try:
-        payload = jwt.decode(raw, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(raw, get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
         jti = payload.get("jti")
         if jti:
             TOKEN_BLACKLIST[jti] = payload.get("exp")
@@ -177,7 +177,7 @@ def _resolve_user(token: str | None, api_key: str | None, authorization: str | N
         raw = authorization[len("Bearer "):]
     if raw:
         try:
-            payload = jwt.decode(raw, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(raw, get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
             if "jti" in payload and payload["jti"] in TOKEN_BLACKLIST:
                 raise HTTPException(status_code=401, detail="Token 已失效，请重新登录")
             return CurrentUser(
@@ -187,7 +187,7 @@ def _resolve_user(token: str | None, api_key: str | None, authorization: str | N
             )
         except jwt.PyJWTError:
             pass
-    if api_key == os.getenv("API_KEY", "zzcc_oadev_key_2024"):
+    if api_key == get_settings().API_KEY:
         return CurrentUser(username="api-key-user", display_name="API 用户", role="api")
     raise HTTPException(
         status_code=401,
@@ -342,7 +342,7 @@ def list_sessions(
     cur_jti = None
     if authorization and authorization.startswith("Bearer "):
         try:
-            p = jwt.decode(authorization[len("Bearer "):], SECRET_KEY, algorithms=[ALGORITHM])
+            p = jwt.decode(authorization[len("Bearer "):], get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
             cur_jti = p.get("jti")
         except jwt.PyJWTError:
             pass
@@ -358,7 +358,7 @@ def logout_all(
     cur_jti = None
     if authorization and authorization.startswith("Bearer "):
         try:
-            p = jwt.decode(authorization[len("Bearer "):], SECRET_KEY, algorithms=[ALGORITHM])
+            p = jwt.decode(authorization[len("Bearer "):], get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
             cur_jti = p.get("jti")
         except jwt.PyJWTError:
             pass

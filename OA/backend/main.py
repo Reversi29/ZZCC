@@ -2,7 +2,7 @@
 import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from database import DB_URL
+from config import get_settings
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -50,7 +50,7 @@ def status():
     return {
         "status": "ok",
         "version": "1.0.0",
-        "persistence": DB_URL.split("+")[0] if "+" in DB_URL else "sqlite",
+        "persistence": get_settings().DATABASE_URL.split("+")[0] if "+" in get_settings().DATABASE_URL else "sqlite",
     }
 
 

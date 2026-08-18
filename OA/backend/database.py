@@ -1,24 +1,17 @@
-"""database.py — SQLAlchemy ORM（SQLite for dev，切换 MariaDB 只需改 URL）"""
+"""database.py — SQLAlchemy ORM（所有配置从 config.py 读取 .env）"""
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Date, DateTime, Time, Enum, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, date
 from pathlib import Path
-import os
 import hashlib
 
-# ── 切换数据库只需改这一行 ────────────────────────────────────
-# SQLite（开发/演示）
-# DB_URL = os.getenv("DATABASE_URL", "sqlite:///data/zzcc_oa.db")
+from config import get_settings
 
-# MariaDB（生产）
-DB_URL = os.getenv("DATABASE_URL",
-    "mysql+pymysql://root:zzcc_oa_2024@127.0.0.1:3307/zzcc_oa"
-)
-
+_DB_URL = get_settings().DATABASE_URL
 engine = create_engine(
-    DB_URL,
-    connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {},
+    _DB_URL,
+    connect_args={"check_same_thread": False} if _DB_URL.startswith("sqlite") else {},
     echo=False,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -38,13 +31,18 @@ def get_db() -> Session:
 
 
 def _hash_pw(password: str) -> str:
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), b"zzcc-oa-salt", 310_000).hex()
+    """Hash password with salt from settings (lazy eval to avoid conftest import order issues)."""
+    from config import get_settings
+    salt_hex = get_settings().PASSWORD_SALT_HEX
+    # Pad hex string to even length and decode
+    salt_bytes = bytes.fromhex(salt_hex.ljust(len(salt_hex) + (8 - len(salt_hex) % 8) % 8, '0'))
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt_bytes, 310_000).hex()
 
 
 def init_db():
     """启动时创建所有表"""
     # SQLite: 建 data 目录
-    if DB_URL.startswith("sqlite"):
+    if _DB_URL.startswith("sqlite"):
         Path("data").mkdir(exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _seed_default_users()

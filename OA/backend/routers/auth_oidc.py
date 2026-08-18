@@ -29,18 +29,12 @@ from sqlalchemy.orm import Session
 
 from database import get_db, User
 from routers.auth import _hash_pw, create_access_token
+from config import get_settings
 
 router = APIRouter()
 
 # ── 配置（env 可覆盖）──────────────────────────────────────
-OIDC_ISSUER = os.getenv("OIDC_ISSUER", "http://localhost:8004")
-OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "894cb728becce8983061")
-OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET", "cee48f367d759e19c7b7c09f074f4958281bb368")
-OIDC_REDIRECT_URI = os.getenv("OIDC_REDIRECT_URI", "http://localhost:8003/api/auth/oidc/callback")
 
-OIDC_AUTH_URL = f"{OIDC_ISSUER}/login/oauth/authorize"
-OIDC_TOKEN_URL = f"{OIDC_ISSUER}/api/login/oauth/access_token"
-OIDC_JWKS_URL = f"{OIDC_ISSUER}/.well-known/jwks"
 
 _STATE_TTL = 600   # state 10 分钟
 _states: dict[str, float] = {}   # state -> expiry（单实例内存；多实例部署需换 Redis）
@@ -55,7 +49,7 @@ def _get_jwks_keys() -> list[dict]:
     if _jwks_cache["keys"] and now - _jwks_cache["at"] < _JWKS_TTL:
         return _jwks_cache["keys"]
     with httpx.Client(timeout=10) as c:
-        r = c.get(OIDC_JWKS_URL)
+        r = c.get(f"{get_settings().OAUTH_CASDOOR_URL}/.well-known/jwks")
         r.raise_for_status()
     keys = r.json().get("keys", [])
     if not keys:
@@ -79,8 +73,8 @@ def _verify_id_token(id_token: str) -> dict:
         id_token,
         public_key,
         algorithms=["RS256"],
-        audience=OIDC_CLIENT_ID,
-        issuer=OIDC_ISSUER,
+        audience=get_settings().OAUTH_CLIENT_ID,
+        issuer=get_settings().OAUTH_CASDOOR_URL,
     )
 
 
@@ -88,13 +82,13 @@ def _exchange_code(code: str) -> dict:
     """授权码换 token（抽出便于测试 mock）"""
     with httpx.Client(timeout=15) as c:
         r = c.post(
-            OIDC_TOKEN_URL,
+            f"{get_settings().OAUTH_CASDOOR_URL}/api/login/oauth/access_token",
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "client_id": OIDC_CLIENT_ID,
-                "client_secret": OIDC_CLIENT_SECRET,
-                "redirect_uri": OIDC_REDIRECT_URI,
+                "client_id": get_settings().OAUTH_CLIENT_ID,
+                "client_secret": get_settings().OAUTH_CLIENT_SECRET,
+                "redirect_uri": get_settings().OAUTH_REDIRECT_URI,
             },
         )
         r.raise_for_status()
@@ -108,13 +102,13 @@ async def oidc_login():
     state = secrets.token_urlsafe(16)
     _states[state] = time.time() + _STATE_TTL
     params = {
-        "client_id": OIDC_CLIENT_ID,
-        "redirect_uri": OIDC_REDIRECT_URI,
+        "client_id": get_settings().OAUTH_CLIENT_ID,
+        "redirect_uri": get_settings().OAUTH_REDIRECT_URI,
         "response_type": "code",
         "scope": "openid profile email",
         "state": state,
     }
-    return RedirectResponse(f"{OIDC_AUTH_URL}?{urlencode(params)}")
+    return RedirectResponse(f"{get_settings().OAUTH_CASDOOR_URL}/login/oauth/authorize?{urlencode(params)}")
 
 
 @router.get("/api/auth/oidc/callback")
