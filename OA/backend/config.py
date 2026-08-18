@@ -43,6 +43,38 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+_PRODUCTION_CHANGES = (
+    "CHANGE_ME",
+    "CHANGE_IN_PROD",
+    "dev-secret",
+    "CHANGE_ME_",
+)
+
+
+def _check_production_settings(s: Settings) -> None:
+    """启动守卫：生产模式(DEBUG=false)下检测未改的占位符并拒绝启动"""
+    if s.DEBUG:
+        return  # 开发模式跳过
+    issues = []
+    for name, val in (
+        ("JWT_SECRET_KEY", s.JWT_SECRET_KEY),
+        ("API_KEY", s.API_KEY),
+        ("API_SECRET", s.API_SECRET),
+        ("DATABASE_URL", s.DATABASE_URL),
+    ):
+        if any(p in val.upper() for p in _PRODUCTION_CHANGES):
+            issues.append(f"  {name}: 仍为默认值 '{val[:40]}'")
+    if issues:
+        raise RuntimeError(
+            "\n\n⚠️  生产环境检测到未改的配置项，启动已拒绝。\n"
+            "请修改 backend/.env 中的以下字段：\n"
+            + "\n".join(issues)
+            + "\n\n或设置 DEBUG=true 以开发模式启动。\n"
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    _check_production_settings(s)
+    return s
