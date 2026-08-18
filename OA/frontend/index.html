@@ -588,7 +588,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderSimple, procurement:renderProcurement,
     finance:renderFinance, compliance:renderSimple, quality:renderSimple, customer:renderSimple,
-    hr:renderSimple, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
+    hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, registrations:renderRegistrations };
   (map[currentModule] || renderDashboard)(main);
 }
@@ -798,6 +798,50 @@ async function runProConsult() {
 }
 
 // ── 资产行政（多 Tab）─────────────────────────────────────────
+// ── 员工管理 ──────────────────────────────────────────────
+async function renderEmployees(el) {
+  const u = getCurrentUser();
+  const isAdmin = ['admin','api'].includes(u.role || '');
+  let rows = [];
+  try { rows = await api('/api/hr/employees'); rows = rows.data||[]; } catch(e) {}
+  let html = `<div class='section-header'>
+    <h3>👔 员工管理</h3>
+    ${isAdmin ? "<button class='btn btn-primary' onclick='showEmployeeForm()'>+ 添加员工</button>" : ''}</div>`;
+  if(rows.length) {
+    html += `<table class='data-table'>
+      <thead><tr><th>工号</th><th>姓名</th><th>部门</th><th>邮箱</th><th>入职日期</th><th>年假</th><th>病假</th><th>年假已用</th><th>状态</th></tr></thead><tbody>`;
+    rows.forEach(r => {
+      const st = r.status === 'Inactive' ? '❌离职' : '✅在职';
+      html += `<tr><td>${esc(r.name||'')}</td><td>${esc(r.employee_name||r.name||'')}</td>
+        <td>${esc(r.department||'-')}</td><td>${esc(r.email||'-')}</td>
+        <td>${esc(r.hire_date||'')}</td>
+        <td>${r.leave_annual??15}</td><td>${r.leave_sick??10}</td>
+        <td>${r.leave_annual_used??0}</td><td>${st}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  } else { html += `<p class='empty-tip'>暂无员工记录</p>`; }
+  el.innerHTML = html;
+}
+window.showEmployeeForm = async function() {
+  const name = prompt('工号 (username):');
+  if(!name) return;
+  const display = prompt('姓名:');
+  if(!display) return;
+  const dept = prompt('部门:') || '';
+  const email = prompt('邮箱:') || '';
+  const hire = prompt('入职日期 (YYYY-MM-DD):') || '';
+  const pw = prompt('初始密码:');
+  if(!pw) return;
+  const role = prompt('角色 (user/admin, 默认user):') || 'user';
+  try {
+    await api('/api/auth/register', 'POST', {username: name, password: pw, display_name: display, role: role});
+    await api('/api/hr/employees', 'POST', {name, display_name: display, department: dept, email, hire_date: hire});
+    toast('员工添加成功', 'success');
+    renderEmployees(document.getElementById('main'));
+  } catch(e) { toast('添加失败: '+e.message, 'error'); }
+};
+
+// ── 请假管理 ──────────────────────────────────────────────
 async function renderLeaves(el) {
   const u = getCurrentUser();
   let rows = [], myrows = [];
@@ -831,9 +875,11 @@ window.showLeaveForm = function() {
     .catch(e => toast('提交失败: '+e.message, 'error'));
 };
 async function renderAttendance(el) {
+  const u = getCurrentUser();
+  const isAdmin = ['admin','api'].includes(u.role || '');
   let rows = [];
   try { rows = await api('/api/hr/attendance'); rows = rows.data||[]; } catch(e) {}
-  let html = `<div class='section-header'><h3>🕐 考勤管理</h3></div>`;
+  let html = `<div class='section-header'><h3>🕐 考勤管理</h3>${isAdmin ? "<button class='btn btn-primary' onclick='showAttendanceForm()'>+ 添加记录</button>" : ''}</div>`;
   if(rows.length) {
     html += `<table class='data-table'>
       <thead><tr><th>日期</th><th>员工</th><th>上班</th><th>下班</th><th>状态</th></tr></thead><tbody>`;
@@ -843,10 +889,25 @@ async function renderAttendance(el) {
   } else { html += `<p class='empty-tip'>暂无考勤记录</p>`; }
   el.innerHTML = html;
 }
+window.showAttendanceForm = function() {
+  const emp = prompt('员工工号:');
+  if(!emp) return;
+  const dt = prompt('日期 (YYYY-MM-DD):');
+  if(!dt) return;
+  const ci = prompt('上班时间 (HH:MM, 可跳过):') || '';
+  const co = prompt('下班时间 (HH:MM, 可跳过):') || '';
+  const st = prompt('状态 (Normal/Late/Absent, 默认 Normal):') || 'Normal';
+  api('/api/hr/attendance', 'POST', {employee: emp, date: dt, check_in: ci, check_out: co, status: st})
+    .then(r => { toast('添加成功', 'success'); renderAttendance(document.getElementById('main')); })
+    .catch(e => toast('添加失败: '+e.message, 'error'));
+};
+
 async function renderSalary(el) {
+  const u = getCurrentUser();
+  const isAdmin = ['admin','api'].includes(u.role || '');
   let rows = [];
   try { rows = await api('/api/hr/salary'); rows = rows.data||[]; } catch(e) {}
-  let html = `<div class='section-header'><h3>💰 薪资记录</h3></div>`;
+  let html = `<div class='section-header'><h3>💰 薪资记录</h3>${isAdmin ? "<button class='btn btn-primary' onclick='showSalaryForm()'>+ 发放薪资</button>" : ''}</div>`;
   if(rows.length) {
     html += `<table class='data-table'>
       <thead><tr><th>年月</th><th>员工</th><th>基本工资</th><th>奖金</th><th>扣款</th><th>实发</th></tr></thead><tbody>`;
@@ -857,6 +918,21 @@ async function renderSalary(el) {
   } else { html += `<p class='empty-tip'>暂无薪资记录</p>`; }
   el.innerHTML = html;
 }
+window.showSalaryForm = function() {
+  const emp = prompt('员工工号:');
+  if(!emp) return;
+  const ym = prompt('年月 (YYYY-MM):');
+  if(!ym) return;
+  const base = parseFloat(prompt('基本工资:') || '0');
+  const bonus = parseFloat(prompt('奖金:') || '0');
+  const ded = parseFloat(prompt('扣款:') || '0');
+  const pd = prompt('实发日期 (YYYY-MM-DD, 可跳过):') || '';
+  const remark = prompt('备注 (可跳过):') || '';
+  api('/api/hr/salary', 'POST', {employee: emp, year_month: ym, base_salary: base, bonus, deductions: ded, pay_date: pd, remark})
+    .then(r => { toast('薪资发放成功', 'success'); renderSalary(document.getElementById('main')); })
+    .catch(e => toast('添加失败: '+e.message, 'error'));
+};
+
 async function renderStock(el) {
   el.innerHTML = `
     <div class="card">
