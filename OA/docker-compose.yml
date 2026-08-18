@@ -1,63 +1,77 @@
-# ZZCC OA System — 生产化 Docker Compose（P3.16）
+# ZZCC OA — Docker Compose
+# Usage:
+#   docker compose up -d        # 启动（后台）
+#   docker compose down         # 停止
+#   docker compose logs -f     # 看日志
 #
-# 一键部署：
-#   cd /Users/mac/ZZCC/OA
-#   docker compose up -d --build
-# 访问：http://localhost:8003  （后端同源 serve 前端，单端口）
-#
-# 说明：
-#   - backend 镜像自包含前端（COPY frontend/index.html），同时挂载 ./frontend 便于热更新
-#   - MariaDB 通过服务名 `mariadb` 互通，数据库端口为容器内 3306（非宿主机 3307）
-#   - 限流阈值可通过环境变量运行时调整（见 backend/middleware/ratelimit.py 顶部说明）
-#   - 部署前请停掉本机占用 8003 的 uvicorn 服务，避免端口冲突
+# 注意：先确认 .env 中 DATABASE_URL=mysql+pymysql://...:3306/zzcc_oa
+#       Casdoor 需独立启动（见 backend/docker-compose.casdoor.yml）
 
 services:
-  # ── 数据层 ────────────────────────────────────────────────
-  mariadb:
+  # ── MariaDB 10.8（生产数据存储）───────────────────────────
+  db:
     image: mariadb:10.8
     container_name: zzcc-oa-mariadb
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: zzcc_oa_2024
-      MARIADB_DATABASE: zzcc_oa
+      MYSQL_ROOT_PASSWORD: zzcc_oa_2024      # ⚠ 生产必须改
+      MYSQL_DATABASE: zzcc_oa
+      MYSQL_USER: zzcc_oa_user
+      MYSQL_PASSWORD: zzcc_oa_2024           # ⚠ 生产必须改
+    ports:
+      - "3306:3306"
     volumes:
       - oa-mariadb-data:/var/lib/mysql
+      - ./OA/backend/sql:/docker-entrypoint-initdb.d:ro  # 初始化 SQL（如有）
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
-      retries: 10
-    networks:
-      - oa-net
+      retries: 5
+      start_period: 30s
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
 
-  # ── 后端（含前端静态资源，单端口同源）────────────────────
+  # ── OA 后端 API ──────────────────────────────────────────────
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: OA/backend/Dockerfile
+    image: reversi29/zzcc-oa:latest
     container_name: zzcc-oa-backend
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./OA/backend/.env                     # ⚠ 含敏感信息，生产用 --env-file
     environment:
-      # 容器内通过服务名访问 MariaDB
-      DATABASE_URL: mysql+pymysql://root:zzcc_oa_2024@mariadb:3306/zzcc_oa
-      API_KEY: zzcc_oadev_key_2024
-      # 限流（可选，覆盖默认值）
-      RATELIMIT_DEFAULT: "120"
-      RATELIMIT_LOGIN: "20"
+      DATABASE_URL: mysql+pymysql://root:zzcc_oa_2024@db:3306/zzcc_oa
     ports:
       - "8003:8003"
-    depends_on:
-      mariadb:
-        condition: service_healthy
     volumes:
-      # 便于开发时热更新前端（生产可不挂，用镜像内置版本）
-      - ./frontend:/frontend:ro
-    networks:
-      - oa-net
+      - oa-backend-logs:/app/logs             # 持久化日志（如有）
+      # 代码只读（开发时去掉下面的 read_only）
+      - ./OA:/app:ro
+    # read_only: true                         # 注释掉以便开发写入
+    # tmpfs:
+    #   - /tmp
 
-networks:
-  oa-net:
-    driver: bridge
+  # ── Nginx（可选，生产反向代理）──────────────────────────────
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: zzcc-oa-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./certs:/etc/nginx/certs:ro
+  #   depends_on:
+  #     - backend
 
 volumes:
   oa-mariadb-data:
+    name: oa-mariadb-data
+  oa-backend-logs:
+    name: oa-backend-logs

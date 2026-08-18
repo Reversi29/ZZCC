@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from database import init_db
-from config import get_settings
+from logging_config import RequestLogMiddleware, logger
 
 
 @asynccontextmanager
@@ -28,6 +28,9 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# ── 结构化日志中间件 ─────────────────────────────────────────
+app.add_middleware(RequestLogMiddleware)
 
 # CORS：允许前端访问
 app.add_middleware(
