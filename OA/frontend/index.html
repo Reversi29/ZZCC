@@ -1182,7 +1182,8 @@ async function switchWfTab(tab, btn) {
     }
     const DOCTYPE_LABELS = {
       ExpenseClaim: '💰 费用报销', PurchaseOrder: '🛒 采购订单',
-      JournalEntry: '📒 记账凭证',
+      JournalEntry: '📒 记账凭证', LeaveRequest: '🏖️ 请假申请',
+      Contract: '📋 合同审批', StockEntry: '📦 库存单据', Project: '🚀 项目立项',
     };
     let html = '';
     for (const [dt, items] of Object.entries(groups)) {
@@ -1233,20 +1234,29 @@ async function switchWfTab(tab, btn) {
     c.innerHTML = html;
   } else if (tab === 'mine') {
     c.innerHTML = '<div class="loading">加载中...</div>';
-    const [exp, po] = await Promise.all([
-      apiGet('ExpenseClaim'),
-      apiGet('PurchaseOrder'),
+    const [ec, po, je, ct, pr, se, lv] = await Promise.all([
+      apiGet('ExpenseClaim').catch(()=>[]), apiGet('PurchaseOrder').catch(()=>[]), apiGet('JournalEntry').catch(()=>[]),
+      apiGet('Contract').catch(()=>[]), apiGet('Project').catch(()=>[]), apiGet('StockEntry').catch(()=>[]),
+      api('/api/hr/leaves').then(d=>d.data||[]).catch(()=>[]),
     ]);
-    const DOCTYPES_MINE = ['ExpenseClaim','PurchaseOrder'];
-    const cols = [{k:'name',l:'单号'},{k:'approval_status',l:'报销状态'},{k:'status',l:'PO状态'},{k:'claim_amount',l:'金额'},{k:'total',l:'PO金额'}];
-    const ALL = [...exp.map(e=>({...e,_dt:'ExpenseClaim'})),...po.map(p=>({...p,_dt:'PurchaseOrder'}))];
+    const JE_ST = {0:'Draft',1:'Submitted',2:'Approved',3:'Rejected'};
+    const tag = (rows, dt) => (rows||[]).map(r=>({...r, _dt:dt}));
+    const ALL = [...tag(ec,'ExpenseClaim'), ...tag(po,'PurchaseOrder'), ...tag(je,'JournalEntry'),
+      ...tag(ct,'Contract'), ...tag(pr,'Project'), ...tag(se,'StockEntry'), ...tag(lv,'LeaveRequest')];
     if (!ALL.length) { c.innerHTML='<div class="empty"><div class="empty-emoji">📭</div>暂无我的单据</div>'; return; }
-    c.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>类型</th><th>单号</th><th>状态</th><th>金额</th><th>操作</th></tr></thead><tbody>
+    const amt = (dt,r) => {
+      if (dt==='LeaveRequest') return (r.days||0)+' 天';
+      if (dt==='Project') return (r.percent_complete||0)+'%';
+      const m={ExpenseClaim:'claim_amount',PurchaseOrder:'total',JournalEntry:'amount',Contract:'contract_value'}[dt];
+      return r[m]!=null ? '¥'+fmtMoney(r[m]) : '—';
+    };
+    const st = (dt,r) => dt==='JournalEntry' ? (JE_ST[r.docstatus]||r.docstatus) : (r.approval_status||r.status||'');
+    c.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>类型</th><th>单号</th><th>状态</th><th>金额/进度</th><th>操作</th></tr></thead><tbody>
       ${ALL.map((r,i)=>`<tr>
-        <td>${i+1}</td><td>${r._dt==='ExpenseClaim'?'费用报销':'采购订单'}</td>
+        <td>${i+1}</td><td>${DOCTYPE_LABELS[r._dt]||r._dt}</td>
         <td><a href="#" onclick="showWfDoc('${r._dt}','${r.name}')" style="color:var(--accent)">${r.name}</a></td>
-        <td>${esc(r.approval_status||r.status||'')}</td>
-        <td>${fmtMoney(r.claim_amount||r.total||0)}</td>
+        <td>${esc(st(r._dt,r))}</td>
+        <td>${amt(r._dt,r)}</td>
         <td><button class="btn-detail" onclick="showWfDoc('${r._dt}','${r.name}')">详情</button></td>
       </tr>`).join('')}
     </tbody></table></div>`;
