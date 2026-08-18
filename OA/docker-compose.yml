@@ -35,7 +35,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: OA/backend/Dockerfile
+      dockerfile: backend/Dockerfile
     image: reversi29/zzcc-oa:latest
     container_name: zzcc-oa-backend
     restart: unless-stopped
@@ -43,7 +43,7 @@ services:
       db:
         condition: service_healthy
     env_file:
-      - ./OA/backend/.env                     # ⚠ 含敏感信息，生产用 --env-file
+      - ./backend/.env                     # ⚠ 含敏感信息，生产用 --env-file
     environment:
       DATABASE_URL: mysql+pymysql://root:zzcc_oa_2024@db:3306/zzcc_oa
     ports:
@@ -51,7 +51,8 @@ services:
     volumes:
       - oa-backend-logs:/app/logs             # 持久化日志（如有）
       # 代码只读（开发时去掉下面的 read_only）
-      - ./OA:/app:ro
+      - ./backend:/app:ro
+      - ./frontend:/frontend:ro
     # read_only: true                         # 注释掉以便开发写入
     # tmpfs:
     #   - /tmp

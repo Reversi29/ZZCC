@@ -9,6 +9,10 @@
     python scripts/db_migrate.py
 """
 import os
+import sys
+
+# 允许以脚本方式直接运行（python scripts/db_migrate.py）时也能 import 到 /app 下的模块
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
 
