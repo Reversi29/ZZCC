@@ -1,0 +1,19 @@
+# ZZCC OA — 全量 up 验证用 override（不触碰生产环境）
+#
+# 目的：验证 docker-compose 全栈（MariaDB + OA backend）可完整拉起。
+# 生产现状：宿主跑 OA(8003) + 独立容器 zzcc-oa-mariadb(3307, bind 数据)。
+# 因此本 override 将验证栈与生产完全错开：
+#   - db      容器名改 zzcc-oa-mariadb-verify（生产容器名不动）
+#   - backend 端口改 8005:8003（宿主 8003 被生产 OA 占用）
+# 数据：使用全新命名卷 oa-mariadb-data（验证完 down -v 即删，零残留）。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.verify.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.verify.yml down -v
+services:
+  db:
+    container_name: zzcc-oa-mariadb-verify
+  backend:
+    container_name: zzcc-oa-backend-verify
+    ports:
+      - "8005:8003"

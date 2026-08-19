@@ -14,6 +14,7 @@ services:
     container_name: zzcc-oa-mariadb
     restart: unless-stopped
     environment:
+      MARIADB_ROOT_PASSWORD: zzcc_oa_2024     # ⚠ 生产必须改（healthcheck.sh 只认 MARIADB_*）
       MYSQL_ROOT_PASSWORD: zzcc_oa_2024      # ⚠ 生产必须改
       MYSQL_DATABASE: zzcc_oa
       MYSQL_USER: zzcc_oa_user
@@ -22,9 +23,9 @@ services:
       - "3306:3306"
     volumes:
       - oa-mariadb-data:/var/lib/mysql
-      - ./OA/backend/sql:/docker-entrypoint-initdb.d:ro  # 初始化 SQL（如有）
+      - ./backend/sql:/docker-entrypoint-initdb.d:ro  # 初始化 SQL（如有）
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
       interval: 10s
       timeout: 5s
       retries: 5
