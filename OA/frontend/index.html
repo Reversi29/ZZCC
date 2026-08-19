@@ -259,6 +259,7 @@ const MODULES = [
   { id: 'customer',    name: '客服',     emoji: '🎧', doctype: 'Support Ticket' },
   { id: 'hr',          name: '人力资源',  emoji: '👔', doctype: 'Employee' },
   { id: 'leaves',       name: '请假管理',  emoji: '📅' },
+  { id: 'departments',  name: '部门管理',  emoji: '🏢' },
   { id: 'attendance',   name: '考勤管理',  emoji: '🕐' },
   { id: 'salary',       name: '薪资记录',  emoji: '💰' },
   { id: 'stock',        name: '资产行政',  emoji: '📦', doctype: 'Item' },
@@ -571,11 +572,13 @@ function renderNav() {
   
   document.getElementById('nav').innerHTML = visible.map(m => {
     if (m.id === 'hr' && isAdmin) {
-      return `<div class='nav-wrapper'><button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('leaves')">${m.emoji} ${m.name}</button>
+      return `<div class='nav-wrapper'><button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('hr')">${m.emoji} ${m.name}</button>
         <div class='nav-sub'>
+          <button class='nav-sub-btn' onclick='navigate("hr")'>👔 员工管理</button>
           <button class='nav-sub-btn' onclick='navigate("leaves")'>📅 请假</button>
           <button class='nav-sub-btn' onclick='navigate("attendance")'>🕐 考勤</button>
           <button class='nav-sub-btn' onclick='navigate("salary")'>💰 薪资</button>
+          <button class='nav-sub-btn' onclick='navigate("departments")'>🏢 部门管理</button>
         </div></div>`;
     }
     return `<button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('${m.id}')">${m.emoji} ${m.name}</button>`;
@@ -586,12 +589,9 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderSimple, procurement:renderProcurement,
     finance:renderFinance, compliance:renderSimple, quality:renderSimple, customer:renderSimple,
-    hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, registrations:renderRegistrations };
   (map[currentModule] || renderDashboard)(main);
-}
 
 
 // ── Analytics 统计概览 ────────────────────────────────────────
@@ -842,6 +842,77 @@ window.showEmployeeForm = async function() {
 };
 
 // ── 请假管理 ──────────────────────────────────────────────
+
+window._deptCache = null;
+window.loadDepartments = async function() {
+  var r = await api('/api/resource/Department');
+  return (r && r.data) ? r.data : (Array.isArray(r) ? r : []);
+};
+window.loadDepartmentsCached = async function() {
+  if (_deptCache) return _deptCache;
+  _deptCache = await loadDepartments();
+  return _deptCache;
+};
+window.renderDeptRow = function(d, level) {
+  var pad = '\u00a0'.repeat(level * 3);
+  var hasKids = d.has_children;
+  var icon = hasKids ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+  var cls = hasKids ? "dept-folder" : "dept-leaf";
+  var u = getCurrentUser();
+  var isAdmin = ['admin','api'].indexOf(u.role || '') >= 0;
+  var ndel = (d.name !== 'D-ROOT' && isAdmin)
+    ? '<button class="btn-sm btn-danger" onclick="deleteDept(\'' + esc(d.name||'') + '\')">删除</button>'
+    : '';
+  return '<tr class="' + cls + '" data-name="' + esc(d.name||'') + '">' +
+    '<td>' + pad + icon + ' ' + esc(d.department_name||'') + '</td>' +
+    '<td>' + esc(d.name||'') + '</td>' +
+    '<td>' + esc(d.parent||'\u2014') + '</td>' +
+    '<td>' + (d.children_count || 0) + '</td>' +
+    '<td>' + (d.is_group ? '\u662f' : '\u5426') + '</td>' +
+    '<td><button class="btn-sm" onclick="showDeptForm(\'' + esc(d.name||'') + '\')">编辑</button> ' + ndel + '</td>' +
+    '</tr>';
+};
+window.renderDepartments = async function(el) {
+  var depts = await loadDepartments();
+  depts = depts.sort(function(a,b){return (a.lft||0)-(b.lft||0);});
+  var t = '<table class="data-table"><thead><tr><th>部门名称</th><th>编码</th><th>上级</th><th>子部门数</th><th>虚拟</th><th>操作</th></tr></thead><tbody>';
+  depts.forEach(function(d){t+=renderDeptRow(d,0);});
+  t += '</tbody></table><div id="dept-form-container" style="margin-top:16px"></div>';
+  el.innerHTML = t;
+};
+window.showDeptForm = async function(name) {
+  var el = document.getElementById('dept-form-container');
+  var depts = await loadDepartmentsCached();
+  var cur = name ? (depts.filter(function(d){return d.name===name;})[0] || null) : null;
+  var isNew = !name;
+  var opts = depts.filter(function(d){return d.name!==name;})
+    .map(function(d){return '<option value="' + esc(d.name) + '">' + esc(d.department_name||d.name) + '</option>';}).join('');
+  el.innerHTML = '<div class="form-row"><label>部门编码</label><input id="df-name" value="' + esc(cur?cur.name:'') + '" ' + (isNew?'':'readonly') + ' /></div>' +
+    '<div class="form-row"><label>部门名称</label><input id="df-display" value="' + esc(cur?(cur.department_name||''):'') + '" /></div>' +
+    '<div class="form-row"><label>上级部门</label><select id="df-parent"><option value="">\u65e0</option>' + opts + '</select></div>' +
+    '<div class="form-row"><button class="btn btn-primary" onclick="saveDept(' + (isNew?"''":"'\''+esc(name)+'\''") + ')">保存</button></div>';
+};
+window.saveDept = async function(origName) {
+  var name = document.getElementById('df-name').value.trim();
+  var department_name = document.getElementById('df-display').value.trim();
+  var parent = document.getElementById('df-parent').value || null;
+  if (!name) { alert('部门编码不能为空'); return; }
+  var payload = {name:name, department_name:department_name, parent:parent};
+  if (origName) {
+    await api('/api/resource/Department/'+encodeURIComponent(origName),{method:'PUT',body:JSON.stringify(payload)});
+  } else {
+    await api('/api/resource/Department',{method:'POST',body:JSON.stringify(payload)});
+  }
+  _deptCache = null;
+  await renderDepartments(document.getElementById('main-content'));
+};
+window.deleteDept = async function(name) {
+  if (!confirm('确定删除部门 '+name+'?')) return;
+  await api('/api/resource/Department/'+encodeURIComponent(name),{method:'DELETE'});
+  _deptCache = null;
+  await renderDepartments(document.getElementById('main-content'));
+};
+
 async function renderLeaves(el) {
   const u = getCurrentUser();
   let rows = [], myrows = [];

@@ -78,6 +78,7 @@ def _register():
         "routers.customer_service",
         "routers.quality",
         "routers.hr",
+        "routers.org",      # 组织架构（Department CRUD）
         "routers.stock",
         "routers.workflow",
         "routers.ai",
