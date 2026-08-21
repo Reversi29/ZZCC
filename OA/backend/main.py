@@ -17,7 +17,28 @@ from logging_config import RequestLogMiddleware, logger
 async def lifespan(app: FastAPI):
     init_db()
     print("✓ 数据库表已创建 / 更新")
+    _seed_default_thresholds()
+    print("✓ 默认审批阈值已初始化")
     yield
+
+
+def _seed_default_thresholds():
+    """首次启动时自动写入默认审批阈值（幂等，已有配置不覆盖）"""
+    from database import SessionLocal, ApprovalRule
+    from services.auto_approval import (
+        save_threshold, ApprovalThreshold, DEFAULT_THRESHOLDS,
+    )
+    db = SessionLocal()
+    try:
+        # 直接查 DB，绕过 list_thresholds 的自动补充逻辑
+        existing = {r.doctype for r in db.query(ApprovalRule)\
+                    .filter_by(approver_role="auto_approve").all()}
+        for default in DEFAULT_THRESHOLDS:
+            if default["doctype"] not in existing:
+                save_threshold(db, ApprovalThreshold(**default))
+                print(f"  + 种子: {default['doctype']} (amount≤{default['auto_approve_amount']})")
+    finally:
+        db.close()
 
 
 app = FastAPI(
@@ -93,6 +114,17 @@ def _register():
 
 
 _register()
+
+
+# ── 禁缓存中间件（开发期：确保浏览器不缓存旧版 index.html）─────
+@app.middleware("http")
+async def _no_cache(request, call_next):
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith(".html"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 # ── 静态前端（同源部署：API 在 /api/，前端在 /）───────────────

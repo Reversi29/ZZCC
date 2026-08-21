@@ -583,15 +583,6 @@ def workflow_stats(
     return stats
 
 
-    url = os.getenv("OA_WEBHOOK_URL")
-    if not url:
-        return
-    payload = {"msgtype": "text", "text": {"content": f"{title}\n{body}"}}
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=5)
-
-
 # ── GET /api/workflow/notifications ──────────────────────────────
 @router.get("/notifications")
 def get_notifications(

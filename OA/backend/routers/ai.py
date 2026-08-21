@@ -1,8 +1,17 @@
-"""routers/ai.py — 统一 AI 咨询入口（所有模块通用）"""
+"""routers/ai.py — 统一 AI 咨询入口（所有模块通用）+ AI 审批自动化"""
 from routers.auth import require_auth, CurrentUser
+from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from typing import Optional, Any, Dict
+
+from services.auto_approval import (
+    review_document, review_all_pending,
+    execute_recommendation, batch_execute,
+    save_threshold, delete_threshold, list_thresholds,
+    ApprovalThreshold, DEFAULT_THRESHOLDS,
+)
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 
@@ -201,3 +210,144 @@ def _ai_hr_consult(ctx: dict) -> dict:
         "risk_flags": risk_flags,
         "suggestions": suggestions,
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# AI 审批自动化端点（/api/ai/approval/*）
+# ═══════════════════════════════════════════════════════════════
+
+# 状态机引用（供端点校验使用）
+TABLE_MAP_REF = {
+    "ExpenseClaim", "PurchaseOrder", "JournalEntry",
+    "LeaveRequest", "Contract", "StockEntry", "Project",
+}
+
+
+class ApprovalReviewRequest(BaseModel):
+    doctype: str       # ExpenseClaim / LeaveRequest / StockEntry / ...
+    doc_name: str      # 单据名称（如 EXP-001）
+
+
+class ApprovalExecuteRequest(BaseModel):
+    doctype: str
+    doc_name: str
+    action: str        # approve / reject / flag
+    comment: Optional[str] = "AI自动审批"
+
+
+class ApprovalBatchRequest(BaseModel):
+    execute_all: bool = False  # true=执行所有 auto/reject 建议
+
+
+class ThresholdRequest(BaseModel):
+    doctype: str
+    auto_approve_amount: float = 0.0
+    auto_approve_max_days: int = 0
+    require_llm_review: bool = False
+    risk_keywords: str = ""
+    notes: str = ""
+
+
+@router.post("/approval/review")
+def ai_approval_review(
+    req: ApprovalReviewRequest,
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """
+    对单个待审单据进行 AI 审批审查。
+    返回 AI 的建议（auto/manual/reject），不执行实际状态变更。
+    """
+    if req.doctype not in TABLE_MAP_REF:
+        raise HTTPException(400, f"不支持的单据类型: {req.doctype}")
+    return review_document(db, req.doctype, req.doc_name)
+
+
+@router.post("/approval/review-all")
+def ai_approval_review_all(
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """
+    扫描所有待审单据，逐个 AI 审查。
+    返回建议列表 + 汇总统计。不执行状态变更。
+    """
+    return review_all_pending(db)
+
+
+@router.post("/approval/execute")
+def ai_approval_execute(
+    req: ApprovalExecuteRequest,
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """
+    执行单条 AI 审批决策（approve/reject/flag）。
+    执行后写入 WorkflowHistory（operator='ai_agent'）+ 通知 admin。
+    """
+    return execute_recommendation(
+        db, req.doctype, req.doc_name, req.action, req.comment
+    )
+
+
+@router.post("/approval/batch-execute")
+def ai_approval_batch_execute(
+    req: ApprovalBatchRequest,
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """
+    先审查所有待审单据，再批量执行 AI 建议。
+    - execute_all=true: 执行所有 auto 和 reject 建议
+    - execute_all=false: 仅审查，不执行
+    """
+    result = review_all_pending(db)
+    if not req.execute_all:
+        return result
+
+    exec_result = batch_execute(db, result["recommendations"])
+    return {
+        "review": result,
+        "execution": exec_result,
+    }
+
+
+# ── 审批阈值配置 ──────────────────────────────────────────────
+
+@router.get("/approval/thresholds")
+def ai_approval_thresholds_list(
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """获取所有单据类型的审批阈值配置"""
+    return list_thresholds(db)
+
+
+@router.put("/approval/threshold")
+def ai_approval_threshold_update(
+    req: ThresholdRequest,
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """保存/更新指定单据类型的审批阈值"""
+    threshold = ApprovalThreshold(
+        doctype=req.doctype,
+        auto_approve_amount=req.auto_approve_amount,
+        auto_approve_max_days=req.auto_approve_max_days,
+        require_llm_review=req.require_llm_review,
+        risk_keywords=req.risk_keywords,
+        notes=req.notes,
+    )
+    save_threshold(db, threshold)
+    return {"ok": True, "threshold": threshold.to_dict()}
+
+
+@router.delete("/approval/threshold")
+def ai_approval_threshold_delete(
+    doctype: str,
+    current_user: CurrentUser = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """删除指定单据类型的审批阈值（恢复为人工审核）"""
+    delete_threshold(db, doctype)
+    return {"ok": True, "deleted": doctype}
