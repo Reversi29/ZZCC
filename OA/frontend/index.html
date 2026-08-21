@@ -587,10 +587,13 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
-  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderSimple, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, registrations:renderRegistrations };
-
+  if (main) {
+    const fn = map[currentModule] || renderDashboard;
+    fn(main);
+  }
+}
 
 // ── Analytics 统计概览 ────────────────────────────────────────
 async function renderAnalytics(el) {
@@ -652,7 +655,7 @@ async function renderDashboard(el) {
           </div>`;
         }).join('')}
       </div>
-      <p style="margin-top:16px;font-size:13px;color:var(--text3)">API 文档：<a href="http://localhost:8000/docs" target="_blank">/docs</a></p>
+      <p style="margin-top:16px;font-size:13px;color:var(--text3)">API 文档：<a href="http://localhost:8003/docs" target="_blank">/docs</a></p>
     </div>`;
 }
 
@@ -1145,7 +1148,6 @@ const AI_MODULES = [
 let aiHistory = [];
 
 // ── 审批工作流 ─────────────────────────────────────────────────
-async 
 window.renderTasks = async function(el) {
   el.innerHTML = '<div class="card"><div class="card-title">✅ 任务管理</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>';
   var tasks = [], projects = [];
@@ -1234,7 +1236,15 @@ window.deleteTask = async function(name) {
 };
 
 async function renderWorkflow(el) {
-  el.innerHTML = `<div class="module-header"><h2>📝 审批工作流</h2></div>
+  el.innerHTML = `<div class="module-header"><h2>📝 审批工作流</h2>
+       <div style="display:flex;gap:8px;margin-left:auto">
+         <button class="btn" style="background:#7c3aed;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px"
+           onclick="aiReviewAll()">🤖 AI 审查</button>
+         <button class="btn" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px"
+           onclick="aiBatchExecute()">⚡ 一键 AI 审批</button>
+       </div>
+     </div>
+     <div id="ai-review-panel" style="display:none"></div>
     <div class="wf-tabs" style="display:flex;gap:8px;margin-bottom:16px">
       <button class="tab-btn active" onclick="switchWfTab('pending',this)">待审批</button>
       <button class="tab-btn" onclick="switchWfTab('stats',this)">统计</button>
@@ -1592,4 +1602,98 @@ document.addEventListener('click',function(e){
   }
 });
 updateAuthUI();
+
+// ═══════════════════════════════════════════════════════
+// AI 审批助手
+// ═══════════════════════════════════════════════════════
+async function aiReviewAll() {
+  const panel = document.getElementById('ai-review-panel');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="loading">🤖 AI 正在审查所有待审批单据...</div>';
+  try {
+    const r = await api('/api/ai/approval/review-all');
+    renderAiReviewPanel(r);
+  } catch(e) {
+    panel.innerHTML = `<div class="ai-result"><span class="risk-flag">审查失败: ${esc(e.message || e)}</span></div>`;
+  }
+}
+
+function renderAiReviewPanel(data) {
+  const panel = document.getElementById('ai-review-panel');
+  const s = data.summary;
+  const recs = data.recommendations || [];
+  const emoji = {auto:'✅', manual:'⚠️', reject:'❌'};
+
+  let html = `<div class="ai-result" style="margin-bottom:12px;padding:12px;background:var(--surface);border-radius:8px">
+    <strong>📊 审查结果</strong>
+    <span style="margin-left:12px">总计 ${s.total} 项</span>
+    <span style="margin-left:8px;color:var(--green)">✅ 自动 ${s.auto}</span>
+    <span style="margin-left:8px;color:var(--yellow)">⚠️ 待审 ${s.manual}</span>
+    <span style="margin-left:8px;color:var(--red)">❌ 拒绝 ${s.reject}</span>
+  </div>`;
+
+  if (recs.length === 0) {
+    html += '<div class="empty"><div class="empty-emoji">🎉</div>暂无待审单据</div>';
+    panel.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="max-height:400px;overflow-y:auto;margin-top:8px">';
+  for (const rec of recs) {
+    const icon = emoji[rec.decision] || '?';
+    const score = rec.score != null ? rec.score : 0;
+    const threshold = rec.threshold ? ` (阈值: ¥${rec.threshold.auto_approve_amount || 'N/A'})` : '';
+    html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin:4px 0;background:var(--surface2);border-radius:6px">
+      <span style="font-size:18px">${icon}</span>
+      <span style="flex:1;font-size:13px">
+        <strong>${esc(rec.title || rec.doc_name)}</strong>
+        <span style="color:var(--text2);font-size:12px"> · ${rec.doctype} · 评分 ${score}</span>
+        <div style="color:var(--text2);font-size:12px;margin-top:2px">${esc(rec.reason || '')}</div>
+        ${rec.risk_flags && rec.risk_flags.length ? '<div style="color:var(--red);font-size:11px;margin-top:2px">⚠ ' + rec.risk_flags.map(f=>esc(f)).join('; ') + '</div>' : ''}
+      </span>
+      <span style="font-size:11px;color:var(--text2)">${threshold}</span>
+    </div>`;
+  }
+  html += '</div>';
+
+  if (s.auto > 0 || s.reject > 0) {
+    html += `<div style="margin-top:12px;text-align:center">
+      <button class="btn" style="background:#16a34a;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px"
+        onclick="aiBatchExecute()">⚡ 执行 ${s.auto + s.reject} 项 AI 建议</button>
+    </div>`;
+  }
+
+  panel.innerHTML = html;
+}
+
+async function aiBatchExecute() {
+  if (!confirm('确认执行 AI 审批建议？\n自动批准的单据将无法撤销（可通过审批历史追溯）。')) return;
+  const panel = document.getElementById('ai-review-panel');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="loading">⚡ AI 正在批量执行...</div>';
+  try {
+    const r = await api('/api/ai/approval/batch-execute', 'POST', { execute_all: true });
+    const ex = r.execution || {};
+    const sm = ex.summary || {};
+    let html = `<div class="ai-result" style="margin-bottom:12px;padding:12px;background:var(--surface);border-radius:8px">
+      <strong>⚡ 执行结果</strong>
+      <span style="margin-left:12px;color:var(--green)">✅ 已执行 ${sm.executed || 0}</span>
+      <span style="margin-left:8px;color:var(--red)">❌ 失败 ${sm.failed || 0}</span>
+      <span style="margin-left:8px;color:var(--yellow)">⏭️ 跳过 ${sm.skipped || 0}</span>
+    </div>`;
+    if (ex.details && ex.details.failed && ex.details.failed.length) {
+      html += '<div style="margin-top:8px">';
+      for (const f of ex.details.failed) {
+        html += `<div style="color:var(--red);font-size:12px;padding:4px 0">❌ ${esc(f.error || '执行失败')}</div>`;
+      }
+      html += '</div>';
+    }
+    panel.innerHTML = html;
+    // 刷新待审列表
+    switchWfTab('pending');
+  } catch(e) {
+    panel.innerHTML = `<div class="ai-result"><span class="risk-flag">执行失败: ${esc(e.message || e)}</span></div>`;
+  }
+}
+
 </script>
