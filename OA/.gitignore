@@ -23,3 +23,5 @@ sites/nginx.conf
 
 # Data
 data/
+# Backups (plural, under backend/)
+backend/backups/

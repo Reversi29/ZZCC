@@ -258,6 +258,7 @@ const MODULES = [
   { id: 'quality',     name: '质量测试',  emoji: '🔍', doctype: 'Quality Inspection' },
   { id: 'customer',    name: '客服',     emoji: '🎧', doctype: 'Support Ticket' },
   { id: 'hr',          name: '人力资源',  emoji: '👔', doctype: 'Employee' },
+  { id: 'departments', name: '部门管理',  emoji: '🏢' },
   { id: 'leaves',       name: '请假管理',  emoji: '📅' },
   { id: 'attendance',   name: '考勤管理',  emoji: '🕐' },
   { id: 'salary',       name: '薪资记录',  emoji: '💰' },
@@ -576,6 +577,7 @@ function renderNav() {
           <button class='nav-sub-btn' onclick='navigate("leaves")'>📅 请假</button>
           <button class='nav-sub-btn' onclick='navigate("attendance")'>🕐 考勤</button>
           <button class='nav-sub-btn' onclick='navigate("salary")'>💰 薪资</button>
+          <button class='nav-sub-btn' onclick='navigate("departments")'>🏢 部门</button>
         </div></div>`;
     }
     return `<button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('${m.id}')">${m.emoji} ${m.name}</button>`;
@@ -588,7 +590,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, registrations:renderRegistrations };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, registrations:renderRegistrations };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -596,6 +598,85 @@ function render() {
 }
 
 // ── Analytics 统计概览 ────────────────────────────────────────
+
+// ── Department 部门管理 ────────────────────────────────────────
+let _deptCache = null;
+
+async function loadDepartments() {
+  const res = await api('/api/resource/Department');
+  const data = res.data ? res.data : res;
+  return Array.isArray(data) ? data : [];
+}
+function loadDepartmentsCached() { return _deptCache || loadDepartments().then(d => (_deptCache = d, d)); }
+
+function renderDeptRow(d) {
+  const isAdmin = ['admin','api'].indexOf((getCurrentUser().role || '').toLowerCase()) >= 0;
+  const icon = d.has_children ? '📁' : '📄';
+  const indent = 'padding-left:' + (Math.min((d.lft || 0) * 18, 120)) + 'px;';
+  const delBtn = isAdmin && d.name !== 'D-ROOT'
+    ? `<button class="btn-sm" style="background:#d33;color:#fff;border:none;padding:2px 8px;border-radius:4px;cursor:pointer" onclick='deleteDept("${d.name}")'>🗑</button>`
+    : '';
+  const childrenCount = d.children_count || 0;
+  const ch = childrenCount > 0 ? `<span style="font-size:12px;color:var(--text2);margin-left:4px">(${childrenCount})</span>` : '';
+  return `<tr style="${indent}"><td>${icon} ${d.name.replace(/^D-/,'')}${ch}</td><td>${d.parent || '—'}</td><td>${d.display_name || ''}</td><td>${delBtn}</td></tr>`;
+}
+
+async function renderDepartments(el) {
+  el.innerHTML = `<div class="card"><div class="card-title"><span class="emoji">🏢</span> 部门管理 <button class="btn-sm" onclick="showDeptForm()">➕ 新增</button></div>
+    <div id="dept-form-container" style="margin:8px 0"></div>
+    <table class="data-table"><thead><tr><th>部门名称</th><th>上级</th><th>显示名</th><th></th></tr></thead><tbody id="dept-tbody"></tbody></table>
+  </div>`;
+  const depts = await loadDepartments();
+  const isAdmin = ['admin','api'].indexOf((getCurrentUser().role || '').toLowerCase()) >= 0;
+  document.getElementById('dept-tbody').innerHTML = isAdmin
+    ? depts.map(renderDeptRow).join('')
+    : `<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text2)">仅管理员可查看部门管理</td></tr>`;
+}
+
+function showDeptForm(parentName='') {
+  const fc = document.getElementById('dept-form-container');
+  if (!fc) return;
+  fc.innerHTML = `<div style="background:#f5f6f7;padding:12px;border-radius:6px;margin:4px 0">
+    <b>${parentName ? '新增子部门' : '新增部门'}</b>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <input id="df_name" class="form-input" placeholder="部门名称(如: 研发部)" style="width:160px">
+      <input id="df_display" class="form-input" placeholder="显示名" style="width:120px">
+      <input id="df_parent" class="form-input" placeholder="上级部门" value="${parentName || 'D-ROOT'}" style="width:120px">
+      <input id="df_cost_center" class="form-input" placeholder="成本中心" style="width:140px">
+      <button class="btn-sm" onclick="saveDept()">💾 保存</button>
+      <button class="btn-sm" style="background:#666" onclick="document.getElementById('dept-form-container').innerHTML=''">取消</button>
+    </div>
+  </div>`;
+}
+
+async function saveDept() {
+  const name = document.getElementById('df_name').value.trim();
+  const display = document.getElementById('df_display').value.trim() || name;
+  const parent = document.getElementById('df_parent').value.trim() || 'D-ROOT';
+  const cc = document.getElementById('df_cost_center').value.trim();
+  if (!name) return toast('请输入部门名称');
+  const body = { name, department_name: display, parent: parent === 'D-ROOT' ? null : parent, company: 'ZZCC' };
+  try {
+    await api(`/api/resource/Department/${encodeURIComponent(name)}`, { method:'PUT', body });
+  } catch(e1) {
+    try { await api('/api/resource/Department', { method:'POST', body }); } catch(e2) { toast('保存失败'); return; }
+  }
+  document.getElementById('dept-form-container').innerHTML = '';
+  _deptCache = null;
+  await renderDepartments(document.getElementById('main'));
+  toast('部门保存成功');
+}
+
+async function deleteDept(name) {
+  if (!confirm('确定删除部门 ' + name + '?')) return;
+  try {
+    await api(`/api/resource/Department/${encodeURIComponent(name)}`, { method:'DELETE' });
+    _deptCache = null;
+    await renderDepartments(document.getElementById('main'));
+    toast('已删除');
+  } catch(e) { toast('删除失败'); }
+}
+
 async function renderAnalytics(el) {
   el.innerHTML = `<div class="card"><div class="card-title">📊 全局经营概览</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>`;
   let d;

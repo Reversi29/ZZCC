@@ -18,8 +18,22 @@ async def lifespan(app: FastAPI):
     init_db()
     print("✓ 数据库表已创建 / 更新")
     _seed_default_thresholds()
+    _seed_default_departments()
     print("✓ 默认审批阈值已初始化")
+    print("✓ 默认部门已初始化")
     yield
+
+
+def _seed_default_departments():
+    from routers._org import seed_default_departments
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        seed_default_departments(db)
+    except Exception as e:
+        print(f"⚠ 部门种子失败: {e}")
+    finally:
+        db.close()
 
 
 def _seed_default_thresholds():
