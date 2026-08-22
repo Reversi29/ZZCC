@@ -37,7 +37,7 @@ ALTER TABLE workflow_history ADD COLUMN IF NOT EXISTS field_changes TEXT NULL;
 
 -- 企业公告表（P4.20）
 CREATE TABLE IF NOT EXISTS announcements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
     title VARCHAR(255) NOT NULL,
     body TEXT NOT NULL,
     published_by VARCHAR(255) NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS announcements (
 
 -- 日报/周报表（P4.23）
 CREATE TABLE IF NOT EXISTS daily_reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
     title TEXT NOT NULL,
     report_type TEXT NOT NULL DEFAULT 'daily',
     report_date TEXT NOT NULL,
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS daily_reports (
 
 -- 会议纪要表（P4.24）
 CREATE TABLE IF NOT EXISTS meetings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
     title TEXT NOT NULL,
     meeting_type TEXT NOT NULL DEFAULT 'regular',
     meeting_date TEXT NOT NULL,
@@ -85,10 +85,10 @@ CREATE TABLE IF NOT EXISTS meetings (
 
 -- 表单模板（P4.25）
 CREATE TABLE IF NOT EXISTS form_templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
     name TEXT NOT NULL,
     description TEXT,
-    schema TEXT NOT NULL,
+    `schema` TEXT NOT NULL,
     created_by TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     creation TEXT,
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS form_templates (
 
 -- 表单提交数据（P4.25）
 CREATE TABLE IF NOT EXISTS form_submissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
     template_id INTEGER NOT NULL,
     data TEXT NOT NULL,
     submitted_by TEXT NOT NULL,
