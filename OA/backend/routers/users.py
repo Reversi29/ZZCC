@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from database import get_db, User, Department
-from routers.auth import require_admin, CurrentUser, _hash_pw
+from routers.auth import require_admin, require_auth, CurrentUser, _hash_pw
 from routers.notifications import notify
 
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
@@ -58,6 +58,10 @@ class UpdateUserRequest(BaseModel):
             raise ValueError("无效的角色")
         return v
 
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 class ResetPasswordRequest(BaseModel):
     new_password: str
@@ -179,6 +183,45 @@ def create_user(
     db.commit()
     db.refresh(user)
     return UserResponse.from_user(user)
+
+
+
+
+# ═══ 个人设置：修改自己的 display_name ═══
+class SelfUpdateRequest(BaseModel):
+    display_name: str | None = None
+
+@router.patch("/me", response_model=UserResponse)
+def update_self(
+    body: SelfUpdateRequest,
+    current_user: Annotated[CurrentUser, Depends(require_auth)],
+    db: Session = Depends(get_db),
+):
+    u = db.query(User).filter(User.username == current_user.username).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if body.display_name is not None:
+        u.display_name = body.display_name
+    db.commit()
+    db.refresh(u)
+    return UserResponse.from_user(u)
+
+
+# ═══ 个人设置：修改密码 ═══
+@router.post("/me/password", status_code=204)
+def change_password(
+    body: ChangePasswordRequest,
+    current_user: Annotated[CurrentUser, Depends(require_auth)],
+    db: Session = Depends(get_db),
+):
+    u = db.query(User).filter(User.username == current_user.username).first()
+    if not u:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    # 验证旧密码
+    if u.hashed_password != _hash_pw(body.current_password):
+        raise HTTPException(status_code=400, detail="旧密码不正确")
+    u.hashed_password = _hash_pw(body.new_password)
+    db.commit()
 
 
 @router.patch("/{username}", response_model=UserResponse)

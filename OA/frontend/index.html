@@ -27,6 +27,12 @@
   .nav-sub-btn { display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 4px; border: none; background: transparent; color: var(--text2); font-size: 13px; cursor: pointer; margin-bottom: 2px; }
   .nav-sub-btn:hover { background: var(--accent); color: #fff; }
   .header-right { display: flex; align-items: center; gap: 8px; }
+  .header-right .dropdown { position: relative; }
+  .header-right .dropdown-menu { display: none; position: absolute; top: 100%; right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); min-width: 180px; padding: 6px 0; z-index: 200; }
+  .header-right .dropdown-menu.show { display: block; }
+  .header-right .dropdown-menu button { display: block; width: 100%; padding: 8px 14px; font-size: 13px; text-align: left; background: none; border: none; color: var(--text); cursor: pointer; font-family: inherit; }
+  .header-right .dropdown-menu button:hover { background: var(--surface2); }
+  .header-right .dropdown-menu .divider { height: 1px; background: var(--border); margin: 4px 0; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
   .status-dot.offline { background: var(--red); }
   .main { max-width: 1200px; margin: 0 auto; padding: 24px; }
@@ -316,10 +322,25 @@
   <div class="header-right">
     <div id="authArea">
       <button class="notif-btn" id="loginBtn" onclick="showLoginModal()" title="登录" style="display:none">&#128100;</button>
-      <span id="userDisplay" style="display:none;align-items:center;gap:4px">
-        <span id="userName" style="font-size:13px;color:var(--text2)"></span>
-        <button onclick="logout()" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:13px;text-decoration:underline;padding:0" title="退出">退出</button>
-      </span>
+      <div id="userDisplay" style="display:none">
+        <div class="dropdown" id="userDropdown">
+          <button class="notif-btn" onclick="toggleUserMenu()" title="个人主页/设置" style="font-size:14px">
+            <span id="userName" style="font-size:13px;color:var(--text);margin-right:4px"></span>
+            <span style="font-size:10px;color:var(--text3)">&#9662;</span>
+          </button>
+          <div class="dropdown-menu" id="userMenu">
+            <div style="padding:8px 14px;font-size:11px;color:var(--text3)">当前登录</div>
+            <div style="padding:6px 14px;font-size:14px;font-weight:600;color:var(--text)"><span id="userNameFull"></span></div>
+            <div style="padding:4px 14px;font-size:11px;color:var(--text3)"><span id="userRole"></span></div>
+            <div class="divider"></div>
+            <button onclick="navigate('profile')">👤 个人主页</button>
+            <button onclick="navigate('settings')">⚙️ 个人设置</button>
+            <button onclick="navigate('registrations')">🔑 账号管理</button>
+            <div class="divider"></div>
+            <button onclick="logout()" style="color:var(--red)">🚪 退出登录</button>
+          </div>
+        </div>
+      </div>
     </div>
     <button class="notif-btn" id="notifBtn" onclick="toggleNotifPanel()" title="通知">
       &#128276;
@@ -501,6 +522,8 @@ const MODULES = [
   { id: 'performance', name: '绩效考核', emoji: '📊' },
   { id: 'recruitment', name: '招聘管理', emoji: '🎯' },
   { id: 'audit-log', name: '操作日志', emoji: '📋' },
+  { id: 'profile', name: '个人主页', emoji: '👤' },
+  { id: 'settings', name: '个人设置', emoji: '⚙️' },
 ];
 
 // 用户收藏的业务模块（默认：CRM、财务、审批）
@@ -800,6 +823,7 @@ function renderNav() {
     if (m.id === 'dashboard') return true;
     if (m.id === 'hr') return true; // 人力资源始终显示，带下拉
     if (m.id === 'registrations') return isAdmin;
+    if (m.id === 'module-switch') return isAdmin;
     // leaves/attendance/salary 作为 hr 的子菜单，不在顶部显示
     if (['leaves','attendance','salary'].includes(m.id)) return false;
     return FAVORITES.includes(m.id);
@@ -825,7 +849,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, moduleSwitch:renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, moduleSwitch:renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, profile:renderProfile, settings:renderSettings };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -1689,6 +1713,7 @@ async function renderDashboard(el) {
   const businessModules = MODULES.filter(m => {
     if (m.id === 'dashboard') return false;
     if (m.id === 'registrations') return isAdmin;
+    if (m.id === 'module-switch') return isAdmin;
     if (['leaves','attendance','salary'].includes(m.id)) return false;
     if (!bizToggle[m.id]) return false;
     return true;
@@ -3551,7 +3576,75 @@ async function renderAuditLog(main) {
   });
   main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 条</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>时间</th><th>用户</th><th>模块</th><th>操作</th><th>详情</th><th>IP</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
 }
+// ── 个人主页 ────────────────────────────────────────────────────
+async function renderProfile(main) {
+  const user = getCurrentUser();
+  if (!user) {
+    main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div class="empty">请先登录</div></div>';
+    return;
+  }
+  const name = user.displayName || user.username;
+  const role = user.role === 'admin' ? '管理员' : user.role === 'api' ? 'API用户' : '员工';
+  const roleColor = user.role === 'admin' ? 'var(--accent)' : 'var(--text2)';
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div style="display:grid;gap:12px"><div style="display:flex;align-items:center;gap:16px;padding:16px;background:var(--surface2);border-radius:8px"><div style="width:56px;height:56px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;font-weight:600">' + (name[0]||'?') + '</div><div style="flex:1"><div style="font-size:18px;font-weight:600;color:var(--text)">' + name + '</div><div style="font-size:13px;color:var(--text3);margin-top:4px">用户名: ' + user.username + ' &nbsp;·&nbsp; 角色: <span style="color:' + roleColor + ';">' + role + '</span></div></div></div></div></div>';
+}
 
+// ── 个人设置 ────────────────────────────────────────────────────
+async function renderSettings(main) {
+  var user = getCurrentUser();
+  if (!user) {
+    main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">\u2699\ufe0f</span> \u4e2a\u4eba\u8bbe\u7f6e</div><div class="empty">\u8bf7\u5148\u767b\u5f55</div></div>';
+    return;
+  }
+  var name = user.displayName || user.username;
+  var items = [
+    {icon:"\ud83d\udc64", label:"\u7528\u6237\u540d", value:user.username, tag:"\u53ea\u8bfb"},
+    {icon:"\ud83c\udff7\ufe0f", label:"\u663e\u793a\u540d\u79f0", value:name, tag:"\u53ea\u8bfb"},
+    {icon:"\ud83d\udcd0", label:"\u6539\u5bc6\u7801", value:"\u5728\u8d26\u6237\u7ba1\u7406\u4e2d\u64cd\u4f5c", goto:"registrations"},
+    {icon:"\ud83d\udc51", label:"API Key", value:"\u5728\u8d26\u6237\u7ba1\u7406\u4e2d\u67e5\u770b\u548c\u7ba1\u7406", goto:"registrations"},
+  ];
+  var html = '<div class="card"><div class="card-title"><span class="emoji">\u2699\ufe0f</span> \u4e2a\u4eba\u8bbe\u7f6e</div><div style="max-width:500px;display:grid;gap:12px">';
+  items.forEach(function(it) {
+    var actionHtml;
+    if (it.goto) {
+      actionHtml = '<button onclick="navigate(\'registrations\')" style="padding:6px 12px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer">\u53bb\u7ba1\u7406</button>';
+    } else {
+      actionHtml = '<span style="font-size:12px;color:var(--text3);padding:4px 10px;background:var(--surface2);border-radius:4px">' + it.tag + '</span>';
+    }
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface)">' +
+      '<span style="font-size:18px">' + it.icon + '</span>' +
+      '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">' + it.label + '</div><div style="font-size:13px;color:var(--text2);margin-top:2px">' + it.value + '</div></div>' +
+      actionHtml + '</div>';
+  });
+  html += '</div></div>';
+  main.innerHTML = html;
+}
+
+
+async function renderAuditLog(main) {
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志</div><div class="skeleton-block"></div></div>';
+  var data = await api('/api/audit-log');
+  var items = data.items || [];
+  var rows = items.map(function(r) {
+    return '<tr><td>' + r.created_at + '</td><td>' + r.username + '</td><td>' + r.module +
+      '</td><td>' + r.action + '</td><td>' + (r.detail||'') + '</td><td>' + (r.ip||'') + '</td></tr>';
+  });
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 条</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>时间</th><th>用户</th><th>模块</th><th>操作</th><th>详情</th><th>IP</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
+}
+// ── 个人主页 ────────────────────────────────────────────────────
+async function renderProfile(main) {
+  const user = getCurrentUser();
+  if (!user) {
+    main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div class="empty">请先登录</div></div>';
+    return;
+  }
+  const name = user.displayName || user.username;
+  const role = user.role === 'admin' ? '管理员' : user.role === 'api' ? 'API用户' : '员工';
+  const roleColor = user.role === 'admin' ? 'var(--accent)' : 'var(--text2)';
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div style="display:grid;gap:12px"><div style="display:flex;align-items:center;gap:16px;padding:16px;background:var(--surface2);border-radius:8px"><div style="width:56px;height:56px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;font-weight:600">' + (name[0]||'?') + '</div><div style="flex:1"><div style="font-size:18px;font-weight:600;color:var(--text)">' + name + '</div><div style="font-size:13px;color:var(--text3);margin-top:4px">用户名: ' + user.username + ' &nbsp;·&nbsp; 角色: <span style="color:' + roleColor + ';">' + role + '</span></div></div></div></div></div>';
+}
+
+// ── 个人设置 ────────────────────────────────────────────────────
 async function renderNotifications(el) {
   const u = getCurrentUser();
   const username = u.username || u.user || 'admin';
