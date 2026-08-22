@@ -252,6 +252,19 @@
 .nd-actions { display:flex; gap:2px; }
 .nd-share-badge { font-size:10px; padding:1px 4px; background:#e8f5e9; border-radius:8px; color:#2e7d32; margin-left:4px; }
 .nd-dir td { background:var(--surface2); }
+
+.global-search-wrap { display: flex; align-items: center; gap: 6px; position: relative; flex: 1; max-width: 360px; margin-right: 8px; }
+.global-search-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px 5px 28px; font-size: 13px; color: var(--text); outline: none; font-family: inherit; }
+.global-search-input:focus { border-color: var(--accent); }
+.global-search-icon { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text3); font-size: 12px; pointer-events: none; }
+.global-search-panel { display: none; position: absolute; top: 100%; right: 0; width: 380px; max-height: 400px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 300; overflow-y: auto; }
+.global-search-panel.open { display: block; }
+.gs-result { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.gs-result:hover { background: var(--surface2); }
+.gs-result .gs-type { font-size: 10px; color: var(--accent); background: #1a2d4a; padding: 1px 6px; border-radius: 3px; min-width: 40px; text-align: center; }
+.gs-result .gs-name { font-size: 13px; color: var(--text); font-weight: 500; }
+.gs-result .gs-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.gs-empty { padding: 20px; text-align: center; color: var(--text3); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -259,6 +272,12 @@
 <div class="header">
   <div class="header-logo"><span>ZZCC</span> OA</div>
   <div class="header-nav" id="nav"></div>
+<div class="global-search-wrap" id="globalSearchWrap">
+  <span class="global-search-icon">&#128269;</span>
+  <input type="text" class="global-search-input" id="globalSearchInput" placeholder="全局搜索 (员工/部门/项目/合同/采购...)" oninput="onGlobalSearch(this.value)" onfocus="onGlobalSearchFocus()" />
+  <div class="global-search-panel" id="globalSearchPanel"></div>
+</div>
+
   <div class="header-right">
     <div id="authArea">
       <button class="notif-btn" id="loginBtn" onclick="showLoginModal()" title="登录" style="display:none">&#128100;</button>
@@ -3222,6 +3241,62 @@ async function runAIConsult() {
     toast('咨询完成'); render();
   } catch(e) { toast('咨询失败: '+e.message,'error'); }
 }
+
+
+// ── 全局搜索 ─────────────────────────────────────────────
+let gsTimer = null;
+let gsDebounceMs = 300;
+
+function onGlobalSearchFocus() {
+  const input = document.getElementById('globalSearchInput');
+  if (input.value.trim()) {
+    onGlobalSearch(input.value);
+  }
+}
+
+function onGlobalSearch(q) {
+  clearTimeout(gsTimer);
+  gsTimer = setTimeout(() => doGlobalSearch(q), gsDebounceMs);
+}
+
+async function doGlobalSearch(q) {
+  const panel = document.getElementById('globalSearchPanel');
+  const input = document.getElementById('globalSearchInput');
+  if (!q || !q.trim()) { panel.classList.remove('open'); panel.innerHTML = ''; return; }
+  const token = getCurrentUser().token;
+  if (!token) { panel.classList.remove('open'); panel.innerHTML = '<div class="gs-empty">请先登录</div>'; return; }
+  try {
+    const data = (await api('/api/search/global','GET',{q:q.trim()})).data;
+    panel.innerHTML = data.items.length ? data.items.map(item => {
+      const typeLabel = {employee:'员工',department:'部门',project:'项目',contract:'合同',po:'采购',invoice:'凭证',lead:'线索',contact:'联系人'}[item.type] || item.type;
+      return `<div class="gs-result" onclick="navigateGlobalResult('${item.path}',${JSON.stringify(item.name)})">
+        <span class="gs-type">${typeLabel}</span>
+        <div><div class="gs-name">${esc(item.name)}</div><div class="gs-sub">${esc(item.subtitle)}</div></div>
+      </div>`;
+    }).join('') : '<div class="gs-empty">未找到匹配结果</div>';
+    panel.classList.add('open');
+  } catch(e) { panel.classList.remove('open'); }
+}
+
+function navigateGlobalResult(path, name) {
+  document.getElementById('globalSearchPanel').classList.remove('open');
+  document.getElementById('globalSearchInput').blur();
+  navigate(path);
+}
+
+document.addEventListener('click', function(e) {
+  if (!document.getElementById('globalSearchWrap').contains(e.target)) {
+    document.getElementById('globalSearchPanel').classList.remove('open');
+  }
+});
+
+document.addEventListener('keydown', function(e) {
+  // Ctrl+K / Cmd+K 聚焦全局搜索
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    document.getElementById('globalSearchInput').focus();
+  }
+});
 
 // ── Init ─────────────────────────────────────────────────────
 async function init() {

@@ -120,6 +120,7 @@ def _register():
         "routers.export",
         "routers.approval",
         "routers.notifications",
+        "routers.search",
         "routers.notification_settings",
         "routers.analytics",
         "routers.budget",
