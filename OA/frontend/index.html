@@ -221,6 +221,27 @@
 .mtg-decisions, .mtg-actions { font-size:12px; margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
 .mtg-chip { font-size:11px; padding:2px 8px; background:var(--surface2); border-radius:8px; }
 .mtg-todo { color:#e65100; }
+
+.fd-panel { padding:12px; }
+.fd-panel-head { display:flex; align-items:center; gap:10px; padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:12px; }
+.fd-panel-head > span:first-child { font-size:15px; font-weight:600; color:var(--text); flex:1; }
+.fd-field-picker { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:8px; background:var(--surface2); border-radius:6px; margin-bottom:12px; }
+.fd-field { border:1px solid var(--border); border-radius:6px; padding:8px; margin-bottom:8px; background:var(--surface); }
+.fd-field-row { display:flex; align-items:center; gap:6px; margin-bottom:4px; flex-wrap:wrap; }
+.fd-field-row label { font-size:12px; color:var(--text2); white-space:nowrap; }
+.fd-input { width:120px; padding:3px 6px; font-size:12px; }
+.fd-form { display:grid; gap:12px; }
+.fd-form-field { display:flex; flex-direction:column; gap:4px; }
+.fd-form-field label { font-size:13px; font-weight:500; color:var(--text); }
+.fd-results table { width:100%; border-collapse:collapse; }
+.fd-results th, .fd-results td { border:1px solid var(--border); padding:6px 8px; text-align:left; font-size:12px; }
+.fd-results th { background:var(--surface2); font-weight:600; }
+.fd-item { padding:12px; border:1px solid var(--border); border-radius:6px; margin-bottom:8px; background:var(--surface); }
+.fd-item-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.fd-item-title { font-size:14px; font-weight:600; color:var(--text); }
+.fd-item-meta { font-size:11px; color:var(--text3); }
+.fd-item-actions { display:flex; gap:4px; }
+.fd-list { max-height:400px; overflow-y:auto; }
 </style>
 </head>
 <body>
@@ -314,6 +335,7 @@ const MODULES = [
   { id: 'directory',   name: '通讯录',    emoji: '📇' },
   { id: 'reports',     name: '日报周报',   emoji: '📝' },
   { id: 'meetings',    name: '会议纪要',   emoji: '📋' },
+  { id: 'forms',       name: '表单设计',   emoji: '📐' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -661,7 +683,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1915,6 +1937,190 @@ function showMtgForm() {
   api('/api/meetings/create','POST',{title,meeting_type:mtgType,meeting_date:date,duration_minutes:parseInt(duration)||60,location,attendees,minutes})
     .then(() => { toast('会议记录创建成功','success'); _loadMtg(); })
     .catch(e => toast('失败: '+e.message,'error'));
+}
+
+
+// ── 表单设计器 ─────────────────────────────────────────────
+let _fdMode = "list"; // list | design | preview | results
+let _fdTemplate = null;
+let _fdFields = [];
+
+async function renderFormDesigner(el) {
+  _fdMode = "list";
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">📐</span> 表单设计器 <button class="btn btn-primary" style="margin-left:auto" onclick="fdCreate()">＋ 新建表单</button></div>
+      <div id="fdContent"></div>
+    </div>`;
+  await _fdLoadTemplates();
+}
+
+async function _fdLoadTemplates() {
+  const c = document.getElementById('fdContent');
+  let data = {items:[]};
+  try { data = (await api('/api/form-designer/templates','GET')).data; }
+  catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const items = data.items || [];
+  if (!items.length) { c.innerHTML = '<div class="empty">暂无表单模板，点击 + 新建</div>'; return; }
+  c.innerHTML = `
+    <div class="fd-list">
+      ${items.map(t => `
+        <div class="fd-item">
+          <div class="fd-item-head">
+            <span class="fd-item-title">${esc(t.name)}</span>
+            <span class="fd-item-meta">${t.schema.length} 字段 · ${t.created_by}</span>
+          </div>
+          <div class="fd-item-actions">
+            <button class="btn btn-default" onclick="fdEdit(${t.id})">✏️ 编辑</button>
+            <button class="btn btn-default" onclick="fdPreview(${t.id})">👁 预览</button>
+            <button class="btn btn-default" onclick="fdResults(${t.id})">📊 查看填写</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+async function fdCreate() {
+  const name = prompt('表单名称：');
+  if (!name) return;
+  let data = {name};
+  try { data = (await api('/api/form-designer/templates','POST',{name,description:'',schema:[],status:'active'})).data; }
+  catch(e){ toast('创建失败: '+e.message,'error'); return; }
+  _fdTemplate = data;
+  _fdFields = [];
+  _fdDesigner();
+}
+
+async function fdEdit(tid) {
+  let data = {items:[]};
+  try { data = (await api('/api/form-designer/templates','GET')).data; }
+  catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const t = data.items.find(x => x.id === tid);
+  if (!t) { toast('未找到模板','error'); return; }
+  _fdTemplate = t;
+  _fdFields = t.schema.map(f => ({id:f.id,label:f.label,field_type:f.field_type,required:f.required,options:f.options||[],placeholder:f.placeholder}));
+  _fdDesigner();
+}
+
+function _fdDesigner() {
+  const c = document.getElementById('fdContent');
+  c.innerHTML = `
+    <div class="fd-panel">
+      <div class="fd-panel-head">
+        <span>📝 ${esc(_fdTemplate.name || '新建表单')}</span>
+        <button class="btn btn-primary" onclick="fdSave()">💾 保存</button>
+        <button class="btn btn-default" onclick="renderFormDesigner(document.getElementById('main'))">← 返回</button>
+      </div>
+      <div class="fd-field-picker">
+        <span>添加字段：</span>
+        <button class="btn btn-sm" onclick="fdAddField('text')">📄 文本</button>
+        <button class="btn btn-sm" onclick="fdAddField('textarea')">📄 长文本</button>
+        <button class="btn btn-sm" onclick="fdAddField('select')">📋 下拉</button>
+        <button class="btn btn-sm" onclick="fdAddField('number')">🔢 数字</button>
+        <button class="btn btn-sm" onclick="fdAddField('date')">📅 日期</button>
+        <button class="btn btn-sm" onclick="fdAddField('checkbox')">☑️ 复选</button>
+      </div>
+      <div class="fd-fields-list">
+        ${_fdFields.map((f,i) => `_fdRenderField(${i})`).join('')}
+      </div>
+    </div>`;
+}
+
+function _fdRenderField(i) {
+  const f = _fdFields[i];
+  return `<div class="fd-field">
+    <div class="fd-field-row">
+      <label>字段ID:</label><input class="input fd-input" value="${esc(f.id||'')}" onchange="_fdFields[${i}].id=this.value" style="width:80px">
+      <label>标签:</label><input class="input fd-input" value="${esc(f.label||'')}" onchange="_fdFields[${i}].label=this.value" style="width:140px">
+      <label>类型:</label>
+      <select class="input fd-input" onchange="_fdFields[${i}].field_type=this.value">${['text','textarea','select','number','date','checkbox'].map(t=>`<option value="${t}" ${f.field_type===t?'selected':''}>${t}</option>`).join('')}</select>
+      <label><input type="checkbox" ${f.required?'checked':''} onchange="_fdFields[${i}].required=this.checked"> 必填</label>
+      <button class="btn btn-sm" onclick="_fdFields.splice(${i},1);_fdDesigner()">✕</button>
+    </div>
+    ${f.field_type==='select' ? `<div class="fd-field-row"><label>选项(逗号分隔):</label><input class="input fd-input" value="${esc((f.options||[]).join(','))}" onchange="_fdFields[${i}].options=this.value.split(',').map(s=>s.trim()).filter(Boolean)"></div>` : ''}
+    ${f.field_type==='text' ? `<div class="fd-field-row"><label>占位:</label><input class="input fd-input" value="${esc(f.placeholder||'')}" onchange="_fdFields[${i}].placeholder=this.value" style="width:180px"></div>` : ''}
+  </div>`;
+}
+
+function fdAddField(type) {
+  _fdFields.push({id:'field_'+Date.now(),label:type+'字段',field_type:type,required:false,options:[],placeholder:''});
+  _fdDesigner();
+}
+
+async function fdSave() {
+  if (!_fdFields.length) { toast('请添加至少一个字段','error'); return; }
+  const body = {name:_fdTemplate.name,description:'',schema:_fdFields,status:'active'};
+  try {
+    await api('/api/form-designer/templates/'+_fdTemplate.id,'PUT',body);
+    toast('保存成功','success');
+    renderFormDesigner(document.getElementById('main'));
+  } catch(e){ toast('保存失败: '+e.message,'error'); }
+}
+
+async function fdPreview(tid) {
+  let data = {items:[]};
+  try { data = (await api('/api/form-designer/templates','GET')).data; }
+  catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const t = data.items.find(x => x.id === tid);
+  if (!t) { toast('未找到模板','error'); return; }
+  const c = document.getElementById('fdContent');
+  c.innerHTML = `
+    <div class="fd-panel">
+      <div class="fd-panel-head">
+        <span>👁 ${esc(t.name)}</span>
+        <button class="btn btn-primary" onclick="fdSubmitForm(${t.id})">✅ 提交</button>
+        <button class="btn btn-default" onclick="renderFormDesigner(document.getElementById('main'))">← 返回</button>
+      </div>
+      <div class="fd-form">
+        ${t.schema.map(f => `
+          <div class="fd-form-field">
+            <label>${esc(f.label)}${f.required?' *':''}</label>
+            ${f.field_type==='textarea' ? `<textarea class="input" id="fdval_${f.id}"></textarea>` : ''}
+            ${f.field_type==='select' ? `<select class="input" id="fdval_${f.id}"><option value="">请选择</option>${(f.options||[]).map(o=>'<option value="'+esc(o)+'">'+esc(o)+'</option>').join('')}</select>` : ''}
+            ${f.field_type==='checkbox' ? `<label><input type="checkbox" id="fdval_${f.id}"> 同意</label>` : ''}
+            ${f.field_type==='date' ? `<input class="input" type="date" id="fdval_${f.id}">` : ''}
+            ${f.field_type==='number' ? `<input class="input" type="number" id="fdval_${f.id}">` : ''}
+            ${f.field_type==='text' ? `<input class="input" id="fdval_${f.id}" placeholder="${esc(f.placeholder||'')}">` : ''}
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+}
+
+async function fdSubmitForm(tid) {
+  const data = {};
+  _fdTemplate = (await api('/api/form-designer/templates','GET')).data.items.find(x=>x.id===tid);
+  _fdTemplate.schema.forEach(f => {
+    const el = document.getElementById('fdval_'+f.id);
+    if (!el) return;
+    if (f.field_type==='checkbox') data[f.id] = el.checked;
+    else data[f.id] = el.value;
+  });
+  try {
+    await api('/api/form-designer/submissions','POST',{template_id:tid,data});
+    toast('提交成功','success');
+    fdResults(tid);
+  } catch(e){ toast('提交失败: '+e.message,'error'); }
+}
+
+async function fdResults(tid) {
+  let sub = {items:[]};
+  try { sub = (await api('/api/form-designer/submissions','GET',{template_id:tid})).data; }
+  catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  let tpl = null;
+  try { tpl = (await api('/api/form-designer/templates','GET')).data.items.find(x=>x.id===tid); }
+  catch(e){ tpl = null; }
+  const c = document.getElementById('fdContent');
+  c.innerHTML = `
+    <div class="fd-panel">
+      <div class="fd-panel-head">
+        <span>📊 ${tpl?esc(tpl.name):''} 填写记录 (${sub.items.length})</span>
+        <button class="btn btn-default" onclick="renderFormDesigner(document.getElementById('main'))">← 返回</button>
+      </div>
+      <div class="fd-results">
+        ${sub.items.length ? `<table><thead><tr><th>#</th>${tpl?tpl.schema.map(f=>'<th>'+esc(f.label)+'</th>').join(''):''}<th>提交人</th><th>时间</th></tr></thead><tbody>${sub.items.map(r=>`<tr><td>${r.id}</td>${tpl?tpl.schema.map(f=>'<td>'+(r.data[f.id]!=null?esc(r.data[f.id]):'-')+'</td>').join(''):''}<td>${esc(r.submitted_by)}</td><td>${r.created}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">暂无填写记录</div>'}
+      </div>
+    </div>`;
 }
 
 async function renderSimple(el) {

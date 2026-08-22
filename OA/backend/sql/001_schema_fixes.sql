@@ -82,3 +82,28 @@ CREATE TABLE IF NOT EXISTS meetings (
     modified TEXT,
     modified_by TEXT DEFAULT 'Administrator'
 );
+
+-- 表单模板（P4.25）
+CREATE TABLE IF NOT EXISTS form_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    schema TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    creation TEXT,
+    modified TEXT,
+    modified_by TEXT DEFAULT 'Administrator'
+);
+
+-- 表单提交数据（P4.25）
+CREATE TABLE IF NOT EXISTS form_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    submitted_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'submitted',
+    creation TEXT,
+    modified TEXT,
+    modified_by TEXT DEFAULT 'Administrator'
+);

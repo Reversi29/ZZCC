@@ -128,6 +128,7 @@ def _register():
         "routers.directory",
         "routers.daily_reports",
         "routers.meetings",
+        "routers.form_designer",
     ]
     for f in router_files:
         mod = __import__(f, fromlist=["router"])

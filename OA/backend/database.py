@@ -561,3 +561,25 @@ class Meeting(Base, Timestamped):
     decisions = Column(Text, nullable=True)  # 决策项 JSON
     action_items = Column(Text, nullable=True)  # 待办项 JSON
     status = Column(String(20), nullable=False, default="scheduled")  # scheduled / completed / archived
+
+
+
+class FormTemplate(Base, Timestamped):
+    """表单模板（自定义表单设计器）"""
+    __tablename__ = "form_templates"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)  # 模板名称
+    description = Column(Text, nullable=True)
+    schema = Column(Text, nullable=False)  # JSON: [{id,label,type,required,options}]
+    created_by = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="active")  # active / archived
+
+
+class FormSubmission(Base, Timestamped):
+    """表单提交数据"""
+    __tablename__ = "form_submissions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_id = Column(Integer, nullable=False)
+    data = Column(Text, nullable=False)  # JSON: {field_id: value}
+    submitted_by = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="submitted")
