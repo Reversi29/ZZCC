@@ -447,9 +447,14 @@ async function renderModuleSwitch(main) {
   main.innerHTML = html;
 }
 
+function updateNav() {
+  window.moduleToggleStatus = window.moduleToggleStatus || {};
+  renderNav();
+}
 async function toggleModule(mid, enabled) {
   try {
     await api('/api/module-toggle/toggle', {method:'PATCH', body: JSON.stringify({module_id:mid, enabled:enabled})});
+    window.moduleToggleStatus[mid] = enabled;
     toast((enabled?'启用':'禁用')+'成功','ok');
     renderModuleSwitch(document.getElementById('main'));
     updateNav();
@@ -813,7 +818,7 @@ function renderNav() {
     return `<button class="nav-btn${m.id===currentModule?' active':''}" onclick="navigate('${m.id}')">${m.emoji} ${m.name}</button>`;
   }).join('');
 }
-function navigate(id) { currentModule = id; renderNav(); render(); }
+function navigate(id) { var s = window.moduleToggleStatus || {}; if (s[id] === false && id !== 'dashboard' && id !== 'hr') { toast('该模块已被管理员禁用','error'); return; } currentModule = id; renderNav(); render(); }
 
 // ── Render ───────────────────────────────────────────────────
 function render() {
@@ -1680,10 +1685,12 @@ async function renderDashboard(el) {
   const counts = {};
   await Promise.all(doctypes.map(async d => { try { counts[d] = (await apiGet(d)).length; } catch { counts[d] = 0; } }));
 
+  const bizToggle = window.moduleToggleStatus || {};
   const businessModules = MODULES.filter(m => {
     if (m.id === 'dashboard') return false;
     if (m.id === 'registrations') return isAdmin;
     if (['leaves','attendance','salary'].includes(m.id)) return false;
+    if (!bizToggle[m.id]) return false;
     return true;
   });
 

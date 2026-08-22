@@ -76,6 +76,56 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── 审计日志中间件：自动记录写操作 ──
+AUDIT_EXCLUDE = {"/api/auth/login", "/api/auth/oidc/login", "/api/auth/oidc/callback", "/api/status", "/docs", "/openapi.json", "/redoc"}
+@app.middleware("http")
+async def _audit_middleware(request, call_next):
+    if request.method == "OPTIONS" or request.url.path in AUDIT_EXCLUDE or request.url.path.startswith("/assets"):
+        return await call_next(request)
+    # 只记录写操作
+    is_write = request.method in ("POST","PUT","PATCH","DELETE")
+    body_str = ""
+    if is_write and request.method in ("POST","PUT","PATCH"):
+        try:
+            raw = await request.body()
+            body_str = raw.decode("utf-8")[:200]
+        except:
+            pass
+    resp = await call_next(request)
+    if is_write:
+        try:
+            import jwt
+            from config import get_settings
+            from database import SessionLocal
+            from routers.audit_log import AuditEntry
+            auth = request.headers.get("Authorization","")
+            token = auth.replace("Bearer ","") if auth else ""
+            username = "anonymous"
+            if token:
+                try:
+                    payload = jwt.decode(token, get_settings().JWT_SECRET_KEY, algorithms=["HS256"])
+                    username = str(payload.get("sub", "anonymous"))[:80]
+                except Exception:
+                    pass
+            module = request.url.path.replace("/api/","").split("/")[0]
+            detail = (request.url.path + (" " + body_str[:200] if body_str else ""))[:500]
+            db = SessionLocal()
+            try:
+                db.add(AuditEntry(
+                    username=username,
+                    action=request.method,
+                    module=module,
+                    detail=detail,
+                    ip=request.client.host if request.client else "",
+                ))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"audit middleware error: {e}")
+    return resp
+
+
 
 # ── API 限流（P3.16）──────────────────────────────────────────
 from middleware.ratelimit import RateLimitMiddleware
