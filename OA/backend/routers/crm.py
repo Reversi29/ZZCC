@@ -24,6 +24,16 @@ class R(BaseModel):
     data: Optional[dict | list] = None
     message: Optional[str] = None
 
+def _parse_val(k, v):
+    """Parse date/JSON values for SQLite compatibility"""
+    from datetime import date as _date
+    import json as _json
+    if isinstance(v, str) and k.endswith('_date') and v:
+        try: return _date.fromisoformat(v)
+        except: pass
+    elif isinstance(v, (dict, list)):
+        return _json.dumps(v, ensure_ascii=False)
+    return v
 
 # ── Lead ──────────────────────────────────────────────────────
 
@@ -48,7 +58,7 @@ def create_lead(lead: dict, db: Session = Depends(get_db), current_user: Current
     m = Lead(name=name, owner=current_user.username)
     for k, v in lead.items():
         if k != "name" and hasattr(m, k):
-            setattr(m, k, v)
+            setattr(m, k, _parse_val(k, v))
     db.add(m); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Lead created")
 
@@ -68,7 +78,7 @@ def update_lead(name: str, data: dict, db: Session = Depends(get_db), current_us
         raise HTTPException(404, "Lead not found")
     for k, v in data.items():
         if k not in ("name",) and hasattr(m, k):
-            setattr(m, k, v)
+            setattr(m, k, _parse_val(k, v))
     db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Lead updated")
 
@@ -136,7 +146,7 @@ def create_opportunity(data: dict, db: Session = Depends(get_db), current_user: 
     m = Opportunity(name=name, owner=current_user.username)
     for k, v in data.items():
         if k != "name" and hasattr(m, k):
-            setattr(m, k, v)
+            setattr(m, k, _parse_val(k, v))
     db.add(m); db.commit(); db.refresh(m)
     return R(data={"name": m.name}, message="Opportunity created")
 

@@ -247,9 +247,9 @@ const enc = (s) => encodeURIComponent(s);
 const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
-  { id: 'crm',         name: 'CRM',      emoji: '👥', doctype: 'Lead' },
+  { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
-  { id: 'opportunities',name: '商机',     emoji: '💼', doctype: 'Opportunity' },
+  { id: 'opportunities',name: 'CRM商机',   emoji: '📈', doctype: 'Opportunity' },
       { id: 'project',     name: '项目管理',  emoji: '📁', doctype: 'Project' },
   { id: 'tasks',       name: '任务管理',  emoji: '✅', doctype: 'Task' },
   { id: 'procurement', name: '采购',     emoji: '🛒', doctype: 'Purchase Order' },
@@ -593,7 +593,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, compliance:renderContract, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1299,6 +1299,116 @@ async function _saveCt(name) {
     if (name) { await api('/api/resource/Contract/'+encodeURIComponent(name), {method:'PUT',body:JSON.stringify(r)}); }
     else { await api('/api/resource/Contract', {method:'POST',body:JSON.stringify(r)}); }
     toast('保存成功','ok'); switchCtTab('active');
+  } catch(e) { toast('保存失败: '+e.message,'error'); }
+}
+
+
+// ── CRM 线索/商机管理（漏斗） ──────────────────────────────────
+const _CRM_STAGES = ['New','Contacted','Qualified','Converted','Lost'];
+const _CRM_STAGE_LABEL = {New:'新线索',Contacted:'已联系',Qualified:'已确认',Converted:'已转化',Lost:'流失'};
+const _CRM_STAGE_COLOR = {New:'#1976d2',Contacted:'#f9a825',Qualified:'#9c27b0',Converted:'#388e3c',Lost:'#888'};
+
+async function renderCRM(el) {
+  const id = el.getAttribute('data-crm-type') || '';
+  const isLead = el.id === 'main' ? _detectCRMType(el) : (id === 'crm');
+  const title = isLead ? 'CRM线索' : 'CRM商机';
+  const emoji = isLead ? '💼' : '📈';
+  const doctype = isLead ? 'Lead' : 'Opportunity';
+  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">'+emoji+'</span> '+title+' <span style="float:right">' + renderExportBtn(doctype) + '</span></div>'
+    + '<div id="crm-funnel"></div><div id="crm-table"></div></div>';
+  await loadCRMList(el, isLead);
+}
+
+function _detectCRMType(el) {
+  // 按当前导航的 module 判断
+  var m = localStorage.getItem('oa_current_module');
+  return m === 'contacts' || m === 'crm';
+}
+
+async function loadCRMList(el, isLead) {
+  const doctype = isLead ? 'Lead' : 'Opportunity';
+  const res = await apiGet(doctype);
+  const rows = res.data || [];
+  const c = document.getElementById('crm-table');
+  const funnel = document.getElementById('crm-funnel');
+
+  const counts = {};
+  _CRM_STAGES.forEach(function(s){counts[s]=0;});
+  rows.forEach(function(r) {
+    const st = isLead ? r.lead_status : r.sales_stage;
+    if (counts[st]!==undefined) counts[st]++;
+  });
+  funnel.innerHTML = '<div style="display:flex;gap:6px;padding:6px 0">'
+    + _CRM_STAGES.map(function(s) {
+      return '<span class="badge" style="background:'+_CRM_STAGE_COLOR[s]+'" title="'+_CRM_STAGE_LABEL[s]+': '+counts[s]+'">'+_CRM_STAGE_LABEL[s]+'('+counts[s]+')</span>';
+    }).join('') + '</div>';
+
+  if (!rows.length) { c.innerHTML='<div class="empty">暂无'+(isLead?'线索':'商机')+'</div>'; return; }
+
+  c.innerHTML = rows.map(function(r) {
+    var st = isLead ? r.lead_status : r.sales_stage;
+    var sColor = _CRM_STAGE_COLOR[st] || '#888';
+    var name = isLead ? (r.lead_name||r.name) : (r.opportunity_name||r.name);
+    var party = isLead ? (r.company_name||'-') : (r.party_name||'-');
+    var amount = isLead ? 0 : (r.amount||0);
+    var prob = isLead ? 0 : (r.probability||0);
+    var src = isLead ? (r.source||'-') : (r.sales_stage||'-');
+    var email = isLead ? (r.email_id||'-') : '';
+    var phone = isLead ? (r.phone||'-') : '';
+    var closing = isLead ? '' : ((r.expected_closing_date||'').slice(0,10));
+
+    var html = '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:#fff;border-radius:4px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-crm-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:13px">'+esc(name)+'</a>'
+      + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+_CRM_STAGE_LABEL[st]||st+'</span></div>'
+      + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap"><span>客户: '+esc(party)+'</span>';
+    if (isLead) html += '<span>来源: '+esc(src)+'</span>';
+    if (email) html += '<span>'+esc(email)+'</span>';
+    if (phone) html += '<span>'+esc(phone)+'</span>';
+    if (amount) html += '<span style="font-weight:600;color:#d33">¥'+fmtMoney(amount)+'</span>';
+    if (prob) html += '<span>概率: '+prob+'%</span>';
+    if (closing) html += '<span>预计成交: '+closing+'</span>';
+    html += '</div></div>';
+    return html;
+  }).join('');
+
+  c.querySelectorAll('a[data-crm-id]').forEach(function(a) {
+    a.addEventListener('click', function(e) { e.preventDefault(); showCRMForm(this.getAttribute('data-crm-id'), isLead); });
+  });
+}
+
+async function showCRMForm(name, isLead) {
+  const c = document.getElementById('crm-table');
+  let r = {};
+  if (name) { try { const res = await api('/api/resource/'+(isLead?'Lead':'Opportunity')+'/'+encodeURIComponent(name)); r = res.data||{}; } catch(e) {} }
+  var statusOpts = _CRM_STAGES.map(function(s){
+    var cur = isLead ? r.lead_status : r.sales_stage;
+    return '<option value="'+s+'"'+(cur===s?' selected':'')+'>'+_CRM_STAGE_LABEL[s]+' ('+s+')</option>';
+  }).join('');
+  c.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">'+(isLead?'💼':'📈')+'</span> '+(name?'编辑':'新建')+(isLead?'线索':'商机')+' <span style="font-size:12px;color:var(--text2);font-weight:normal">'+esc(r.name||'')+'</span></div>'
+    + '<div class="form-grid">'
+    + '<input data-crm-k="'+(isLead?'lead_name':'opportunity_name')+'" placeholder="'+(isLead?'客户名称':'商机名称')+'" value="'+esc(r.lead_name||r.opportunity_name||'')+'">'
+    + '<input data-crm-k="'+(isLead?'company_name':'party_name')+'" placeholder="'+(isLead?'公司':'客户')+'" value="'+esc(r.company_name||r.party_name||'')+'">'
+    + '<select data-crm-k="'+(isLead?'lead_status':'sales_stage')+'">'+statusOpts+'</select>'
+    + '<input data-crm-k="'+(isLead?'source':'amount')+'" placeholder="'+(isLead?'来源':'金额')+'" value="'+esc(r.source||'')+'">'
+    + '<input data-crm-k="email_id" placeholder="邮箱" value="'+esc(r.email_id||'')+'">'
+    + '<input data-crm-k="phone" placeholder="电话" value="'+esc(r.phone||'')+'">'
+    + (isLead?'':'<input type="number" data-crm-k="probability" placeholder="概率%" value="'+(r.probability||'0')+'"><input type="date" data-crm-k="expected_closing_date" value="'+esc((r.expected_closing_date||'').slice(0,10))+'">')
+    + '</div>'
+    + '<div style="margin-top:8px;display:flex;gap:8px"><button class="btn btn-primary" data-crm-save="'+(name?'':'1')+'">保存</button><button class="btn" onclick="loadCRMList(document.getElementById(\'main\'),'+isLead+')">取消</button></div></div>';
+  c.querySelector('[data-crm-save]').addEventListener('click', function() { _saveCRM(name||null, isLead); });
+}
+
+async function _saveCRM(name, isLead) {
+  var r = {};
+  document.querySelectorAll('[data-crm-k]').forEach(function(inp){
+    var val = inp.tagName==='SELECT' ? inp.value : inp.value;
+    if (inp.type==='number') val = parseFloat(val)||0;
+    r[inp.dataset.crmK] = val;
+  });
+  try {
+    if (name) { await api('/api/resource/'+(isLead?'Lead':'Opportunity')+'/'+encodeURIComponent(name), {method:'PUT',body:JSON.stringify(r)}); }
+    else { await api('/api/resource/'+(isLead?'Lead':'Opportunity'), {method:'POST',body:JSON.stringify(r)}); }
+    toast('保存成功','ok'); loadCRMList(document.getElementById('main'), isLead);
   } catch(e) { toast('保存失败: '+e.message,'error'); }
 }
 
