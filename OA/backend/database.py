@@ -519,3 +519,16 @@ class Delegation(Base, Timestamped):
     department_id = Column(String(80), nullable=True)  # 限定部门，None=全部部门
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
+
+
+class Announcement(Base, Timestamped):
+    """企业公告"""
+    __tablename__ = "announcements"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=False)
+    published_by = Column(String(255), nullable=False)  # 发布人 username
+    status = Column(String(20), nullable=False, default="draft")  # draft / published
+    is_pinned = Column(Boolean, default=False, nullable=False)
+    expires_at = Column(DateTime, nullable=True)         # 自动过期时间
+    view_count = Column(Integer, default=0, nullable=False)

@@ -158,6 +158,14 @@
   .notif-header { display:flex; align-items:center; justify-content:space-between; padding:4px 4px 8px; border-bottom:1px solid var(--border); margin-bottom:6px; font-size:13px; font-weight:600; color:var(--text); }
   .notif-mark-read { font-size:11px; color:var(--accent); cursor:pointer; }
   .notif-mark-read:hover { text-decoration:underline; }
+
+.ann-item { padding:12px; border:1px solid var(--border); border-radius:6px; margin-bottom:8px; }
+.ann-item.pinned { background:#fff8e1; border-color:#ffc107; }
+.ann-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:14px; }
+.ann-title { font-weight:600; color:var(--text); }
+.ann-meta { font-size:11px; color:var(--text3); }
+.ann-body { font-size:13px; color:var(--text2); line-height:1.5; }
+.ann-foot { font-size:11px; color:var(--text3); margin-top:6px; display:flex; gap:12px; }
 </style>
 </head>
 <body>
@@ -246,6 +254,7 @@ const enc = (s) => encodeURIComponent(s);
 
 const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
+  { id: 'announcements', name: '公告',     emoji: '📢' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -593,7 +602,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1476,6 +1485,64 @@ async function renderDashboard(el) {
 }
 
 // ── 通用简单模块（CRM/项目/合规/质量/客服/HR）─────────────────
+
+// ── 公告栏 ──────────────────────────────────────────────────
+async function renderAnnouncements(el) {
+  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📢</span> 企业公告</div><div id="annContent"><div class="empty">加载中...</div></div></div>';
+  await _loadAnnouncements();
+}
+
+async function _loadAnnouncements() {
+  const c = document.getElementById('annContent');
+  let data = { items: [], length: 0 };
+  try { data = (await api('/api/resource/Announcement')).data; } catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const isAdmin = ['admin','api'].indexOf(getCurrentUser().role||'')>=0;
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      ${isAdmin?'<button class="btn btn-primary" onclick="showAnnForm()">＋ 发布公告</button>':''}
+    </div>
+    <div id="annList">${_renderAnnList(data.items)}</div>
+  `;
+}
+
+function _renderAnnList(items) {
+  if (!items || !items.length) return '<div class="empty">暂无公告</div>';
+  return items.map(a => `
+    <div class="ann-item${a.is_pinned?' pinned':''}">
+      <div class="ann-head">
+        ${a.is_pinned?'<span class="badge" style="background:var(--yellow);color:#000">置顶</span>':''}
+        <span class="ann-title">${esc(a.title)}</span>
+        <span class="ann-meta">· ${esc(a.published_by)} · ${(a.expires_at||'').substring(0,10)}</span>
+      </div>
+      <div class="ann-body">${(a.body||'').replace(/\n/g,'<br>')}</div>
+      <div class="ann-foot">
+        <span>👁 ${a.view_count||0} 浏览</span>
+        <span>${a.created?(a.created.substring(0,10)):'-'}</span>
+        ${isAdmin?`<span style="cursor:pointer;color:var(--red)" onclick="deleteAnn(${a.id})">删除</span>`:''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function showAnnForm() {
+  const title = prompt('标题：');
+  if (!title) return;
+  const body = prompt('内容：');
+  if (!body) return;
+  const pinned = confirm('是否置顶？');
+  const status = confirm('立即发布？') ? 'published' : 'draft';
+  api('/api/resource/Announcement','POST',{title,body,status,is_pinned:pinned})
+    .then(r => { toast('发布公告成功','success'); _loadAnnouncements(); })
+    .catch(e => toast('失败: '+e.message,'error'));
+}
+
+function deleteAnn(id) {
+  if (!confirm('确认删除？')) return;
+  api('/api/resource/Announcement/'+id,'DELETE')
+    .then(() => { toast('已删除','success'); _loadAnnouncements(); })
+    .catch(e => toast('失败: '+e.message,'error'));
+}
+
 async function renderSimple(el) {
   const m = MODULES.find(x => x.id === currentModule);
   const doctype = m.doctype;

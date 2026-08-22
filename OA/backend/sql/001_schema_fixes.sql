@@ -22,3 +22,30 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS leave_sick_used FLOAT NULL DEFAUL
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id INTEGER NULL;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_account VARCHAR(100) NULL;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS tax_id VARCHAR(100) NULL;
+
+-- 库存扩展字段
+ALTER TABLE items ADD COLUMN IF NOT EXISTS reorder_level REAL NULL;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS warehouse VARCHAR(255) NULL;
+
+-- 入库/出库单据扩展字段
+ALTER TABLE stock_entries ADD COLUMN IF NOT EXISTS submitted_at TEXT NULL;
+ALTER TABLE stock_entries ADD COLUMN IF NOT EXISTS department_id TEXT NULL;
+ALTER TABLE stock_entries ADD COLUMN IF NOT EXISTS submitted_by TEXT NULL;
+
+-- 审批历史扩展字段
+ALTER TABLE workflow_history ADD COLUMN IF NOT EXISTS field_changes TEXT NULL;
+
+-- 企业公告表（P4.20）
+CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title VARCHAR(255) NOT NULL,
+    body TEXT NOT NULL,
+    published_by VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+    is_pinned INTEGER DEFAULT 0,
+    expires_at TEXT NULL,
+    view_count INTEGER DEFAULT 0,
+    creation TEXT NULL,
+    modified TEXT NULL,
+    modified_by VARCHAR(255) DEFAULT 'Administrator'
+);
