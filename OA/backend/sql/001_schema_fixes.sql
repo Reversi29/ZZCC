@@ -49,3 +49,17 @@ CREATE TABLE IF NOT EXISTS announcements (
     modified TEXT NULL,
     modified_by VARCHAR(255) DEFAULT 'Administrator'
 );
+
+-- 日报/周报表（P4.23）
+CREATE TABLE IF NOT EXISTS daily_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    report_type TEXT NOT NULL DEFAULT 'daily',
+    report_date TEXT NOT NULL,
+    content TEXT NOT NULL,
+    author TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    creation TEXT NULL,
+    modified TEXT NULL,
+    modified_by TEXT DEFAULT 'Administrator'
+);

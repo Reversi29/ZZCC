@@ -200,6 +200,14 @@
 .dir-info { flex:1; }
 .dir-info .dir-name { font-size:13px; font-weight:600; }
 .dir-info .dir-meta { font-size:11px; color:var(--text3); }
+
+.rep-item { padding:10px 12px; border:1px solid var(--border); border-radius:6px; margin-bottom:8px; background:var(--surface); }
+.rep-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.rep-title { font-size:14px; font-weight:600; color:var(--text); }
+.rep-meta { font-size:11px; color:var(--text3); }
+.rep-status-draft { background:#f0f0f0; color:#666; }
+.rep-status-submitted { background:#e8f5e9; color:#2e7d32; }
+.rep-body { font-size:13px; color:var(--text2); line-height:1.5; white-space:pre-wrap; }
 </style>
 </head>
 <body>
@@ -291,6 +299,7 @@ const MODULES = [
   { id: 'announcements', name: '公告',     emoji: '📢' },
   { id: 'calendar',    name: '日程',     emoji: '📅' },
   { id: 'directory',   name: '通讯录',    emoji: '📇' },
+  { id: 'reports',     name: '日报周报',   emoji: '📝' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -638,7 +647,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1780,6 +1789,56 @@ async function searchDir(q) {
       ${!items.length ? '<div class="empty">未找到匹配结果</div>' : ''}
     </div>
   `;
+}
+
+
+// ── 日报/周报 ─────────────────────────────────────────────
+let _repType = "daily";
+
+async function renderReports(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">📝</span> 日报/周报</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn btn-${_repType==='daily'?'primary':'default'}" onclick="_setRepType('daily')">日报</button>
+        <button class="btn btn-${_repType==='weekly'?'primary':'default'}" onclick="_setRepType('weekly')">周报</button>
+        <button class="btn btn-primary" style="margin-left:auto" onclick="showReportForm()">＋ 新建</button>
+      </div>
+      <div id="repList"></div>
+    </div>`;
+  await _loadReports();
+}
+
+function _setRepType(t) { _repType = t; render(); }
+
+async function _loadReports() {
+  const c = document.getElementById('repList');
+  c.innerHTML = '<div class="empty">加载中...</div>';
+  let data = { items: [], length: 0 };
+  try { data = (await api('/api/reports/list','GET',{report_type:_repType})).data; } catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const items = data.items || [];
+  if (!items.length) { c.innerHTML = '<div class="empty">暂无' + (_repType==='daily'?'日报':'周报') + '</div>'; return; }
+  c.innerHTML = items.map(r => `
+    <div class="rep-item">
+      <div class="rep-head">
+        <span class="rep-title">${esc(r.title)}</span>
+        <span class="rep-meta">${r.report_date} · ${esc(r.author)}</span>
+        <span class="badge rep-status-${r.status}">${r.status==='submitted'?'已提交':'草稿'}</span>
+      </div>
+      <div class="rep-body">${(r.content||'').replace(/\n/g,'<br>')}</div>
+    </div>
+  `).join('');
+}
+
+function showReportForm() {
+  const today = new Date().toISOString().substring(0,10);
+  const title = prompt('标题：', (_repType==='daily'?'日报 ':'周报 ') + today);
+  if (!title) return;
+  const content = prompt('内容：');
+  if (!content) return;
+  api('/api/reports/create','POST',{title:title,report_type:_repType,report_date:today,content:content,status:'draft'})
+    .then(() => { toast('新建成功','success'); _loadReports(); })
+    .catch(e => toast('失败: '+e.message,'error'));
 }
 
 async function renderSimple(el) {

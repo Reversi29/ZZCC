@@ -532,3 +532,15 @@ class Announcement(Base, Timestamped):
     is_pinned = Column(Boolean, default=False, nullable=False)
     expires_at = Column(DateTime, nullable=True)         # 自动过期时间
     view_count = Column(Integer, default=0, nullable=False)
+
+
+class DailyReport(Base, Timestamped):
+    """日报/周报"""
+    __tablename__ = "daily_reports"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=False)  # 报告标题(如"日报 2026-08-22")
+    report_type = Column(String(10), nullable=False, default="daily")  # daily / weekly
+    report_date = Column(Date, nullable=False)  # 报告对应日期
+    content = Column(Text, nullable=False)  # 报告正文
+    author = Column(String(255), nullable=False)  # 作者 username
+    status = Column(String(20), nullable=False, default="draft")  # draft / submitted
