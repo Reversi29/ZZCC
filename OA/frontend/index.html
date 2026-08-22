@@ -371,6 +371,7 @@ const MODULES = [
   { id: 'budget',        name: '预算管理',  emoji: '💳' },
   { id: 'suppliers',     name: '供应商',    emoji: '🏭' },
 
+  { id: 'notification-settings', name: '通知设置', emoji: '🔧' },
   { id: 'registrations', name: '账号管理', emoji: '👤' },
 ];
 
@@ -696,7 +697,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -2961,6 +2962,123 @@ async function doWorkflowAction(name, doctype, action, label) {
     toast(e.message || JSON.stringify(e), 'error');
   }
 }
+
+// ── Notification Settings 通知渠道配置 ──────────────────────────────────
+async function renderNotificationSettings(main) {
+  const u = getCurrentUser();
+  const isAdmin = ['admin','api'].includes((u.role || ''));
+  if (!isAdmin) { main.innerHTML='<div style="padding:24px;color:var(--text2)">需要管理员权限</div>'; return; }
+  main.innerHTML='<div class="card"><div class="card-title"><span class="emoji">🔧</span> 通知渠道配置</div>'
+    + '<div class="nf-grid">';
+  // We'll populate this below
+  await _loadNotifSettings(main);
+}
+
+async function _loadNotifSettings(main) {
+  try {
+    const s = await api('/api/notifications/settings');
+    main.querySelector('.nf-grid').innerHTML = _renderNotifSettingsForm(s);
+    // Bind save button
+    const saveBtn = main.querySelector('#nf-save-btn');
+    if (saveBtn) saveBtn.addEventListener('click', () => _saveNotifSettings(main));
+    const testBtn = main.querySelector('#nf-test-btn');
+    if (testBtn) testBtn.addEventListener('click', () => _testNotif(main));
+    const trigBtn = main.querySelector('#nf-trigger-btn');
+    if (trigBtn) trigBtn.addEventListener('click', () => _triggerNotif(main));
+  } catch(e) {
+    main.querySelector('.nf-grid').innerHTML = '<div style="color:#dc2626;padding:16px">加载失败: ' + e.message + '</div>';
+  }
+}
+
+function _renderNotifSettingsForm(s) {
+  return ''
+    + '<div class="nf-card"><h3>🏢 企业微信</h3>'
+    + '<label class="nf-label">Webhook URL</label><input class="nf-input" id="nf-wecom-url" value="'+(s.wecom_webhook||'')+'">'
+    + '<label class="nf-label"><input type="checkbox" id="nf-wecom-enable" '+(s.channels&&s.channels.wecom?'checked':'')+'> 启用</label></div>'
+    + '<div class="nf-card"><h3>📱 钉钉</h3>'
+    + '<label class="nf-label">Webhook URL</label><input class="nf-input" id="nf-ding-url" value="'+(s.dingtalk_webhook||'')+'">'
+    + '<label class="nf-label">Secret（可选）</label><input class="nf-input" id="nf-ding-secret" value="'+(s.dingtalk_secret||'')+'">'
+    + '<label class="nf-label"><input type="checkbox" id="nf-ding-enable" '+(s.channels&&s.channels.dingtalk?'checked':'')+'> 启用</label></div>'
+    + '<div class="nf-card"><h3>✉️ 邮件 (SMTP)</h3>'
+    + '<label class="nf-label">SMTP Host</label><input class="nf-input" id="nf-smtp-host" value="'+(s.smtp_host||'')+'">'
+    + '<label class="nf-label">SMTP Port</label><input class="nf-input" id="nf-smtp-port" type="number" value="'+(s.smtp_port||587)+'">'
+    + '<label class="nf-label">SMTP User</label><input class="nf-input" id="nf-smtp-user" value="'+(s.smtp_user||'')+'">'
+    + '<label class="nf-label">SMTP Password</label><input class="nf-input" id="nf-smtp-pass" type="password" value="'+(s.smtp_pass||'')+'">'
+    + '<label class="nf-label">From</label><input class="nf-input" id="nf-smtp-from" value="'+(s.smtp_from||'')+'">'
+    + '<label class="nf-label">To（逗号分隔）</label><input class="nf-input" id="nf-smtp-to" value="'+(s.smtp_to||'')+'">'
+    + '<label class="nf-label"><input type="checkbox" id="nf-smtp-tls" '+(s.smtp_tls!==false?'checked':'')+'> 启用 TLS</label>'
+    + '<label class="nf-label"><input type="checkbox" id="nf-smtp-enable" '+(s.channels&&s.channels.email?'checked':'')+'> 启用</label></div>'
+    + '<div class="nf-card"><h3>🌐 通用 Webhook</h3>'
+    + '<label class="nf-label">Webhook URL</label><input class="nf-input" id="nf-webhook-url" value="'+(s.webhook_url||'')+'">'
+    + '<label class="nf-label"><input type="checkbox" id="nf-webhook-enable" '+(s.channels&&s.channels.webhook?'checked':'')+'> 启用</label></div>'
+    + '<div style="display:flex;gap:10px;padding:12px 0">'
+    + '<button id="nf-save-btn" class="btn-sm" style="padding:8px 24px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer">💾 保存</button>'
+    + '<button id="nf-test-btn" class="btn-sm" style="padding:8px 24px;background:#0ea5e9;color:white;border:none;border-radius:6px;cursor:pointer">🔔 发送测试</button>'
+    + '<button id="nf-trigger-btn" class="btn-sm" style="padding:8px 24px;background:#f59e0b;color:white;border:none;border-radius:6px;cursor:pointer">🧪 触发示例通知</button></div>'
+    + '<div id="nf-test-result" style="display:none;background:var(--surface2);padding:12px;border-radius:6px;margin-top:8px;font-size:13px"></div>';
+}
+
+async function _saveNotifSettings(main) {
+  const body = _readNotifForm();
+  const r = await api('/api/notifications/settings', { method: 'PUT', data: body });
+  toast('✅ 配置已保存', 'success');
+  _loadNotifSettings(main);
+}
+
+async function _testNotif(main) {
+  const body = _readNotifForm();
+  const r = await api('/api/notifications/settings/test', { method: 'POST', data: body });
+  const el = document.getElementById('nf-test-result');
+  if (el) {
+    el.style.display = 'block';
+    el.innerHTML = '<div style="font-weight:bold;margin-bottom:4px">测试结果:</div>'
+      + Object.entries(r.results).map(([k,v]) =>
+        '<div style="margin:2px 0">' + (v==='ok'?'✅':'❌') + ' ' + k + (v!=='ok'?': '+v:'') + '</div>'
+      ).join('');
+  }
+}
+
+async function _triggerNotif(main) {
+  await api('/api/notifications/settings/trigger', { method: 'POST' });
+  toast('✅ 示例通知已发送，前往「通知」查看', 'success');
+}
+
+function _readNotifForm() {
+  const val = (id) => { const e = document.getElementById(id); return e ? e.value : ''; };
+  const checked = (id) => { const e = document.getElementById(id); return e ? e.checked : false; };
+  return {
+    wecom_webhook: val('nf-wecom-url'),
+    dingtalk_webhook: val('nf-ding-url'),
+    dingtalk_secret: val('nf-ding-secret'),
+    smtp_host: val('nf-smtp-host'),
+    smtp_port: parseInt(val('nf-smtp-port') || '587'),
+    smtp_user: val('nf-smtp-user'),
+    smtp_pass: val('nf-smtp-pass'),
+    smtp_from: val('nf-smtp-from'),
+    smtp_to: val('nf-smtp-to'),
+    smtp_tls: checked('nf-smtp-tls'),
+    webhook_url: val('nf-webhook-url'),
+    channels: {
+      wecom: checked('nf-wecom-enable'),
+      dingtalk: checked('nf-ding-enable'),
+      email: checked('nf-smtp-enable'),
+      webhook: checked('nf-webhook-enable'),
+    },
+  };
+}
+
+// Notification Settings CSS
+const nfStyle = document.createElement('style');
+nfStyle.textContent = ''
++ '.nf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:12px 0}'
++ '.nf-card{background:var(--surface2);padding:14px;border-radius:8px}'
++ '.nf-card h3{margin:0 0 10px 0;font-size:15px}'
++ '.nf-label{display:block;margin:6px 0 3px 0;font-size:12px;color:var(--text2)}'
++ '.nf-input{width:100%;padding:7px 10px;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);box-sizing:border-box}'
++ '.nf-input[type=checkbox]{width:auto;margin-right:6px}'
++ '#nf-test-result{margin-top:8px}'
+;
+document.head.appendChild(nfStyle);
 
 // 查看单据详情（含工作流动作）
 async function renderRegistrations(main) {
