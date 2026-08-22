@@ -20,11 +20,21 @@ def md(m) -> dict: return model_to_dict(m)
 class R(BaseModel):
     data: Optional[dict | list] = None; message: Optional[str] = None
 
+def _parse_val(k, v):
+    from datetime import date as _date
+    import json as _json
+    if isinstance(v, str) and k.endswith('_date') and v:
+        try: return _date.fromisoformat(v)
+        except: pass
+    elif isinstance(v, (dict, list)):
+        return _json.dumps(v, ensure_ascii=False)
+    return v
+
 def _upsert(cls, name, data, db, update=True):
     m = db.query(cls).filter(cls.name == name).first() if update else None
     if not m: m = cls(name=name); db.add(m)
     for k, v in data.items():
-        if k not in ("name",) and hasattr(m, k): setattr(m, k, v)
+        if k not in ("name",) and hasattr(m, k): setattr(m, k, _parse_val(k, v))
     return m
 
 # ── Item ──────────────────────────────────────────────────────
@@ -110,6 +120,8 @@ def list_assets(db: Session = Depends(get_db), limit=100, current_user: CurrentU
 @router.post("/Asset", response_model=R)
 def create_asset(data: dict, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_auth)):
     if (data.get("purchase_value") or 0) < 0: raise HTTPException(400, "资产原值不能为负")
+    if "asset_name" not in data or not data.get("asset_name"):
+        data["asset_name"] = data.get("name") or ""
     name = data.get("name") or data.get("asset_name") or seq_for("Asset", db)
     m = _upsert(Asset, name, data, db, update=False)
     db.commit(); db.refresh(m)
