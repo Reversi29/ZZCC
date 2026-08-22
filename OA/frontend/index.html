@@ -265,6 +265,27 @@
 .gs-result .gs-name { font-size: 13px; color: var(--text); font-weight: 500; }
 .gs-result .gs-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
 .gs-empty { padding: 20px; text-align: center; color: var(--text3); font-size: 13px; }
+
+.skeleton { background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%); background-size: 200% 100%; animation: skeleton-loading 1.5s ease-in-out infinite; border-radius: 4px; }
+@keyframes skeleton-loading { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.skeleton-line { height: 14px; margin-bottom: 8px; }
+.skeleton-line.short { width: 60%; }
+.skeleton-line.medium { width: 80%; }
+.skeleton-block { height: 80px; border-radius: 8px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; display: flex; align-items: center; gap: 10px; cursor: pointer; transition: all 0.15s; }
+.kpi-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.kpi-icon { font-size: 24px; min-width: 36px; text-align: center; }
+.kpi-value { font-size: 22px; font-weight: 700; color: var(--text); }
+.kpi-label { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.recent-list { display: flex; flex-direction: column; gap: 4px; }
+.recent-item { padding: 8px 12px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); cursor: pointer; transition: background 0.15s; }
+.recent-item:hover { background: var(--surface2); }
+.recent-item.urgent { border-left-color: var(--red); }
+.recent-item.unread { border-left-color: var(--accent2); }
+.recent-title { font-size: 13px; color: var(--text); font-weight: 500; }
+.recent-body { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.recent-time { font-size: 10px; color: var(--text3); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -1561,22 +1582,70 @@ async function renderAnalytics(el) {
 // ── Dashboard ────────────────────────────────────────────────
 async function renderDashboard(el) {
   const isAdmin = ['admin','api'].includes((getCurrentUser().role || ''));
-  el.innerHTML = `<div class="card"><div class="card-title">🏠 系统总览</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>`;
+  el.innerHTML = `<div class="card"><div class="card-title">🏠 系统总览</div><div class="skeleton-block"></div></div>`;
+
+  // 加载 quickstats
+  let qs = {pending_approvals:0, pending_by_type:{}, unread_notifications:0, recent_notifications:[], total_employees:0, total_projects:0, total_contracts:0};
+  try {
+    qs = await api('/api/dashboard/quickstats');
+  } catch(e) {
+    console.warn('quickstats 加载失败:', e.message);
+  }
+
+  // 加载模块计数
   const doctypes = ['Lead','Project','Purchase Order','Journal Entry','Contract','Quality Inspection','Support Ticket','Employee','Item','Asset'];
   const counts = {};
   await Promise.all(doctypes.map(async d => { try { counts[d] = (await apiGet(d)).length; } catch { counts[d] = 0; } }));
-  
-  // 业务模块（排除 dashboard、registrations、HR子项）
+
   const businessModules = MODULES.filter(m => {
     if (m.id === 'dashboard') return false;
     if (m.id === 'registrations') return isAdmin;
     if (['leaves','attendance','salary'].includes(m.id)) return false;
     return true;
   });
-  
+
+  // 未读通知徽章
+  const unreadBadge = qs.unread_notifications > 0 ? `<span style="background:var(--red);color:#fff;padding:0 6px;border-radius:8px;font-size:11px;font-weight:600;margin-left:8px">${qs.unread_notifications}</span>` : '';
+
+  // 待审批 chips
+  const pending_items = Object.entries(qs.pending_by_type || {}).filter(([,v])=>v>0);
+  const pendingChips = pending_items.length > 0 ? pending_items.map(([k,v]) => `<span style="background:#3b1a1a;color:var(--red);padding:3px 10px;border-radius:14px;font-size:12px;font-weight:500;margin-right:4px">${k}: <b>${v}</b></span>`).join('') : '<span style="color:var(--text3);font-size:13px">无待审批</span>';
+
   el.innerHTML = `
     <div class="card">
-      <div class="card-title"><span class="emoji">🏠</span> 系统总览 — 点击 ⭐ 收藏到顶部导航</div>
+      <div class="card-title"><span class="emoji">📊</span> 关键指标 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">点击卡片进入详情</span></div>
+      <div class="kpi-grid">
+        ${kpiCard('⚡','待审批',qs.pending_approvals,'admin','workflow')}
+        ${kpiCard('🔔','未读通知',qs.unread_notifications,qs.unread_notifications>0?'accent':'default','notifications')}
+        ${kpiCard('👥','员工',qs.total_employees,'default','hr')}
+        ${kpiCard('📁','项目',qs.total_projects,'default','project')}
+        ${kpiCard('📝','合同',qs.total_contracts,'default','compliance')}
+      </div>
+      <div style="margin-top:4px;margin-bottom:12px">
+        <div style="font-size:12px;color:var(--text3);margin-bottom:6px">待审批明细</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">${pendingChips}</div>
+      </div>
+      ${qs.recent_notifications && qs.recent_notifications.length > 0 ? `
+      <div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+          <span>最近通知</span>
+          <span style="font-size:11px;color:var(--accent);cursor:pointer" onclick="navigate('notifications')">查看全部</span>
+        </div>
+        <div class="recent-list">
+          ${qs.recent_notifications.slice(0,4).map(n => {
+            const cls = n.priority === 'urgent' ? 'urgent' : (n.is_read ? '' : 'unread');
+            const time = n.created ? n.created.replace('T',' ').slice(0,16) : '—';
+            return `<div class="recent-item ${cls}" onclick="navigate('notifications')" title="${esc(n.doctype||'')}">
+              <div class="recent-title">${n.is_read?'':'🔵 '}${esc(n.title)}</div>
+              <div class="recent-body">${esc(n.body||'')}</div>
+              <div class="recent-time">${time}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : ''}
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="emoji">🏠</span> 模块导航 — 点击 ⭐ 收藏到顶部导航</div>
       <div class="module-grid">
         ${businessModules.map(m => {
           const isFav = FAVORITES.includes(m.id);
@@ -1596,11 +1665,20 @@ async function renderDashboard(el) {
     </div>`;
 }
 
+function kpiCard(emoji, label, value, style, path) {
+  const borderStyle = style === 'accent' ? 'border-color: var(--accent);' : (style === 'admin' && value > 0 ? 'border-color: #fbbf24;' : '');
+  return `<div class="kpi-card" onclick="navigate('${path}')" style="${borderStyle}">
+    <div class="kpi-icon">${emoji}</div>
+    <div><div class="kpi-value">${value}</div><div class="kpi-label">${label}</div></div>
+  </div>`;
+}
+
+// ── 通用简单模块
 // ── 通用简单模块（CRM/项目/合规/质量/客服/HR）─────────────────
 
 // ── 公告栏 ──────────────────────────────────────────────────
 async function renderAnnouncements(el) {
-  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📢</span> 企业公告</div><div id="annContent"><div class="empty">加载中...</div></div></div>';
+  el.innerHTML = skeletonCard('📢 企业公告'); document.getElementById('main').innerHTML = skeletonTable(3);
   await _loadAnnouncements();
 }
 
@@ -3242,6 +3320,16 @@ async function runAIConsult() {
   } catch(e) { toast('咨询失败: '+e.message,'error'); }
 }
 
+
+
+// ── 骨架屏辅助函数 ────────────────────────────────────────
+function skeletonCard(title, lines=3) {
+  return `<div class="card"><div class="card-title">${title}</div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line medium"></div><div class="skeleton skeleton-line short"></div></div>`;
+}
+function skeletonTable(rows=5) {
+  const lines = Array(rows).fill(0).map(() => `<div style="display:flex;gap:16px;padding:6px 0"><div class="skeleton skeleton-line" style="flex:2"></div><div class="skeleton skeleton-line medium" style="flex:1"></div><div class="skeleton skeleton-line short" style="flex:0.5"></div></div>`).join('');
+  return `<div class="card"><div class="card-title">加载中...</div>${lines}</div>`;
+}
 
 // ── 全局搜索 ─────────────────────────────────────────────
 let gsTimer = null;

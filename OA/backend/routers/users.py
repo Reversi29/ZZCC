@@ -39,7 +39,7 @@ class CreateUserRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_valid(cls, v):
-        if v not in ("user", "admin", "manager", "finance", "hr"):
+        if v not in ("user", "admin", "manager", "finance", "hr", "operator", "reader"):
             raise ValueError("无效的角色")
         return v
 

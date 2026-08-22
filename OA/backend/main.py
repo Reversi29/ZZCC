@@ -121,6 +121,7 @@ def _register():
         "routers.approval",
         "routers.notifications",
         "routers.search",
+        "routers.dashboard",
         "routers.notification_settings",
         "routers.analytics",
         "routers.budget",

@@ -196,6 +196,24 @@ def _resolve_user(token: str | None, api_key: str | None, authorization: str | N
     )
 
 
+
+# --- Role constants ---
+ROLE_ADMIN = "admin"
+ROLE_MANAGER = "manager"
+ROLE_FINANCE = "finance"
+ROLE_HR = "hr"
+ROLE_OPERATOR = "operator"
+ROLE_READER = "reader"
+ROLE_USER = "user"
+ROLE_API = "api"
+
+WRITE_ROLES = {ROLE_ADMIN, ROLE_MANAGER, ROLE_FINANCE, ROLE_HR, ROLE_OPERATOR, ROLE_USER, ROLE_API}
+APPROVAL_ROLES = {ROLE_ADMIN, ROLE_MANAGER, ROLE_FINANCE, ROLE_HR, ROLE_API}
+FULL_ROLES = {ROLE_ADMIN, ROLE_API}
+READ_ONLY_ROLES = {ROLE_READER}
+ALL_VALID_ROLES = {"admin", "manager", "finance", "hr", "operator", "reader", "user"}
+
+
 def require_auth(
     token: Annotated[str | None, Depends(_oauth2_scheme)],
     api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -218,7 +236,7 @@ def require_admin(
     用于审批动作、用户管理等管理端点。
     """
     user = _resolve_user(token, api_key, authorization)
-    if user.role not in ("admin", "api"):
+    if user.role not in ("admin", "api", "operator"):
         raise HTTPException(
             status_code=403,
             detail="需要管理员权限（当前角色: " + user.role + "）",
