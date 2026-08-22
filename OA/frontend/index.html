@@ -166,6 +166,25 @@
 .ann-meta { font-size:11px; color:var(--text3); }
 .ann-body { font-size:13px; color:var(--text2); line-height:1.5; }
 .ann-foot { font-size:11px; color:var(--text3); margin-top:6px; display:flex; gap:12px; }
+
+.cal-header { display:flex; align-items:center; justify-content:space-between; padding:4px 4px 12px; font-size:16px; font-weight:600; }
+.cal-header #calTitle { min-width:100px; text-align:center; }
+.cal-legend { display:flex; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--text2); margin-bottom:8px; padding:6px 8px; background:var(--surface); border-radius:4px; }
+.cal-legend span { display:flex; align-items:center; gap:3px; }
+.cal-legend i { display:inline-block; width:8px; height:8px; border-radius:2px; }
+.cal-grid { margin-bottom:12px; }
+.cal-weekdays { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; font-size:11px; color:var(--text3); text-align:center; padding:4px; }
+.cal-days { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+.cal-day { min-height:60px; padding:4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); cursor:pointer; overflow:hidden; }
+.cal-day:hover { border-color:var(--accent); }
+.cal-day.cal-today { background:#e3f2fd; border-color:#4a90d9; }
+.cal-daynum { font-size:11px; font-weight:600; color:var(--text2); margin-bottom:3px; }
+.cal-empty { border:none; background:transparent; cursor:default; }
+.cal-empty:hover { border:none; }
+.cal-event-chip { font-size:10px; padding:2px 4px; margin-bottom:2px; background:var(--surface); border-radius:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.4; }
+.cal-event-more { font-size:10px; color:var(--text3); padding:1px 4px; }
+.cal-events { }
+.cal-event-row { display:flex; align-items:center; }
 </style>
 </head>
 <body>
@@ -255,6 +274,7 @@ const enc = (s) => encodeURIComponent(s);
 const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
   { id: 'announcements', name: '公告',     emoji: '📢' },
+  { id: 'calendar',    name: '日程',     emoji: '📅' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -602,7 +622,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1541,6 +1561,131 @@ function deleteAnn(id) {
   api('/api/resource/Announcement/'+id,'DELETE')
     .then(() => { toast('已删除','success'); _loadAnnouncements(); })
     .catch(e => toast('失败: '+e.message,'error'));
+}
+
+
+// ── 日历/日程 ──────────────────────────────────────────────
+let _calYear, _calMonth;
+
+async function renderCalendar(el) {
+  const now = new Date();
+  _calYear = now.getFullYear();
+  _calMonth = now.getMonth();
+  el.innerHTML = `
+    <div class="card">
+      <div class="cal-header">
+        <button class="btn btn-default" onclick="calNav(-1)">◀ 上月</button>
+        <div id="calTitle"></div>
+        <button class="btn btn-default" onclick="calNav(1)">下月 ▶</button>
+      </div>
+      <div class="cal-legend">
+        <span><i style="background:#4a90d9"></i>项目</span>
+        <span><i style="background:#27ae60"></i>任务</span>
+        <span><i style="background:#8e44ad"></i>合同</span>
+        <span><i style="background:#f39c12"></i>请假(审批中)</span>
+        <span><i style="background:#27ae60"></i>请假(已批)</span>
+        <span><i style="background:#e74c3c"></i>请假(驳回)</span>
+        <span><i style="background:#16a085"></i>考勤</span>
+      </div>
+      <div id="calGrid" class="cal-grid"></div>
+      <div id="calEvents" class="cal-events"></div>
+    </div>`;
+  await _loadCalEvents();
+}
+
+function calNav(dir) {
+  _calMonth += dir;
+  if (_calMonth > 11) { _calMonth = 0; _calYear++; }
+  if (_calMonth < 0) { _calMonth = 11; _calYear--; }
+  _loadCalEvents();
+}
+
+async function _loadCalEvents() {
+  const from = `${_calYear}-${String(_calMonth+1).padStart(2,'0')}-01`;
+  const last = new Date(_calYear, _calMonth+1, 0);
+  const to = `${_calYear}-${String(_calMonth+1).padStart(2,'0')}-${last.getDate()}`;
+  const title = document.getElementById('calTitle');
+  title.textContent = `${_calYear} 年 ${_calMonth+1} 月`;
+
+  let ev = [];
+  try {
+    const res = await api('/api/calendar/events','GET',{from:from,to:to});
+    ev = res.data.events || [];
+  } catch(e){ toast('加载日程失败: '+e.message,'error'); }
+
+  renderCalGrid(ev);
+  renderCalEvents(ev);
+}
+
+function renderCalGrid(events) {
+  const grid = document.getElementById('calGrid');
+  const first = new Date(_calYear, _calMonth, 1);
+  const last = new Date(_calYear, _calMonth+1, 0);
+  const startDay = first.getDay() === 0 ? 6 : first.getDay();
+  const daysInMonth = last.getDate();
+  const today = new Date();
+  const todayNum = today.getFullYear()===_calYear && today.getMonth()===_calMonth ? today.getDate() : -1;
+
+  // Build date→events map
+  const evtMap = {};
+  for (const e of events) {
+    const sd = e.date_start.substring(0,10);
+    const ed = e.date_end ? e.date_end.substring(0,10) : sd;
+    for (let d = new Date(sd+'T00:00:00'); d <= new Date(ed+'T23:59:59'); d.setDate(d.getDate()+1)) {
+      const key = d.toISOString().substring(0,10);
+      if (key.substring(0,7) !== `${_calYear}-${String(_calMonth+1).padStart(2,'0')}`) continue;
+      if (!evtMap[key]) evtMap[key] = [];
+      evtMap[key].push(e);
+    }
+  }
+
+  let html = '<div class="cal-weekdays">';
+  for (const d of ['一','二','三','四','五','六','日']) html += `<div>${d}</div>`;
+  html += '</div><div class="cal-days">';
+  for (let i=0; i<startDay; i++) html += '<div class="cal-day cal-empty"></div>';
+  for (let d=1; d<=daysInMonth; d++) {
+    const key = `${_calYear}-${String(_calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday = d === todayNum;
+    const dayEvents = evtMap[key] || [];
+    html += `<div class="cal-day${isToday?' cal-today':''}" onclick="showDayEvents('${key}')">
+      <div class="cal-daynum">${d}</div>
+      <div class="cal-dayevents">`;
+    for (const e of dayEvents.slice(0,3)) {
+      html += `<div class="cal-event-chip" style="border-left:3px solid ${e.color}"><span>${e.icon}</span> ${esc(e.title)}</div>`;
+    }
+    if (dayEvents.length > 3) html += `<div class="cal-event-more">+${dayEvents.length-3}</div>`;
+    html += '</div></div>';
+  }
+  grid.innerHTML = html;
+}
+
+function renderCalEvents(events) {
+  const el = document.getElementById('calEvents');
+  if (!events.length) { el.innerHTML = '<div class="empty">本月暂无日程</div>'; return; }
+  el.innerHTML = '<div class="card-title" style="font-size:14px;margin-bottom:8px">本月日程</div>' +
+    events.map(e => `
+      <div class="cal-event-row" style="border-left:3px solid ${e.color};padding:6px 10px;margin-bottom:4px;background:var(--surface);border-radius:4px">
+        <span style="margin-right:6px">${e.icon}</span>
+        <span style="font-size:12px;color:var(--text3);margin-right:8px">${e.date_start.substring(5,10)}</span>
+        <span style="font-size:12px;color:var(--text3);margin-right:8px">${e.date_end.substring(5,10)}</span>
+        <span style="font-size:13px;color:var(--text)">${esc(e.title)}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">[${e.doctype}]</span>
+      </div>`).join('');
+}
+
+async function showDayEvents(key) {
+  const c = document.getElementById('calEvents');
+  c.innerHTML = `<div class="card-title" style="font-size:14px;margin-bottom:8px">${key} 日程</div>
+    <div class="empty" style="font-size:12px">加载中...</div>`;
+  let ev = [];
+  try { ev = (await api('/api/calendar/events','GET',{from:key,to:key})).data.events || []; } catch(e){}
+  if (!ev.length) { c.innerHTML += '<div class="empty" style="font-size:12px">暂无日程</div>'; }
+  else { c.innerHTML += ev.map(e => `
+    <div class="cal-event-row" style="border-left:3px solid ${e.color};padding:6px 10px;margin-bottom:4px;background:var(--surface);border-radius:4px">
+      <span style="margin-right:6px">${e.icon}</span>
+      <span style="font-size:13px;color:var(--text)">${esc(e.title)}</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:8px">[${e.doctype}]</span>
+    </div>`).join(''); }
 }
 
 async function renderSimple(el) {
