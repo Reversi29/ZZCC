@@ -6,8 +6,8 @@ services:
     container_name: zzcc-oa-mariadb
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ***
-      MYSQL_ROOT_PASSWORD: ***
+      MARIADB_ROOT_PASSWORD: "zzcc_oa_2024"
+      MYSQL_ROOT_PASSWORD: "zzcc_oa_2024"
       MYSQL_DATABASE: zzcc_oa
     ports:
       - "3307:3306"
@@ -37,17 +37,17 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://root:zzcc_oa_2024@db:3306/zzcc_oa
       # P3.13 通知渠道 — 也可通过前端「通知设置」页面在线修改
-      OA_WECOM_WEBHOOK: ${OA_…-''}
-      OA_DINGTALK_WEBHOOK: ${OA_DINGTALK_WEBHOOK:-}
-      OA_DINGTALK_SECRET: ${OA_DINGTALK_SECRET:-}
-      OA_SMTP_HOST: ${OA_S…''}
-      OA_SMTP_PORT: ${OA_S…'587'}
-      OA_SMTP_USER: ${OA_S…''}
-      OA_SMTP_PASS: ${OA_S…''}
-      OA_SMTP_FROM: ${OA_S…''}
-      OA_SMTP_TO: ${OA_S…''}
-      OA_SMTP_TLS: ${OA_S…'true'}
-      OA_WEBHOOK_URL: ${OA_…''}
+      OA_WECOM_WEBHOOK:
+      OA_DINGTALK_WEBHOOK:
+      OA_DINGTALK_SECRET:
+      OA_SMTP_HOST:
+      OA_SMTP_PORT: "587"
+      OA_SMTP_USER:
+      OA_SMTP_PASS:
+      OA_SMTP_FROM:
+      OA_SMTP_TO:
+      OA_SMTP_TLS: "true"
+      OA_WEBHOOK_URL:
     ports:
       - "8003:8003"
 
