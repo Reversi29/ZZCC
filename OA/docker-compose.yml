@@ -20,7 +20,7 @@ services:
       MYSQL_USER: zzcc_oa_user
       MYSQL_PASSWORD: zzcc_oa_2024           # ⚠ 生产必须改
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - oa-mariadb-data:/var/lib/mysql
       - ./backend/sql:/docker-entrypoint-initdb.d:ro  # 初始化 SQL（如有）

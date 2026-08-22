@@ -36,7 +36,7 @@ def _to_dict(r):
         "id": r.id,
         "title": r.title,
         "meeting_type": r.meeting_type,
-        "meeting_date": r.meeting_date.strftime("%Y-%m-%d %H:%M") if r.meeting_date else "",
+        "meeting_date": (r.meeting_date.strftime("%Y-%m-%d %H:%M") if isinstance(r.meeting_date, date) else r.meeting_date) if r.meeting_date else "",
         "duration_minutes": r.duration_minutes or 60,
         "location": r.location or "",
         "organizer": r.organizer,
@@ -45,8 +45,8 @@ def _to_dict(r):
         "decisions": parse_json(r.decisions),
         "action_items": parse_json(r.action_items),
         "status": r.status,
-        "created": r.creation.strftime("%Y-%m-%d %H:%M") if r.creation else "",
-        "modified": r.modified.strftime("%Y-%m-%d %H:%M") if r.modified else "",
+        "created": (r.creation.strftime("%Y-%m-%d %H:%M") if isinstance(r.creation, datetime) else r.creation) if r.creation else "",
+        "modified": (r.modified.strftime("%Y-%m-%d %H:%M") if isinstance(r.modified, datetime) else r.modified) if r.modified else "",
     }
 
 @router.get("/list")

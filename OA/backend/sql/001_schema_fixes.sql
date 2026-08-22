@@ -45,8 +45,8 @@ CREATE TABLE IF NOT EXISTS announcements (
     is_pinned INTEGER DEFAULT 0,
     expires_at TEXT NULL,
     view_count INTEGER DEFAULT 0,
-    creation TEXT NULL,
-    modified TEXT NULL,
+    creation DATETIME NULL,
+    modified DATETIME NULL,
     modified_by VARCHAR(255) DEFAULT 'Administrator'
 );
 
@@ -59,8 +59,8 @@ CREATE TABLE IF NOT EXISTS daily_reports (
     content TEXT NOT NULL,
     author TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
-    creation TEXT NULL,
-    modified TEXT NULL,
+    creation DATETIME NULL,
+    modified DATETIME NULL,
     modified_by TEXT DEFAULT 'Administrator'
 );
 
@@ -78,8 +78,8 @@ CREATE TABLE IF NOT EXISTS meetings (
     decisions TEXT,
     action_items TEXT,
     status TEXT NOT NULL DEFAULT 'scheduled',
-    creation TEXT,
-    modified TEXT,
+    creation DATETIME,
+    modified DATETIME,
     modified_by TEXT DEFAULT 'Administrator'
 );
 
@@ -91,8 +91,8 @@ CREATE TABLE IF NOT EXISTS form_templates (
     `schema` TEXT NOT NULL,
     created_by TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
-    creation TEXT,
-    modified TEXT,
+    creation DATETIME,
+    modified DATETIME,
     modified_by TEXT DEFAULT 'Administrator'
 );
 
@@ -103,8 +103,8 @@ CREATE TABLE IF NOT EXISTS form_submissions (
     data TEXT NOT NULL,
     submitted_by TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'submitted',
-    creation TEXT,
-    modified TEXT,
+    creation DATETIME,
+    modified DATETIME,
     modified_by TEXT DEFAULT 'Administrator'
 );
 
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS net_files (
     is_dir INTEGER DEFAULT 0,
     uploaded_by TEXT NOT NULL,
     share_code TEXT,
-    creation TEXT,
-    modified TEXT,
+    creation DATETIME,
+    modified DATETIME,
     modified_by TEXT DEFAULT 'Administrator'
 );

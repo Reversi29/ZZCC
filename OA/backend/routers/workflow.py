@@ -673,6 +673,6 @@ def get_workflow_history(
         "comment": r.comment,
         "operator": r.operator,
         "field_changes": r.field_changes,
-        "created_at": r.creation.isoformat() if r.creation else None,
+        "created_at": (r.creation.isoformat() if isinstance(r.creation, datetime) else r.creation) if r.creation else None,
         "created": str(r.creation) if r.creation else None,
     } for r in rows]

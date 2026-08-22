@@ -4,7 +4,7 @@ routers/daily_reports.py — 日报/周报
 from fastapi import APIRouter, Depends, Query, HTTPException, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from datetime import date
+from datetime import datetime, date
 from pydantic import BaseModel
 from database import get_db, DailyReport
 from routers.auth import require_auth
@@ -30,12 +30,12 @@ def _to_dict(r):
         "id": r.id,
         "title": r.title,
         "report_type": r.report_type,
-        "report_date": r.report_date.isoformat() if r.report_date else "",
+        "report_date": (r.report_date.isoformat() if isinstance(r.report_date, date) else r.report_date) if r.report_date else "",
         "content": r.content,
         "author": r.author,
         "status": r.status,
-        "created": r.creation.isoformat() if r.creation else "",
-        "modified": r.modified.isoformat() if r.modified else "",
+        "created": (r.creation.isoformat() if isinstance(r.creation, datetime) else r.creation) if r.creation else "",
+        "modified": (r.modified.isoformat() if isinstance(r.modified, datetime) else r.modified) if r.modified else "",
     }
 
 @router.get("/list")

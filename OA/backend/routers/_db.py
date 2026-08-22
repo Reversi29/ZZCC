@@ -42,6 +42,13 @@ def model_to_dict(model: Base) -> dict:
         v = getattr(model, col.key)
         if isinstance(v, (date, datetime)):
             v = v.isoformat() if v else None
+        elif isinstance(v, str):
+            # MariaDB TEXT→datetime roundtrip
+            if len(v) == 10 and v[4] == '-' and v[7] == '-':  # date
+                pass
+            elif len(v) >= 19 and v[4] == '-' and v[13] == ' ':  # datetime
+                pass
+            # leave str as-is; downstream can handle
         elif col.key.endswith("_json") and isinstance(v, str):
             try:
                 v = json.loads(v)

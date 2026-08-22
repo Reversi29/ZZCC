@@ -1,0 +1,39 @@
+# Production compose — reuses existing zzcc-oa-mariadb (3307, bind mount)
+services:
+  db:
+    image: mariadb:10.8
+    container_name: zzcc-oa-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: zzcc_oa_2024
+      MYSQL_ROOT_PASSWORD: zzcc_oa_2024
+      MYSQL_DATABASE: zzcc_oa
+    ports:
+      - "3307:3306"
+    volumes:
+      - /Users/mac/ZZCC/OA/data/mariadb:/var/lib/mysql:rw
+      - ./backend/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: reversi29/zzcc-oa:prod
+    container_name: zzcc-oa-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: mysql+pymysql://root:zzcc_oa_2024@db:3306/zzcc_oa
+    ports:
+      - "8003:8003"

@@ -43,10 +43,10 @@ def md(a: Announcement) -> dict:
         "published_by": a.published_by,
         "status": a.status,
         "is_pinned": a.is_pinned,
-        "expires_at": a.expires_at.isoformat() if a.expires_at else None,
+        "expires_at": (a.expires_at.isoformat() if isinstance(a.expires_at, datetime) else a.expires_at) if a.expires_at else None,
         "view_count": a.view_count,
-        "created": a.creation.isoformat() if a.creation else None,
-        "modified": a.modified.isoformat() if a.modified else None,
+        "created": (a.creation.isoformat() if isinstance(a.creation, datetime) else a.creation) if a.creation else None,
+        "modified": (a.modified.isoformat() if isinstance(a.modified, datetime) else a.modified) if a.modified else None,
     }
 
 @router.post("/Announcement")
