@@ -286,6 +286,20 @@
 .recent-title { font-size: 13px; color: var(--text); font-weight: 500; }
 .recent-body { font-size: 11px; color: var(--text2); margin-top: 2px; }
 .recent-time { font-size: 10px; color: var(--text3); margin-top: 2px; }
+
+.mswitch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.mswitch-card { padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; display: flex; align-items: center; gap: 10px; background: var(--surface); transition: all 0.15s; }
+.mswitch-card.disabled { opacity: 0.5; }
+.mswitch-card:hover { border-color: var(--accent); }
+.mswitch-name { flex: 1; font-size: 14px; }
+.mswitch-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.mswitch-badge.on { background: #1a3a2a; color: var(--green); }
+.mswitch-badge.off { background: #3a1a1a; color: var(--red); }
+.mswitch-badge.fixed { background: var(--surface2); color: var(--text3); }
+.mswitch-stats { display: flex; gap: 16px; margin: 12px 0; }
+.mswitch-stat { text-align: center; }
+.mswitch-stat-value { font-size: 24px; font-weight: 700; }
+.mswitch-stat-label { font-size: 11px; color: var(--text3); }
 </style>
 </head>
 <body>
@@ -378,6 +392,71 @@ const API_KEY = 'zzcc_oadev_key_2024';
 // URL 编码含空格的 doctype（ERPNext 约定）
 const enc = (s) => encodeURIComponent(s);
 
+async function renderModuleSwitch(main) {
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🔧</span> 模块开关</div><div class="skeleton-block"></div></div>';
+  var user = getCurrentUser();
+  if (!user || (user.role || '') === 'user') {
+    main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🔧</span> 模块开关</div><div class="empty"><span class="empty-emoji">🔒</span>无权限</div></div>';
+    return;
+  }
+
+  var mods = await api('/api/module-toggle/status');
+  var modList = await api('/api/module-toggle/list');
+  var nameMap = {};
+  modList.forEach(function(m) { nameMap[m.module_id] = {name: m.name, can_disable: m.can_disable}; });
+
+  var modEntries = Object.entries(mods.modules || {});
+  var enabled = mods.enabled || 0;
+  var disabled = mods.disabled || 0;
+  var total = mods.total || 0;
+
+  var html = '<div class="card">' +
+    '<div class="card-title"><span class="emoji">🔧</span> 模块开关 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">控制各功能模块的显示/隐藏</span></div>' +
+    '<div class="mswitch-stats">' +
+      '<div class="mswitch-stat"><div class="mswitch-stat-value" style="color:var(--green)">' + enabled + '</div><div class="mswitch-stat-label">已启用</div></div>' +
+      '<div class="mswitch-stat"><div class="mswitch-stat-value" style="color:var(--red)">' + disabled + '</div><div class="mswitch-stat-label">已禁用</div></div>' +
+      '<div class="mswitch-stat"><div class="mswitch-stat-value">' + total + '</div><div class="mswitch-stat-label">总计</div></div>' +
+    '</div>' +
+    '<div class="mswitch-grid">';
+
+  modEntries.forEach(function(pair) {
+    var mid = pair[0], en = pair[1];
+    var info = nameMap[mid] || {name: mid, can_disable: false};
+    var name = info.name || mid;
+    var cls = en ? '' : ' disabled';
+    var badge;
+    if (!info.can_disable) badge = '<span class="mswitch-badge fixed">固定</span>';
+    else if (en) badge = '<span class="mswitch-badge on">启用</span>';
+    else badge = '<span class="mswitch-badge off">禁用</span>';
+    var toggleHtml;
+    if (info.can_disable) {
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      if (en) cb.checked = true;
+      cb.style.cssText = 'width:36px;height:20px;cursor:pointer';
+      cb.setAttribute('data-mid', mid);
+      cb.addEventListener('change', function(ev) { toggleModule(ev.target.getAttribute('data-mid'), ev.target.checked); });
+      toggleHtml = cb.outerHTML;
+    } else {
+      toggleHtml = '<span style="color:var(--text3);font-size:11px">—</span>';
+    }
+    html += '<div class="mswitch-card' + cls + '"><span class="mswitch-name">' + name + '</span>' + badge + toggleHtml + '</div>';
+  });
+
+  html += '</div></div>';
+  main.innerHTML = html;
+}
+
+async function toggleModule(mid, enabled) {
+  try {
+    await api('/api/module-toggle/toggle', {method:'PATCH', body: JSON.stringify({module_id:mid, enabled:enabled})});
+    toast((enabled?'启用':'禁用')+'成功','ok');
+    renderModuleSwitch(document.getElementById('main'));
+    updateNav();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// 
 const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
   { id: 'announcements', name: '公告',     emoji: '📢' },
@@ -413,6 +492,10 @@ const MODULES = [
 
   { id: 'notification-settings', name: '通知设置', emoji: '🔧' },
   { id: 'registrations', name: '账号管理', emoji: '👤' },
+  { id: 'module-switch', name: '模块开关', emoji: '🔧' },
+  { id: 'performance', name: '绩效考核', emoji: '📊' },
+  { id: 'recruitment', name: '招聘管理', emoji: '🎯' },
+  { id: 'audit-log', name: '操作日志', emoji: '📋' },
 ];
 
 // 用户收藏的业务模块（默认：CRM、财务、审批）
@@ -737,7 +820,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, moduleSwitch:renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -3423,6 +3506,43 @@ async function loadNotifications(filter) {
     };
   });
   return _notifData;
+}
+
+async function renderPerformance(main) {
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📊</span> 绩效考核</div><div class="skeleton-block"></div></div>';
+  var data = await api('/api/performance');
+  var items = data.items || [];
+  var sMap = {self_review:'<span class="badge badge-warning">自评中</span>', manager_review:'<span class="badge badge-primary">经理评审</span>', finalized:'<span class="badge badge-success">已定稿</span>'};
+  var rows = items.map(function(r) {
+    return '<tr><td>' + r.employee_name + '</td><td>' + r.department + '</td><td>' + r.period +
+      '</td><td>' + (r.self_score||'—') + '</td><td>' + (r.manager_score||'—') + '</td><td>' +
+      (r.overall_score||'—') + '</td><td>' + (sMap[r.status]||r.status) + '</td></tr>';
+  });
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📊</span> 绩效考核 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 条</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>员工</th><th>部门</th><th>周期</th><th>自评分</th><th>经理分</th><th>总分</th><th>状态</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
+}
+
+async function renderRecruitment(main) {
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🎯</span> 招聘管理</div><div class="skeleton-block"></div></div>';
+  var data = await api('/api/recruitment');
+  var items = data.items || [];
+  var sMap = {open:'<span class="badge badge-success">招聘中</span>', paused:'<span class="badge badge-warning">暂停</span>', closed:'<span class="badge badge-info">已关闭</span>', cancelled:'<span class="badge badge-danger">已取消</span>'};
+  var rows = items.map(function(r) {
+    return '<tr><td>' + r.position + '</td><td>' + r.department + '</td><td>' + r.headcount +
+      '</td><td>' + (r.resume_count||0) + '</td><td>' + (r.interview_count||0) + '</td><td>' +
+      (r.hire_count||0) + '</td><td>' + (sMap[r.status]||r.status) + '</td></tr>';
+  });
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🎯</span> 招聘管理 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 个职位</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>职位</th><th>部门</th><th>人数</th><th>简历数</th><th>面试数</th><th>录用数</th><th>状态</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
+}
+
+async function renderAuditLog(main) {
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志</div><div class="skeleton-block"></div></div>';
+  var data = await api('/api/audit-log');
+  var items = data.items || [];
+  var rows = items.map(function(r) {
+    return '<tr><td>' + r.created_at + '</td><td>' + r.username + '</td><td>' + r.module +
+      '</td><td>' + r.action + '</td><td>' + (r.detail||'') + '</td><td>' + (r.ip||'') + '</td></tr>';
+  });
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 条</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>时间</th><th>用户</th><th>模块</th><th>操作</th><th>详情</th><th>IP</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
 }
 
 async function renderNotifications(el) {
