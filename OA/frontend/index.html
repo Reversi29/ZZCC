@@ -208,6 +208,19 @@
 .rep-status-draft { background:#f0f0f0; color:#666; }
 .rep-status-submitted { background:#e8f5e9; color:#2e7d32; }
 .rep-body { font-size:13px; color:var(--text2); line-height:1.5; white-space:pre-wrap; }
+
+.mtg-item { padding:10px 12px; border:1px solid var(--border); border-radius:6px; margin-bottom:8px; background:var(--surface); }
+.mtg-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+.mtg-title { font-size:14px; font-weight:600; color:var(--text); }
+.mtg-type { font-size:11px; padding:1px 6px; border-radius:8px; }
+.mtg-type-regular { background:#e8f5e9; color:#2e7d32; }
+.mtg-type-standup { background:#e3f2fd; color:#1565c0; }
+.mtg-type-review { background:#fff3e0; color:#e65100; }
+.mtg-meta { font-size:11px; color:var(--text3); }
+.mtg-minutes { font-size:13px; color:var(--text2); line-height:1.5; margin-top:4px; padding:4px 0; }
+.mtg-decisions, .mtg-actions { font-size:12px; margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
+.mtg-chip { font-size:11px; padding:2px 8px; background:var(--surface2); border-radius:8px; }
+.mtg-todo { color:#e65100; }
 </style>
 </head>
 <body>
@@ -300,6 +313,7 @@ const MODULES = [
   { id: 'calendar',    name: '日程',     emoji: '📅' },
   { id: 'directory',   name: '通讯录',    emoji: '📇' },
   { id: 'reports',     name: '日报周报',   emoji: '📝' },
+  { id: 'meetings',    name: '会议纪要',   emoji: '📋' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -647,7 +661,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1838,6 +1852,68 @@ function showReportForm() {
   if (!content) return;
   api('/api/reports/create','POST',{title:title,report_type:_repType,report_date:today,content:content,status:'draft'})
     .then(() => { toast('新建成功','success'); _loadReports(); })
+    .catch(e => toast('失败: '+e.message,'error'));
+}
+
+
+// ── 会议纪要 ─────────────────────────────────────────────
+let _mtgType = "all";
+
+async function renderMeetings(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">📋</span> 会议纪要 <button class="btn btn-primary" style="margin-left:auto" onclick="showMtgForm()">＋ 新建</button></div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn btn-${_mtgType==='all'?'primary':'default'}" onclick="_setMtgType('all')">全部</button>
+        <button class="btn btn-${_mtgType==='regular'?'primary':'default'}" onclick="_setMtgType('regular')">例会</button>
+        <button class="btn btn-${_mtgType==='standup'?'primary':'default'}" onclick="_setMtgType('standup')">晨会</button>
+        <button class="btn btn-${_mtgType==='review'?'primary':'default'}" onclick="_setMtgType('review')">评审</button>
+      </div>
+      <div id="mtgList"></div>
+    </div>`;
+  await _loadMtg();
+}
+
+function _setMtgType(t) { _mtgType = t; renderMeetings(document.getElementById('main')); }
+
+async function _loadMtg() {
+  const c = document.getElementById('mtgList');
+  c.innerHTML = '<div class="empty">加载中...</div>';
+  let data = { items: [] };
+  try { data = (await api('/api/meetings/list','GET',{meeting_type:_mtgType})).data; } catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const items = data.items || [];
+  if (!items.length) { c.innerHTML = '<div class="empty">暂无会议纪要</div>'; return; }
+  c.innerHTML = items.map(m => `
+    <div class="mtg-item">
+      <div class="mtg-head">
+        <span class="mtg-title">${esc(m.title)}</span>
+        <span class="mtg-type badge mtg-type-${m.meeting_type}">${_mtgTypeLabel(m.meeting_type)}</span>
+        <span class="mtg-meta">${m.meeting_date} · ${m.duration_minutes||60}分钟 · ${esc(m.organizer)}</span>
+      </div>
+      <div class="mtg-meta">${m.location?'📍 '+esc(m.location):''} ${m.attendees?'· 👥 '+esc(m.attendees):''}</div>
+      <div class="mtg-minutes">${(m.minutes||'').replace(/\n/g,'<br>')}</div>
+      ${m.decisions && m.decisions.length ? `<div class="mtg-decisions"><b>决策项：</b>${m.decisions.map(d=>'<span class="mtg-chip">✅ '+esc(d.item)+'</span>').join(' ')}</div>` : ''}
+      ${m.action_items && m.action_items.length ? `<div class="mtg-actions"><b>待办：</b>${m.action_items.map(a=>'<span class="mtg-chip mtg-todo">⬜ '+esc(a.item)+' ('+esc(a.assignee)+')</span>').join(' ')}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function _mtgTypeLabel(t) {
+  return {regular:'例会',standup:'晨会',review:'评审',other:'其他'}[t] || t;
+}
+
+function showMtgForm() {
+  const title = prompt('会议标题：');
+  if (!title) return;
+  const mtgType = prompt('会议类型(regular/standup/review/other)：', 'regular') || 'regular';
+  const date = prompt('会议时间(YYYY-MM-DD HH:mm)：', '2026-08-22 10:00') || '';
+  const duration = prompt('时长(分钟)：', '60') || '60';
+  const location = prompt('地点：', '');
+  const attendees = prompt('参与人(逗号分隔)：', '');
+  const minutes = prompt('会议纪要：');
+  if (minutes === null) return;
+  api('/api/meetings/create','POST',{title,meeting_type:mtgType,meeting_date:date,duration_minutes:parseInt(duration)||60,location,attendees,minutes})
+    .then(() => { toast('会议记录创建成功','success'); _loadMtg(); })
     .catch(e => toast('失败: '+e.message,'error'));
 }
 

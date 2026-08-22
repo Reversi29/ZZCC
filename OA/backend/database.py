@@ -544,3 +544,20 @@ class DailyReport(Base, Timestamped):
     content = Column(Text, nullable=False)  # 报告正文
     author = Column(String(255), nullable=False)  # 作者 username
     status = Column(String(20), nullable=False, default="draft")  # draft / submitted
+
+
+class Meeting(Base, Timestamped):
+    """会议纪要"""
+    __tablename__ = "meetings"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=False)  # 会议标题
+    meeting_type = Column(String(50), nullable=False, default="regular")  # regular / standup / review / other
+    meeting_date = Column(DateTime, nullable=False)  # 会议时间
+    duration_minutes = Column(Integer, default=60)  # 时长(分钟)
+    location = Column(String(255), nullable=True)  # 地点
+    organizer = Column(String(255), nullable=False)  # 组织者 username
+    attendees = Column(String(500), nullable=True)  # 参与人(逗号分隔)
+    minutes = Column(Text, nullable=True)  # 会议纪要
+    decisions = Column(Text, nullable=True)  # 决策项 JSON
+    action_items = Column(Text, nullable=True)  # 待办项 JSON
+    status = Column(String(20), nullable=False, default="scheduled")  # scheduled / completed / archived

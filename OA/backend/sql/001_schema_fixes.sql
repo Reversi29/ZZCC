@@ -63,3 +63,22 @@ CREATE TABLE IF NOT EXISTS daily_reports (
     modified TEXT NULL,
     modified_by TEXT DEFAULT 'Administrator'
 );
+
+-- 会议纪要表（P4.24）
+CREATE TABLE IF NOT EXISTS meetings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    meeting_type TEXT NOT NULL DEFAULT 'regular',
+    meeting_date TEXT NOT NULL,
+    duration_minutes INTEGER DEFAULT 60,
+    location TEXT,
+    organizer TEXT NOT NULL,
+    attendees TEXT,
+    minutes TEXT,
+    decisions TEXT,
+    action_items TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    creation TEXT,
+    modified TEXT,
+    modified_by TEXT DEFAULT 'Administrator'
+);
