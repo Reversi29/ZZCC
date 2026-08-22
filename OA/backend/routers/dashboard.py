@@ -100,6 +100,15 @@ def mark_notifications_read(
 
 PENDING_STATUSES = {"Draft", "Submitted"}
 
+DOCTYPE_CN = {
+    "ExpenseClaim": "报销单",
+    "PurchaseOrder": "采购单",
+    "JournalEntry": "会计凭证",
+    "LeaveRequest": "请假单",
+    "Contract": "合同",
+    "Project": "项目",
+}
+
 
 def _pending_by_type(db: Session) -> dict:
     from database import Base
@@ -121,5 +130,5 @@ def _pending_by_type(db: Session) -> dict:
             result[doctype] = 0
             continue
         q = select(func.count()).select_from(tbl).where(status_col.in_(PENDING_STATUSES))
-        result[doctype] = db.execute(q).scalar() or 0
+        result[DOCTYPE_CN.get(doctype, doctype)] = db.execute(q).scalar() or 0
     return result
