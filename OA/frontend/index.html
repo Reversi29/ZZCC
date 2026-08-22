@@ -185,6 +185,21 @@
 .cal-event-more { font-size:10px; color:var(--text3); padding:1px 4px; }
 .cal-events { }
 .cal-event-row { display:flex; align-items:center; }
+
+.dir-dept-head { display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; cursor:pointer; font-size:13px; }
+.dir-dept-head:hover { background:var(--surface); }
+.dir-icon { font-size:14px; }
+.dir-name { font-weight:600; color:var(--text); }
+.dir-meta { font-size:11px; color:var(--text3); margin-left:4px; }
+.dir-dept-body { padding:2px 0 6px 8px; }
+.dir-collapse { display:none; }
+.dir-collapse.show { display:block; }
+.dir-member { padding:2px 6px; font-size:12px; display:flex; align-items:center; gap:4px; color:var(--text2); }
+.dir-avatar { display:inline-flex; width:20px; height:20px; border-radius:50%; align-items:center; justify-content:center; font-size:10px; color:#fff; font-weight:600; }
+.dir-member-search { display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); }
+.dir-info { flex:1; }
+.dir-info .dir-name { font-size:13px; font-weight:600; }
+.dir-info .dir-meta { font-size:11px; color:var(--text3); }
 </style>
 </head>
 <body>
@@ -275,6 +290,7 @@ const MODULES = [
   { id: 'dashboard',   name: '总览',     emoji: '🏠' },
   { id: 'announcements', name: '公告',     emoji: '📢' },
   { id: 'calendar',    name: '日程',     emoji: '📅' },
+  { id: 'directory',   name: '通讯录',    emoji: '📇' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -622,7 +638,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1686,6 +1702,84 @@ async function showDayEvents(key) {
       <span style="font-size:13px;color:var(--text)">${esc(e.title)}</span>
       <span style="font-size:11px;color:var(--text3);margin-left:8px">[${e.doctype}]</span>
     </div>`).join(''); }
+}
+
+
+// ── 组织通讯录 ─────────────────────────────────────────────
+let _dirCache = null;
+
+async function renderDirectory(el) {
+  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📇</span> 组织通讯录</div><div id="dirContent"><div class="empty">加载中...</div></div></div>';
+  await _loadDir();
+}
+
+async function _loadDir() {
+  const c = document.getElementById('dirContent');
+  let data = { tree: [], length: 0 };
+  try { data = (await api('/api/directory/tree')).data; } catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input type="text" id="dirSearch" placeholder="搜索员工/职位..." class="input" style="flex:1;max-width:240px;padding:4px 8px;font-size:12px" oninput="searchDir(this.value)">
+      <button class="btn btn-default" onclick="_loadDir()">↻ 刷新</button>
+    </div>
+    <div id="dirTree">${_renderDirTree(data.tree, 0)}</div>
+  `;
+}
+
+function _renderDirTree(nodes, depth) {
+  if (!nodes || !nodes.length) return '';
+  return nodes.map(n => `
+    <div class="dir-dept" style="margin-left:${depth*24}px;margin-bottom:6px">
+      <div class="dir-dept-head" onclick="toggleDirDept('${n.name}')">
+        <span class="dir-icon">${n.children && n.children.length ? '📂' : '📁'}</span>
+        <span class="dir-name">${esc(n.department_name)}</span>
+        <span class="dir-meta">${n.member_count||0} 人</span>
+      </div>
+      <div class="dir-dept-body dir-collapse" id="dir_${n.name}">
+        ${n.members ? n.members.map(m => `<div class="dir-member">${_avatar(m)} ${esc(m)}</div>`).join('') : '<div class="empty" style="font-size:11px">暂无成员</div>'}
+      </div>
+      ${n.children ? _renderDirTree(n.children, depth+1) : ''}
+    </div>
+  `).join('');
+}
+
+function toggleDirDept(name) {
+  const el = document.getElementById('dir_'+name);
+  if (el) el.classList.toggle('dir-collapse');
+}
+
+function _avatar(name) {
+  const colors = ['#4a90d9','#27ae60','#e74c3c','#f39c12','#8e44ad','#16a085','#d35400','#2c3e50'];
+  const c = colors[name.charCodeAt(0)%colors.length];
+  return `<span class="dir-avatar" style="background:${c}">${(name||'?').substring(0,1)}</span>`;
+}
+
+async function searchDir(q) {
+  const c = document.getElementById('dirContent');
+  if (!q.trim()) { _loadDir(); return; }
+  let data = { items: [] };
+  try { data = (await api('/api/directory/search','GET',{q})).data; } catch(e){ toast('搜索失败: '+e.message,'error'); return; }
+  const items = data.items || [];
+  c.innerHTML = `
+    <div style="font-size:13px;margin-bottom:8px">
+      搜索结果：<b>${items.length}</b> 位
+      <button class="btn btn-default" style="font-size:11px;margin-left:8px" onclick="_loadDir()">← 返回目录</button>
+    </div>
+    <div id="dirSearchResults">
+      ${items.map(e => `
+        <div class="dir-member-search">
+          <span class="dir-avatar" style="background:var(--accent);width:28px;height:28px;font-size:12px">
+            ${(e.name||'?').substring(0,1)}
+          </span>
+          <div class="dir-info">
+            <div class="dir-name">${esc(e.name)}</div>
+            <div class="dir-meta">${esc(e.designation||'')}${e.department?' · '+esc(e.department):''}</div>
+            <div class="dir-meta">${(e.email||'')+(e.phone?' · '+e.phone:'')}</div>
+          </div>
+        </div>`).join('')}
+      ${!items.length ? '<div class="empty">未找到匹配结果</div>' : ''}
+    </div>
+  `;
 }
 
 async function renderSimple(el) {
