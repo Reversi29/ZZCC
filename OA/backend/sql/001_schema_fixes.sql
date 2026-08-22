@@ -107,3 +107,17 @@ CREATE TABLE IF NOT EXISTS form_submissions (
     modified TEXT,
     modified_by TEXT DEFAULT 'Administrator'
 );
+
+CREATE TABLE IF NOT EXISTS net_files (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    parent_id INTEGER NULL,
+    name TEXT NOT NULL,
+    file_size INTEGER DEFAULT 0,
+    mime_type TEXT,
+    is_dir INTEGER DEFAULT 0,
+    uploaded_by TEXT NOT NULL,
+    share_code TEXT,
+    creation TEXT,
+    modified TEXT,
+    modified_by TEXT DEFAULT 'Administrator'
+);

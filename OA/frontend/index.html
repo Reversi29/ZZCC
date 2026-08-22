@@ -242,6 +242,16 @@
 .fd-item-meta { font-size:11px; color:var(--text3); }
 .fd-item-actions { display:flex; gap:4px; }
 .fd-list { max-height:400px; overflow-y:auto; }
+
+.nd-toolbar { display:flex; gap:6px; margin-bottom:12px; }
+.nd-table { width:100%; border-collapse:collapse; }
+.nd-table th, .nd-table td { padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; font-size:13px; }
+.nd-table th { background:var(--surface2); font-weight:600; font-size:12px; color:var(--text2); }
+.nd-icon { margin-right:4px; }
+.nd-meta { font-size:11px; color:var(--text3); }
+.nd-actions { display:flex; gap:2px; }
+.nd-share-badge { font-size:10px; padding:1px 4px; background:#e8f5e9; border-radius:8px; color:#2e7d32; margin-left:4px; }
+.nd-dir td { background:var(--surface2); }
 </style>
 </head>
 <body>
@@ -336,6 +346,7 @@ const MODULES = [
   { id: 'reports',     name: '日报周报',   emoji: '📝' },
   { id: 'meetings',    name: '会议纪要',   emoji: '📋' },
   { id: 'forms',       name: '表单设计',   emoji: '📐' },
+  { id: 'netdrive',    name: '企业网盘',   emoji: '☁️' },
   { id: 'analytics',   name: '统计概览', emoji: '📊' },
   { id: 'crm',         name: 'CRM线索',  emoji: '💼', doctype: 'Lead' },
   { id: 'contacts',    name: '联系人',    emoji: '📒', doctype: 'Contact' },
@@ -683,7 +694,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -2121,6 +2132,123 @@ async function fdResults(tid) {
         ${sub.items.length ? `<table><thead><tr><th>#</th>${tpl?tpl.schema.map(f=>'<th>'+esc(f.label)+'</th>').join(''):''}<th>提交人</th><th>时间</th></tr></thead><tbody>${sub.items.map(r=>`<tr><td>${r.id}</td>${tpl?tpl.schema.map(f=>'<td>'+(r.data[f.id]!=null?esc(r.data[f.id]):'-')+'</td>').join(''):''}<td>${esc(r.submitted_by)}</td><td>${r.created}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">暂无填写记录</div>'}
       </div>
     </div>`;
+}
+
+// ── 企业网盘 ─────────────────────────────────────────────
+let _ndParent = -1;
+
+async function renderNetDrive(el) {
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span class="emoji">☁️</span> 企业网盘 <span id="nd-breadcrumb" onclick="ndGoRoot()"></span></div>
+      <div class="nd-toolbar">
+        <button class="btn btn-default" onclick="ndMkdir()">📁 新建目录</button>
+        <button class="btn btn-primary" onclick="document.getElementById('ndUpload').click()">⬆ 上传文件</button>
+        <input type="file" id="ndUpload" style="display:none" onchange="ndUpload(this)" multiple>
+      </div>
+      <div id="ndList"></div>
+    </div>`;
+  await _ndLoad();
+}
+
+async function _ndLoad() {
+  const c = document.getElementById('ndList');
+  let data = {items:[]};
+  try { data = (await api('/api/netdrive/list','GET',{parent_id:_ndParent})).data; }
+  catch(e){ toast('加载失败: '+e.message,'error'); return; }
+  const items = data.items || [];
+  c.innerHTML = `
+    <table class="nd-table">
+      <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>上传人</th><th>时间</th><th>操作</th></tr></thead>
+      <tbody>
+        ${items.length ? items.map(f => `
+          <tr class="${f.is_dir?'nd-dir':''}">
+            <td onclick="${f.is_dir?'ndEnter('+f.id+')':''}">
+              <span class="nd-icon">${f.is_dir?'📁':'📄'}</span> ${esc(f.name)}
+              ${f.share_code?'<span class="nd-share-badge">🔗 已分享</span>':''}
+            </td>
+            <td class="nd-meta">${f.is_dir?'目录':(f.mime_type||'')}</td>
+            <td class="nd-meta">${_ndSize(f.file_size)}</td>
+            <td class="nd-meta">${esc(f.uploaded_by)}</td>
+            <td class="nd-meta">${f.created}</td>
+            <td class="nd-actions">
+              ${f.is_dir?'<button class="btn btn-sm" onclick="event.stopPropagation();ndRename('+f.id+')">✏️</button><button class="btn btn-sm" onclick="event.stopPropagation();ndDelete('+f.id+')">🗑️</button>':'<button class="btn btn-sm" onclick="event.stopPropagation();ndDownload('+f.id+')">⬇️</button><button class="btn btn-sm" onclick="event.stopPropagation();ndShare('+f.id+')">🔗</button><button class="btn btn-sm" onclick="event.stopPropagation();ndRename('+f.id+')">✏️</button><button class="btn btn-sm" onclick="event.stopPropagation();ndDelete('+f.id+')">🗑️</button>'}
+            </td>
+          </tr>`).join('') : '<tr><td colspan="6"><div class="empty">📂 空目录</div></td></tr>'}
+      </tbody>
+    </table>`;
+  _ndBreadcrumb();
+}
+
+function _ndSize(b) {
+  if (!b) return '';
+  if (b < 1024) return b+'B';
+  if (b < 1048576) return (b/1024).toFixed(1)+'KB';
+  return (b/1048576).toFixed(1)+'MB';
+}
+
+async function ndEnter(id) { _ndParent = id; await _ndLoad(); }
+function ndGoRoot() { _ndParent = -1; _ndLoad(); }
+
+function _ndBreadcrumb() {
+  const el = document.getElementById('nd-breadcrumb');
+  el.innerHTML = _ndParent === -1 ? ' / 根目录' : ' / <span style="color:var(--accent);cursor:pointer" onclick="ndGoRoot()">根目录</span> / ...';
+}
+
+async function ndMkdir() {
+  const name = prompt('目录名称：');
+  if (!name) return;
+  try { await api('/api/netdrive/mkdir','POST',JSON.stringify({name,parent_id:_ndParent})); toast('创建成功','success'); _ndLoad(); }
+  catch(e){ toast('失败: '+e.message,'error'); }
+}
+
+async function ndUpload(input) {
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  fd.append('parent_id', _ndParent);
+  const token = localStorage.getItem('oa_token');
+  const hdrs = {};
+  if (token) hdrs['Authorization'] = 'Bearer ' + token;
+  try {
+    const r = await fetch(API + '/api/netdrive/upload', {method:'POST',headers:hdrs,body:fd});
+    const j = await r.json();
+    if (r.ok) { toast('上传成功','success'); input.value = ''; _ndLoad(); }
+    else toast('上传失败: '+(j.detail||''), 'error');
+  } catch(e){ toast('上传失败: '+e.message,'error'); }
+}
+
+async function ndDownload(fid) {
+  window.open('/api/netdrive/download/'+fid, '_blank');
+}
+
+async function ndShare(fid) {
+  try {
+    const r = await api('/api/netdrive/share/'+fid,'POST');
+    if (r.data && r.data.share_code) {
+      const link = window.location.origin + '/api/netdrive/download/'+fid;
+      toast('分享链接: '+link+' (code: '+r.data.share_code+')','success');
+      _ndLoad();
+    }
+  } catch(e){ toast('失败: '+e.message,'error'); }
+}
+
+async function ndRename(fid) {
+  let data = {items:[]};
+  try { data = (await api('/api/netdrive/list','GET',{parent_id:_ndParent})).data; }
+  catch(e){ return; }
+  const f = data.items.find(x=>x.id===fid);
+  if (!f) return;
+  const name = prompt('重命名：', f.name);
+  if (!name) return;
+  try { await api('/api/netdrive/rename/'+fid,'PUT',{name}); toast('已重命名','success'); _ndLoad(); }
+  catch(e){ toast('失败: '+e.message,'error'); }
+}
+
+async function ndDelete(fid) {
+  if (!confirm('确认删除？')) return;
+  try { await api('/api/netdrive/delete/'+fid,'DELETE'); toast('已删除','success'); _ndLoad(); }
+  catch(e){ toast('失败: '+e.message,'error'); }
 }
 
 async function renderSimple(el) {

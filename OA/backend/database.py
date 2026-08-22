@@ -583,3 +583,17 @@ class FormSubmission(Base, Timestamped):
     data = Column(Text, nullable=False)  # JSON: {field_id: value}
     submitted_by = Column(String(255), nullable=False)
     status = Column(String(20), nullable=False, default="submitted")
+
+
+
+class NetFile(Base, Timestamped):
+    """企业网盘文件记录"""
+    __tablename__ = "net_files"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    parent_id = Column(Integer, nullable=True)  # 父目录ID, NULL=根
+    name = Column(String(255), nullable=False)
+    file_size = Column(Integer, default=0)  # bytes
+    mime_type = Column(String(100), nullable=True)
+    is_dir = Column(Boolean, default=False, nullable=False)
+    uploaded_by = Column(String(255), nullable=False)
+    share_code = Column(String(20), nullable=True)  # 分享码
