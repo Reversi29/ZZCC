@@ -265,6 +265,7 @@ const MODULES = [
   { id: 'stock',        name: '资产行政',  emoji: '📦', doctype: 'Item' },
   { id: 'ai',          name: 'AI 咨询',  emoji: '🤖' },
   { id: 'workflow',    name: '审批',     emoji: '📝' },
+  { id: 'notifications', name: '通知',     emoji: '🔔' },
   { id: 'registrations', name: '账号管理', emoji: '👤' },
 ];
 
@@ -590,7 +591,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, registrations:renderRegistrations };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -1607,6 +1608,99 @@ init();
 
 // Notifications
 let notifPanelOpen=false; let _cachedNotifs={items:[],unread_count:0};
+
+
+
+
+// ── 通知列表页 ──────────────────────────────────────────────
+let _notifFilter = 'unread';
+let _notifData = [];
+
+async function loadNotifications(filter) {
+  _notifFilter = filter || 'unread';
+  const u = getCurrentUser();
+  const username = u.username || u.user || 'admin';
+  const res = await api('/api/workflow/notifications?recipient=' + encodeURIComponent(username));
+  _notifData = (res.items || []).map(function(n) {
+    return {
+      ...n,
+      isNew: !n.is_read,
+      typeLabel: ({approval_request:'待审批',approval_result:'审批结果',system:'系统',warning:'警告'}[n.ntype] || n.ntype || ''),
+      priorityLabel: ({urgent:'紧急',normal:'普通',low:'低'}[n.priority] || n.priority || ''),
+      priorityColor: n.priority === 'urgent' ? '#d33' : '#888',
+      timeLabel: n.created ? n.created.slice(0,16).replace('T',' ') : '',
+      hasDoc: !!n.doc_name,
+    };
+  });
+  return _notifData;
+}
+
+async function renderNotifications(el) {
+  const u = getCurrentUser();
+  const username = u.username || u.user || 'admin';
+  el.innerHTML = '<div class="card">'
+    + '<div class="card-title"><span class="emoji">🔔</span> 通知中心 <span id="notif-count-badge" style="font-size:12px;color:var(--text2);margin-left:8px">加载中...</span></div>'
+    + '<div style="display:flex;gap:4px;padding:6px 0">'
+    + '<button class="btn-sm" data-nf-filter="unread">未读</button>'
+    + '<button class="btn-sm" data-nf-filter="all">全部</button>'
+    + '<button class="btn-sm" data-nf-filter="read">已读</button>'
+    + '<button class="btn-sm" data-nf-action="markAll" style="margin-left:auto">✓ 全部已读</button>'
+    + '</div>'
+    + '<div id="notif-items"></div>'
+    + '</div>';
+  el.querySelector('[data-nf-filter="unread"]').addEventListener('click', function() { loadNotifications('unread'); renderNotifications(document.getElementById('main')); });
+  el.querySelector('[data-nf-filter="all"]').addEventListener('click', function() { loadNotifications('all'); renderNotifications(document.getElementById('main')); });
+  el.querySelector('[data-nf-filter="read"]').addEventListener('click', function() { loadNotifications('read'); renderNotifications(document.getElementById('main')); });
+  el.querySelector('[data-nf-action="markAll"]').addEventListener('click', function() { markAllNotifRead(username); });
+  await _renderNotifList(el);
+}
+
+async function _renderNotifList(el) {
+  await loadNotifications(_notifFilter);
+  const itemsDiv = document.getElementById('notif-items');
+  if (!itemsDiv) return;
+  const filtered = _notifData.filter(function(n) {
+    if (_notifFilter === 'unread') return !n.is_read;
+    if (_notifFilter === 'read') return n.is_read;
+    return true;
+  });
+  const badge = document.getElementById('notif-count-badge');
+  if (badge) badge.textContent = '未读 ' + _notifData.filter(function(n){return n.isNew}).length + ' / 共 ' + _notifData.length + ' 条';
+
+  if (filtered.length === 0) {
+    itemsDiv.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2)"><div style="font-size:32px">🔕</div>暂无通知</div>';
+    return;
+  }
+  const rows = filtered.map(function(n) {
+    var border = n.isNew ? 'var(--accent)' : '#e0e0e0';
+    var bg = n.isNew ? '#f0f6ff' : '#fff';
+    var dot = n.isNew ? '● ' : '○ ';
+    var docHtml = '';
+    if (n.hasDoc) {
+      docHtml = '<a href="#" data-nid="' + n.id + '" data-docname="' + n.doc_name + '" data-doctype="' + n.doctype + '" style="font-weight:600;color:var(--accent);font-size:12px">' + n.doc_name + ' →</a>';
+    }
+    return '<div style="border-left:3px solid ' + border + ';background:' + bg + ';padding:8px 12px;margin-bottom:4px;border-radius:4px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center">'
+      + '<b style="font-size:12px">' + dot + n.title + '</b>'
+      + '<span style="font-size:11px;color:' + n.priorityColor + '">' + n.priorityLabel + '</span></div>'
+      + '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + n.body + ' ' + docHtml + '</div>'
+      + '<div style="font-size:11px;color:#aaa;margin-top:2px">' + n.timeLabel + ' · ' + n.typeLabel + '</div></div>';
+  });
+  itemsDiv.innerHTML = rows.join('');
+  itemsDiv.querySelectorAll("[data-nid]").forEach(function(e){e.addEventListener("click",function(a){a.preventDefault();markNotifRead(parseInt(e.getAttribute("data-nid")));if(e.getAttribute("data-docname"))showWfDoc(e.getAttribute("data-doctype"),e.getAttribute("data-docname"));});});
+}
+
+async function markNotifRead(id) {
+  const u = getCurrentUser();
+  const username = u.username || u.user || 'admin';
+  await api('/api/workflow/notifications/' + id + '/read?recipient=' + encodeURIComponent(username), { method:'POST' });
+  renderNotifications(document.getElementById('main'));
+}
+
+async function markAllNotifRead(username) {
+  await api('/api/workflow/notifications/read-all?recipient=' + encodeURIComponent(username), { method:'POST' });
+  renderNotifications(document.getElementById('main'));
+}
 
 async function fetchNotifications(){
   try{
