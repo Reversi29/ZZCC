@@ -16,10 +16,18 @@ class R(BaseModel):
     data: Optional[dict | list] = None; message: Optional[str] = None
 
 def _upsert(cls, name, data, db, update=True):
+    from datetime import date as _date
+    import json as _json
     m = db.query(cls).filter(cls.name == name).first() if update else None
     if not m: m = cls(name=name); db.add(m)
     for k, v in data.items():
-        if k not in ("name",) and hasattr(m, k): setattr(m, k, v)
+        if k not in ("name",) and hasattr(m, k):
+            if isinstance(v, str) and k.endswith("_date") and v:
+                try: v = _date.fromisoformat(v)
+                except: pass
+            elif isinstance(v, (dict, list)):
+                v = _json.dumps(v, ensure_ascii=False)
+            setattr(m, k, v)
     return m
 
 @router.get("/Contract", response_model=R)

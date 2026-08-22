@@ -254,7 +254,7 @@ const MODULES = [
   { id: 'tasks',       name: '任务管理',  emoji: '✅', doctype: 'Task' },
   { id: 'procurement', name: '采购',     emoji: '🛒', doctype: 'Purchase Order' },
   { id: 'finance',     name: '财务',     emoji: '💰' },
-  { id: 'compliance',  name: '法务合规',  emoji: '⚖️',  doctype: 'Contract' },
+  { id: 'compliance',  name: '合同管理',  emoji: '⚖️',  doctype: 'Contract' },
       { id: 'quality',     name: '质量检验',  emoji: '🔍', doctype: 'Quality Inspection' },
       { id: 'tickets',     name: '客服工单',  emoji: '🎫', doctype: 'Support Ticket' },
   { id: 'hr',          name: '人力资源',  emoji: '👔', doctype: 'Employee' },
@@ -593,7 +593,7 @@ function navigate(id) { currentModule = id; renderNav(); render(); }
 // ── Render ───────────────────────────────────────────────────
 function render() {
   const main = document.getElementById('main');
-  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
+  const map = { dashboard:renderDashboard, crm:renderSimple, contacts:renderSimple, opportunities:renderSimple, compliance:renderContract, project:renderSimple, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
     stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations };
   if (main) {
@@ -1198,6 +1198,110 @@ async function _saveSup(name) {
   } catch(e) { toast('保存失败: '+e.message,'error'); }
 }
 
+
+// ── 通用导出 Excel ────────────────────────────────────────────
+async function exportExcel(doctype) {
+  const url = '/api/export/' + encodeURIComponent(doctype) + '?format=xlsx';
+  try {
+    const res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + (getCurrentUser()?.access_token || '') },
+      credentials: 'same-origin'
+    });
+    if (!res.ok) throw new Error('导出失败: ' + res.statusText);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = doctype + '.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  } catch(e) { toast('导出失败: ' + e.message, 'error'); }
+}
+function renderExportBtn(doctype) {
+  return '<button class="btn" onclick="exportExcel(\'' + doctype + '\')" style="font-size:11px">📥 导出Excel</button>';
+}
+
+// ── 合同管理专用页 ────────────────────────────────────────────
+const _CSTAT = {Draft:'#888',Submitted:'#1976d2',Approved:'#388e3c',Rejected:'#d33',Signed:'#388e3c',Terminated:'#aaa'};
+
+async function renderContract(el) {
+  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">⚖️</span> 合同管理 <span style="float:right">' + renderExportBtn('Contract') + '</span></div>'
+    + '<div class="tabs">'
+    + '<button class="tab active" data-tab="active">生效中</button>'
+    + '<button class="tab" data-tab="pending">待审</button>'
+    + '<button class="tab" data-tab="expired">已过期</button>'
+    + '<button class="tab" data-tab="all">全部</button>'
+    + '</div><div id="ct-content"></div></div>';
+  el.querySelectorAll('.tab').forEach(function(t) {
+    t.addEventListener('click', function() {
+      el.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active')});
+      t.classList.add('active'); switchCtTab(t.dataset.tab);
+    });
+  });
+  await switchCtTab('active');
+}
+
+async function switchCtTab(tab) {
+  const c = document.getElementById('ct-content');
+  c.innerHTML = '<div class="empty">⏳ 加载中...</div>';
+  let rows = [];
+  try { rows = await apiGet('Contract'); } catch(e) { toast('加载失败: '+e.message,'error'); return; }
+  const now = new Date().toISOString().slice(0,10);
+  if (tab==='active') rows = rows.filter(function(r){return r.end_date>=now&&(r.status==='Approved'||r.status==='Signed');});
+  else if (tab==='pending') rows = rows.filter(function(r){return r.status==='Draft'||r.status==='Submitted';});
+  else if (tab==='expired') rows = rows.filter(function(r){return r.end_date<now;});
+  if (!rows.length) { c.innerHTML='<div class="empty">暂无合同</div>'; return; }
+  c.innerHTML = rows.map(function(r) {
+    var sColor = _CSTAT[r.status]||'#888';
+    var amount = r.contract_value || 0;
+    var valColor = amount>1000000?'#d33':amount>100000?'#f9a825':'inherit';
+    var start = (r.start_date||'').slice(0,10);
+    var end = (r.end_date||'').slice(0,10);
+    var pctLeft = 0;
+    if (r.end_date && r.start_date) {
+      var total = (new Date(r.end_date)-new Date(r.start_date));
+      var left = (new Date(r.end_date)-new Date(now));
+      pctLeft = Math.max(0, Math.min(100, Math.round(left/total*100)));
+    }
+    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:#fff;border-radius:4px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-ct-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:14px">'+esc(r.contract_name||r.name)+'</a>'
+      + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
+      + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap">'
+      + '<span>甲方: '+esc(r.party_a||'-')+'</span><span>乙方: '+esc(r.party_b||'-')+'</span>'
+      + '<span style="color:'+valColor+'">¥'+fmtMoney(amount)+'</span><span>有效期: '+start+' → '+end+'</span></div>'
+      + '<div style="margin-top:6px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)"><span>剩余时长</span><span>'+pctLeft+'%</span></div>'
+      + '<div style="height:5px;background:#eee;border-radius:3px;margin-top:2px"><div style="width:'+pctLeft+'%;background:'+(pctLeft<20?'#d33':pctLeft<50?'#f9a825':'#388e3c')+';height:100%;border-radius:3px"></div></div></div>'
+      + (r.terms?'<div style="font-size:12px;color:var(--text2);margin-top:4px;border-left:2px solid #eee;padding-left:8px">'+esc((r.terms||'').slice(0,120))+'</div>':'')
+      + '</div>';
+  }).join('');
+  c.querySelectorAll('a[data-ct-id]').forEach(function(a) {
+    a.addEventListener('click', function(e) { e.preventDefault(); showCtForm(this.getAttribute('data-ct-id')); });
+  });
+}
+
+async function showCtForm(name) {
+  const c = document.getElementById('ct-content');
+  let r = {};
+  if (name) { try { r = await api('/api/resource/Contract/'+encodeURIComponent(name)); r = r.data||{}; } catch(e) {} }
+  c.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">⚖️</span> '+(name?'编辑':'新建')+'合同 <span style="font-size:12px;color:var(--text2);font-weight:normal">'+esc(r.name||'')+'</span></div>'
+    + '<div class="form-grid">'
+    + '<input data-ct-k="contract_name" placeholder="合同名称" value="'+esc(r.contract_name||'')+'"><input data-ct-k="party_a" placeholder="甲方" value="'+esc(r.party_a||'')+'"><input data-ct-k="party_b" placeholder="乙方" value="'+esc(r.party_b||'')+'">'
+    + '<input type="number" data-ct-k="contract_value" placeholder="合同金额" value="'+(r.contract_value||'0')+'"><input type="date" data-ct-k="start_date" value="'+esc((r.start_date||'').slice(0,10))+'"><input type="date" data-ct-k="end_date" value="'+esc((r.end_date||'').slice(0,10))+'">'
+    + '<select data-ct-k="status"><option value="Draft"'+(r.status==='Draft'?' selected':'')+'>Draft</option><option value="Submitted"'+(r.status==='Submitted'?' selected':'')+'>Submitted</option><option value="Approved"'+(r.status==='Approved'?' selected':'')+'>Approved</option><option value="Signed"'+(r.status==='Signed'?' selected':'')+'>Signed</option><option value="Rejected"'+(r.status==='Rejected'?' selected':'')+'>Rejected</option><option value="Terminated"'+(r.status==='Terminated'?' selected':'')+'>Terminated</option></select>'
+    + '<textarea data-ct-k="terms" placeholder="条款" style="min-height:80px;width:100%">'+esc(r.terms||'')+'</textarea></div>'
+    + '<div style="margin-top:8px;display:flex;gap:8px"><button class="btn btn-primary" data-ct-save="'+(name?'':'1')+'">保存</button><button class="btn" onclick="switchCtTab(\'active\')">取消</button></div></div>';
+  c.querySelector('[data-ct-save]').addEventListener('click', function() { _saveCt(name||null); });
+}
+
+async function _saveCt(name) {
+  var r = {};
+  document.querySelectorAll('[data-ct-k]').forEach(function(inp){r[inp.dataset.ctK] = inp.tagName==='SELECT'||inp.type==='checkbox' ? inp.value : (inp.type==='number' ? (parseFloat(inp.value)||0) : inp.value);});
+  try {
+    if (name) { await api('/api/resource/Contract/'+encodeURIComponent(name), {method:'PUT',body:JSON.stringify(r)}); }
+    else { await api('/api/resource/Contract', {method:'POST',body:JSON.stringify(r)}); }
+    toast('保存成功','ok'); switchCtTab('active');
+  } catch(e) { toast('保存失败: '+e.message,'error'); }
+}
+
 async function renderAnalytics(el) {
   el.innerHTML = `<div class="card"><div class="card-title">📊 全局经营概览</div><div class="empty"><div class="empty-emoji">⏳</div>加载中...</div></div>`;
   let d;
@@ -1265,12 +1369,12 @@ async function renderDashboard(el) {
 async function renderSimple(el) {
   const m = MODULES.find(x => x.id === currentModule);
   const doctype = m.doctype;
-  el.innerHTML = `<div class="card"><div class="card-title">${m.emoji} ${doctype}</div><div class="empty">⏳ 加载中...</div></div>`;
+  el.innerHTML = `<div class="card"><div class="card-title">${m.emoji} ${doctype} <span style="float:right">${renderExportBtn(doctype)}</span></div><div class="empty">⏳ 加载中...</div></div>`;
   let rows = [];
   try { rows = await apiGet(doctype); } catch(e) { toast('加载失败: '+e.message, 'error'); }
   el.innerHTML = `
     <div class="card">
-      <div class="card-title"><span class="emoji">${m.emoji}</span> ${doctype}（${rows.length}）</div>
+      <div class="card-title"><span class="emoji">${m.emoji}</span> ${doctype}（${rows.length}）<span style="float:right">${renderExportBtn(doctype)}</span></div>
       ${renderForm(doctype, `createForm-${doctype}`)}
       ${renderTable(doctype, rows, FIELDS[doctype])}
     </div>`;
