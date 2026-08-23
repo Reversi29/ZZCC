@@ -142,6 +142,44 @@ def status():
     }
 
 
+@app.get("/health")
+def health():
+    """Docker compose healthcheck endpoint. 无认证，返回所有依赖状态。"""
+    deps = {}
+    # 数据库
+    try:
+        from sqlalchemy import text
+        from database import SessionLocal
+        db_session = SessionLocal()
+        try:
+            db_session.execute(text("SELECT 1")).one()
+            deps["database"] = {"status": "up"}
+        finally:
+            db_session.close()
+    except Exception as e:
+        deps["database"] = {"status": "down", "error": str(e)[:120]}
+
+    # Redis（可选）
+    try:
+        import redis as rds
+        r = rds.from_url(get_settings().REDIS_URL, socket_timeout=2)
+        r.ping()
+        deps["redis"] = {"status": "up"}
+        r.close()
+    except ImportError:
+        deps["redis"] = {"status": "not_configured"}
+    except Exception as e:
+        deps["redis"] = {"status": "down", "error": str(e)[:120]}
+
+    overall = "up" if all(v.get("status") in ("up", "not_configured") for v in deps.values()) else "degraded"
+    return {
+        "status": overall,
+        "version": "1.0.0",
+        "dependencies": deps,
+        "persistence": get_settings().DATABASE_URL.split("+")[0] if "+" in get_settings().DATABASE_URL else "sqlite",
+    }
+
+
 # ── 全局错误处理 ──────────────────────────────────────────────
 @app.exception_handler(Exception)
 def global_error(req: Request, exc: Exception):

@@ -36,6 +36,7 @@ services:
       - ./backend/.env
     environment:
       DATABASE_URL: mysql+pymysql://root:zzcc_oa_2024@db:3306/zzcc_oa
+      REDIS_URL: redis://zzcc-oa-redis:6379/0
       # P3.13 通知渠道 — 也可通过前端「通知设置」页面在线修改
       OA_WECOM_WEBHOOK:
       OA_DINGTALK_WEBHOOK:
@@ -48,6 +49,12 @@ services:
       OA_SMTP_TO:
       OA_SMTP_TLS: "true"
       OA_WEBHOOK_URL:
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     ports:
       - "8003:8003"
 
