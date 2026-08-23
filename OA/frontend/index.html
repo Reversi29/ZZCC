@@ -3687,6 +3687,12 @@ async function init() {
   renderNav();
   try { await api('/api/status'); document.getElementById('statusDot').className='status-dot'; document.getElementById('statusText').textContent='运行中'; }
   catch { document.getElementById('statusDot').className='status-dot offline'; document.getElementById('statusText').textContent='后端离线'; }
+  var initial = location.hash.slice(1);
+  if (initial) { currentModule = initial; renderNav(); }
+  window.addEventListener('hashchange', function() {
+    var h = location.hash.slice(1);
+    if (h) { currentModule = h; renderNav(); render(); }
+  });
   render();
 }
 init();
