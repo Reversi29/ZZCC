@@ -609,6 +609,7 @@ const MODULES = [
   { id: 'attendance',   name: '考勤管理',  emoji: '🕐' },
   { id: 'salary',       name: '薪资记录',  emoji: '💰' },
   { id: 'stock',        name: '资产行政',  emoji: '📦', doctype: 'Item' },
+  { id: 'assets',       name: '固定资产',   emoji: '🔧', doctype: 'Asset' },
   { id: 'ai',          name: 'AI 咨询',  emoji: '🤖' },
   { id: 'workflow',    name: '审批',     emoji: '📝' },
   { id: 'notifications', name: '通知',     emoji: '🔔' },
@@ -959,7 +960,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, "approval-rules":renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, "notification-settings":renderNotificationSettings, moduleSwitch:renderModuleSwitch, "module-switch":renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, "audit-log":renderAuditLog, profile:renderProfile, settings:renderSettings };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, "approval-rules":renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, "notification-settings":renderNotificationSettings, moduleSwitch:renderModuleSwitch, "module-switch":renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, "audit-log":renderAuditLog, profile:renderProfile, settings:renderSettings, assets:renderAssets };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -3697,13 +3698,15 @@ async function init() {
   renderNav();
   try { await api('/api/status'); document.getElementById('statusDot').className='status-dot'; document.getElementById('statusText').textContent='运行中'; }
   catch { document.getElementById('statusDot').className='status-dot offline'; document.getElementById('statusText').textContent='后端离线'; }
-  var initial = location.hash.slice(1);
+  var initial = (location.hash.slice(1) || '').split('?')[0];
   if (initial) { currentModule = initial; renderNav(); }
   window.addEventListener('hashchange', function() {
-    var h = location.hash.slice(1);
+    var h = (location.hash.slice(1) || '').split('?')[0];
     if (h) { currentModule = h; renderNav(); render(); }
   });
   render();
+  // 兜底：若 main 仍为空，100ms 后再尝试 render
+  setTimeout(function() { var m = document.getElementById('main'); if (m && m.innerHTML.trim() === '') { render(); } }, 100);
 }
 init();
 
@@ -3737,30 +3740,182 @@ async function loadNotifications(filter) {
   return _notifData;
 }
 
+// ── 绩效考核 ─────────────────────────────────────────────────
 async function renderPerformance(main) {
   main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📊</span> 绩效考核</div><div class="skeleton-block"></div></div>';
-  var data = await api('/api/performance');
-  var items = data.items || [];
-  var sMap = {self_review:'<span class="badge badge-warning">自评中</span>', manager_review:'<span class="badge badge-primary">经理评审</span>', finalized:'<span class="badge badge-success">已定稿</span>'};
-  var rows = items.map(function(r) {
-    return '<tr><td>' + r.employee_name + '</td><td>' + r.department + '</td><td>' + r.period +
-      '</td><td>' + (r.self_score||'—') + '</td><td>' + (r.manager_score||'—') + '</td><td>' +
-      (r.overall_score||'—') + '</td><td>' + (sMap[r.status]||r.status) + '</td></tr>';
-  });
-  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📊</span> 绩效考核 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 条</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>员工</th><th>部门</th><th>周期</th><th>自评分</th><th>经理分</th><th>总分</th><th>状态</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
+  try {
+    var data = await api('/api/performance');
+    var items = data.items || [];
+    main.innerHTML = `
+      <div class="card">
+        <div class="card-title"><span class="emoji">📊</span> 绩效考核 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">${items.length} 条</span></div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <input id="perf-search" class="form-input" placeholder="搜索员工..." style="flex:1" oninput="_renderPerfTable()" />
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>员工</th><th>部门</th><th>周期</th><th>自评分</th><th>经理分</th><th>总分</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="perf-tbody"></tbody>
+        </table></div>
+      </div>`;
+    window._perfItems = items;
+    _renderPerfTable();
+  } catch(e) { toast('加载失败: '+e.message, 'error'); }
 }
 
+function _renderPerfTable() {
+  const items = window._perfItems || [];
+  const search = (document.getElementById('perf-search')?.value || '').toLowerCase();
+  const filtered = items.filter(r => !search || (r.employee_name||'').toLowerCase().includes(search) || (r.department||'').toLowerCase().includes(search));
+  const sMap = {self_review:'<span class="badge" style="background:#e65100;color:#fff">自评中</span>', manager_review:'<span class="badge" style="background:#1565c0;color:#fff">经理评审</span>', finalized:'<span class="badge" style="background:#2e7d32;color:#fff">已定稿</span>'};
+  document.getElementById('perf-tbody').innerHTML = filtered.map(r => `
+    <tr>
+      <td>${esc(r.employee_name||'-')}</td><td>${esc(r.department||'-')}</td><td>${esc(r.period||'-')}</td>
+      <td>${r.self_score!==null?'<span style="color:'+(r.self_score>=4?'var(--green)':r.self_score>=3?'var(--yellow)':'#d33')+'">⭐ '+r.self_score+' / 5</span>':'<span class="empty">—</span>'}</td>
+      <td>${r.manager_score!==null?'<span style="color:'+(r.manager_score>=4?'var(--green)':r.manager_score>=3?'var(--yellow)':'#d33')+'">⭐ '+r.manager_score+' / 5</span>':'<span class="empty">—</span>'}</td>
+      <td>${r.overall_score!==null?'<strong>'+r.overall_score+'</strong>':'<span class="empty">—</span>'}</td>
+      <td>${sMap[r.status] || r.status}</td>
+      <td><button class="btn btn-sm" onclick="_showPerfDetail(${r.id})">详情</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text3)">暂无数据</td></tr>';
+}
+
+function _showPerfDetail(id) {
+  const r = (window._perfItems||[]).find(x => x.id === id);
+  if (!r) return;
+  const modal = document.getElementById('perf-modal');
+  if (!modal) {
+    const m = document.createElement('div'); m.id = 'perf-modal'; m.className = 'oa-modal';
+    m.innerHTML = '<div class="card" style="max-width:600px;margin:40px auto;padding:20px;position:relative"><button onclick="this.parentElement.parentElement.remove()" style="position:absolute;top:12px;right:12px;border:none;background:transparent;font-size:20px;cursor:pointer">✕</button><div id="perf-modal-body"></div></div>';
+    document.body.appendChild(m);
+  }
+  document.getElementById('perf-modal-body').innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">
+      <div style="width:48px;height:48px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600">${(r.employee_name||'?')[0]}</div>
+      <div><div style="font-size:16px;font-weight:600">${esc(r.employee_name)}</div><div style="font-size:13px;color:var(--text3)">${esc(r.department)} · ${esc(r.period)}</div></div>
+      <span style="margin-left:auto">${r.status==='self_review'?'🔶 自评中':r.status==='manager_review'?'🔵 经理评审':'✅ 已定稿'}</span>
+    </div>
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat"><div class="v">${r.self_score||'—'}</div><div class="l">自评</div></div>
+      <div class="stat"><div class="v">${r.manager_score||'—'}</div><div class="l">经理评</div></div>
+      <div class="stat"><div class="v">${r.overall_score||'—'}</div><div class="l">总分</div></div>
+    </div>
+    ${r.self_review ? `<div style="margin-bottom:12px"><strong>自评：</strong><div style="background:var(--surface2);padding:10px;border-radius:6px;margin-top:4px;font-size:13px;color:var(--text2)">${esc(r.self_review)}</div></div>` : ''}
+    ${r.manager_review ? `<div><strong>经理评：</strong><div style="background:var(--surface2);padding:10px;border-radius:6px;margin-top:4px;font-size:13px;color:var(--text2)">${esc(r.manager_review)}</div></div>` : ''}
+    <div style="font-size:12px;color:var(--text3);margin-top:12px">更新于 ${esc(r.updated_at||'')}</div>
+  `;
+}
+
+// ── 招聘管理 ─────────────────────────────────────────────────
 async function renderRecruitment(main) {
   main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🎯</span> 招聘管理</div><div class="skeleton-block"></div></div>';
-  var data = await api('/api/recruitment');
-  var items = data.items || [];
-  var sMap = {open:'<span class="badge badge-success">招聘中</span>', paused:'<span class="badge badge-warning">暂停</span>', closed:'<span class="badge badge-info">已关闭</span>', cancelled:'<span class="badge badge-danger">已取消</span>'};
-  var rows = items.map(function(r) {
-    return '<tr><td>' + r.position + '</td><td>' + r.department + '</td><td>' + r.headcount +
-      '</td><td>' + (r.resume_count||0) + '</td><td>' + (r.interview_count||0) + '</td><td>' +
-      (r.hire_count||0) + '</td><td>' + (sMap[r.status]||r.status) + '</td></tr>';
-  });
-  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🎯</span> 招聘管理 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 个职位</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>职位</th><th>部门</th><th>人数</th><th>简历数</th><th>面试数</th><th>录用数</th><th>状态</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
+  try {
+    var data = await api('/api/recruitment');
+    var items = data.items || [];
+    main.innerHTML = `
+      <div class="card">
+        <div class="card-title"><span class="emoji">🎯</span> 招聘管理 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">${items.length} 个职位</span></div>
+        <div id="recruit-quick" class="stat-grid" style="margin-bottom:14px"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>职位</th><th>部门</th><th>人数</th><th>简历</th><th>面试</th><th>录用</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="recruit-tbody"></tbody>
+        </table></div>
+      </div>`;
+    window._recruitItems = items;
+    _renderRecruitTable();
+    _renderRecruitQuick(items);
+  } catch(e) { toast('加载失败: '+e.message, 'error'); }
+}
+
+function _renderRecruitQuick(items) {
+  const openCount = items.filter(r => r.status==='open').length;
+  const totalResume = items.reduce((s, r) => s + (r.resume_count||0), 0);
+  const totalHire = items.reduce((s, r) => s + (r.hire_count||0), 0);
+  document.getElementById('recruit-quick').innerHTML = `
+    <div class="stat"><div class="v">${openCount}</div><div class="l">招聘中</div></div>
+    <div class="stat"><div class="v">${totalResume}</div><div class="l">累计简历</div></div>
+    <div class="stat"><div class="v">${totalHire}</div><div class="l">已录用</div></div>
+    <div class="stat"><div class="v">${items.length}</div><div class="l">总职位</div></div>
+  `;
+}
+
+function _renderRecruitTable() {
+  const items = window._recruitItems || [];
+  const sMap = {open:'<span class="badge" style="background:#2e7d32;color:#fff">招聘中</span>', paused:'<span class="badge" style="background:#e65100;color:#fff">暂停</span>', closed:'<span class="badge" style="background:#64748b;color:#fff">已关闭</span>', cancelled:'<span class="badge" style="background:#64748b;color:#fff">已取消</span>'};
+  const pMap = {urgent:'<span style="color:#d33">紧急</span>', high:'<span style="color:var(--yellow)">高</span>', medium:'中', low:'低'};
+  document.getElementById('recruit-tbody').innerHTML = items.map(r => `
+    <tr>
+      <td><strong>${esc(r.position||'-')}</strong></td><td>${esc(r.department||'-')}</td>
+      <td>${r.headcount||0}</td>
+      <td>${r.resume_count||0}</td><td>${r.interview_count||0}</td><td>${r.hire_count||0}</td>
+      <td>${pMap[r.priority] || r.priority||''}</td>
+      <td>${sMap[r.status] || r.status||''}</td>
+      <td><button class="btn btn-sm" onclick="_showRecruitDetail(${r.id})">详情</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--text3)">暂无数据</td></tr>';
+}
+
+function _showRecruitDetail(id) {
+  const r = (window._recruitItems||[]).find(x => x.id === id);
+  if (!r) return;
+  const modal = document.getElementById('recruit-modal');
+  if (!modal) {
+    const m = document.createElement('div'); m.id = 'recruit-modal'; m.className = 'oa-modal';
+    m.innerHTML = '<div class="card" style="max-width:600px;margin:40px auto;padding:20px;position:relative"><button onclick="this.parentElement.parentElement.remove()" style="position:absolute;top:12px;right:12px;border:none;background:transparent;font-size:20px;cursor:pointer">✕</button><div id="recruit-modal-body"></div></div>';
+    document.body.appendChild(m);
+  }
+  document.getElementById('recruit-modal-body').innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <div style="width:48px;height:48px;border-radius:8px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px">👤</div>
+      <div><div style="font-size:16px;font-weight:600">${esc(r.position)}</div><div style="font-size:13px;color:var(--text3)">${esc(r.department)} · ${r.headcount} 人</div></div>
+      <span style="margin-left:auto">${r.status==='open'?'🟢 招聘中':'🔴 已关闭'}</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <div style="flex:1;text-align:center;padding:10px;background:var(--surface2);border-radius:6px"><div style="font-size:20px;font-weight:700;color:var(--text)">${r.resume_count||0}</div><div style="font-size:11px;color:var(--text3)">简历</div></div>
+      <div style="flex:1;text-align:center;padding:10px;background:var(--surface2);border-radius:6px"><div style="font-size:20px;font-weight:700;color:var(--text)">${r.interview_count||0}</div><div style="font-size:11px;color:var(--text3)">面试</div></div>
+      <div style="flex:1;text-align:center;padding:10px;background:var(--surface2);border-radius:6px"><div style="font-size:20px;font-weight:700;color:var(--accent)">${r.offer_count||0}</div><div style="font-size:11px;color:var(--text3)">发Offer</div></div>
+      <div style="flex:1;text-align:center;padding:10px;background:var(--surface2);border-radius:6px"><div style="font-size:20px;font-weight:700;color:var(--green)">${r.hire_count||0}</div><div style="font-size:11px;color:var(--text3)">入职</div></div>
+    </div>
+    ${r.salary_range ? `<div style="margin-bottom:8px"><strong>薪资：</strong> ${esc(r.salary_range)}</div>` : ''}
+    ${r.description ? `<div style="margin-bottom:8px"><strong>JD：</strong><div style="background:var(--surface2);padding:10px;border-radius:6px;margin-top:4px;font-size:13px;color:var(--text2)">${esc(r.description)}</div></div>` : ''}
+    ${r.contact ? `<div style="font-size:12px;color:var(--text3)">联系：${esc(r.contact)}</div>` : ''}
+  `;
+}
+
+
+async function renderAssets(main) {
+  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🖥</span> 固定资产</div><div class="skeleton-block"></div></div>';
+  try {
+    var res = await api('/api/resource/Asset');
+    var data = res.data;
+    var items = (data && data.data) ? data.data : (res.data || []);
+    main.innerHTML = `
+      <div class="card">
+        <div class="card-title"><span class="emoji">🖥</span> 固定资产 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">${items.length} 项</span></div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <input id="asset-search" class="form-input" placeholder="搜索资产..." style="flex:1" oninput="_renderAssetTable()" />
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>编号</th><th>名称</th><th>类别</th><th>采购日期</th><th>原值</th><th>保管人</th><th>位置</th><th>状态</th></tr></thead>
+          <tbody id="asset-tbody"></tbody>
+        </table></div>
+      </div>`;
+    window._assetItems = items;
+    _renderAssetTable();
+  } catch(e) { toast('加载失败: '+e.message, 'error'); }
+}
+
+function _renderAssetTable() {
+  const items = window._assetItems || [];
+  const search = (document.getElementById('asset-search')?.value || '').toLowerCase();
+  const filtered = items.filter(r => !search || (r.asset_name||r.name||'').toLowerCase().includes(search) || (r.custodian||'').toLowerCase().includes(search));
+  document.getElementById('asset-tbody').innerHTML = filtered.map(r => `
+    <tr>
+      <td>${esc(r.name||'-')}</td><td><strong>${esc(r.asset_name||'-')}</strong></td>
+      <td>${esc(r.asset_category||'-')}</td><td>${r.purchase_date||'-'}</td>
+      <td>¥ ${(r.purchase_value||0).toLocaleString()}</td><td>${esc(r.custodian||'-')}</td>
+      <td>${esc(r.location||'-')}</td><td>${esc(r.status||'-')}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text3)">暂无数据</td></tr>';
 }
 
 async function renderAuditLog(main) {
