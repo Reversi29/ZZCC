@@ -1900,7 +1900,8 @@ async function renderDashboard(el) {
     if (m.id === 'dashboard') return false;
     if (m.id === 'registrations') return isAdmin;
     if (m.id === 'module-switch') return isAdmin;
-    if (['leaves','attendance','salary'].indexOf(m.id)>=0) return false;
+    // 已在顶部导航 HR 下拉中的模块，不在网格重复显示
+    if (['hr','leaves','attendance','salary','departments'].indexOf(m.id)>=0) return false;
     if (bizToggle[m.id] === false) return false;
     return true;
   });
