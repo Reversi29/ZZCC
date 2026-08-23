@@ -266,7 +266,7 @@
   .notif-mark-read:hover { text-decoration:underline; }
 
 .ann-item { padding:12px; border:1px solid var(--border); border-radius:6px; margin-bottom:8px; }
-.ann-item.pinned { background:#fff8e1; border-color:#ffc107; }
+.ann-item.pinned { background:#3d3520; border-color:#ffc107; }
 .ann-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:14px; }
 .ann-title { font-weight:600; color:var(--text); }
 .ann-meta { font-size:11px; color:var(--text3); }
@@ -809,7 +809,17 @@ async function api(path, method='GET', body=null) {
   else hdrs['X-Api-Key'] = API_KEY;
   const opts = { headers: hdrs };
   if (method !== 'GET') opts.method = method;
-  if (body) opts.body = JSON.stringify(body);
+  // GET requests must NOT have a body - convert object params to query string
+  if (body && method === 'GET' && typeof body === 'object') {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(body)) {
+      if (v !== null && v !== undefined) params.set(k, String(v));
+    }
+    const sep = path.includes('?') ? '&' : '?';
+    path = path + sep + params.toString();
+  } else if (body && method !== 'GET') {
+    opts.body = JSON.stringify(body);
+  }
   const r = await fetch(API + path, opts);
   const j = await r.json();
   if (r.status === 401) { clearAuth(); showLoginModal(); throw new Error('未登录'); }
@@ -1987,11 +1997,11 @@ async function _loadAnnouncements() {
     <div style="display:flex;gap:8px;margin-bottom:12px">
       ${isAdmin?'<button class="btn btn-primary" onclick="showAnnForm()">＋ 发布公告</button>':''}
     </div>
-    <div id="annList">${_renderAnnList(data.items)}</div>
+    <div id="annList">${_renderAnnList(data.items, isAdmin)}</div>
   `;
 }
 
-function _renderAnnList(items) {
+function _renderAnnList(items, isAdmin=false) {
   if (!items || !items.length) return '<div class="empty">暂无公告</div>';
   return items.map(a => `
     <div class="ann-item${a.is_pinned?' pinned':''}">
