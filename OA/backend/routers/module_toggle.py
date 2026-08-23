@@ -48,6 +48,8 @@ OPTIONAL_MODULES = {
     "performance": "绩效考核",
     "recruitment": "招聘管理",
     "audit-log": "操作日志",
+    "profile": "个人资料",
+    "settings": "个人设置",
 }
 
 

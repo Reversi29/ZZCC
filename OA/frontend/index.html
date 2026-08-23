@@ -949,7 +949,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, moduleSwitch:renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, profile:renderProfile, settings:renderSettings };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, "approval-rules":renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, "notification-settings":renderNotificationSettings, moduleSwitch:renderModuleSwitch, "module-switch":renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, "audit-log":renderAuditLog, profile:renderProfile, settings:renderSettings };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -1232,6 +1232,67 @@ async function _savePJ(name) {
 const _TKT_STATUS_COLOR = {Open:'#1976d2',Pending:'#f9a825',Resolved:'#388e3c',Closed:'#aaa'};
 const _TKT_TYPE_LABEL = {Bug:'🐛 Bug',Feature:'💡 需求',Support:'📞 支持',Question:'❓ 咨询'};
 const _TKT_PRI_COLOR = {Low:'#388e3c',Medium:'#f9a825',High:'#1565c0',Urgent:'#d33'};
+
+async function renderTasks(el) {
+  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">✅</span> 任务管理 <button class="btn btn-primary" data-tsk-new="1">+ 新建任务</button></div>'
+    + '<div class="tabs"><button class="tab active" data-tab="open">待处理</button><button class="tab" data-tab="doing">进行中</button><button class="tab" data-tab="done">已完成</button><button class="tab" data-tab="all">全部</button></div>'
+    + '<div id="tsk-content"></div></div>';
+  el.querySelector('[data-tsk-new]').addEventListener('click', function() { showTskForm(null); });
+  el.querySelectorAll('.tab').forEach(function(t) {
+    t.addEventListener('click', function() {
+      el.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active')});
+      t.classList.add('active'); switchTskTab(t.dataset.tab);
+    });
+  });
+  await switchTskTab('open');
+}
+async function switchTskTab(tab) {
+  const c = document.getElementById('tsk-content');
+  c.innerHTML = '<div class="empty">⏳ 加载中...</div>';
+  let rows = [];
+  try { rows = await apiGet('Task'); } catch(e) { toast('加载失败: '+e.message,'error'); return; }
+  if (tab === 'open') rows = rows.filter(function(r){return r.status==='Open'});
+  else if (tab === 'doing') rows = rows.filter(function(r){return r.status==='In Progress'});
+  else if (tab === 'done') rows = rows.filter(function(r){return r.status==='Completed'});
+  if (!rows.length) { c.innerHTML='<div class="empty">暂无任务</div>'; return; }
+  c.innerHTML = rows.map(function(r) {
+    var p = r.progress||0;
+    var pColor = p<30?'#888':p<70?'#f9a825':'#388e3c';
+    var sColor = {Open:'#1976d2','In Progress':'#f9a825',Completed:'#388e3c',Cancelled:'#aaa'}[r.status]||'#888';
+    var priColor = {Low:'#388e3c',Medium:'#f9a825',High:'#1565c0',Urgent:'#d33'}[r.priority]||'#888';
+    var dueStr = (r.end_date||'').slice(0,10);
+    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:#fff;border-radius:4px;display:flex;gap:16px;align-items:center">'
+      + '<div style="flex:1"><div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-tsk-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:14px">'+esc(r.subject||r.name)+'</a><span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
+      + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap"><span>项目: '+esc(r.project||'-')+'</span><span>负责人: '+esc(r.assigned_to||'-')+'</span><span style="color:'+priColor+'">优先级: '+esc(r.priority||'')+'</span><span>截止: '+dueStr+'</span></div>'
+      + '<div style="margin-top:4px"><div style="height:5px;background:#eee;border-radius:3px"><div style="width:'+p+'%;background:'+pColor+';height:100%;border-radius:3px"></div></div></div></div>'
+      + '<div style="font-size:11px;color:var(--text2)">'+Math.round(p)+'%</div></div>';
+  }).join('');
+  c.querySelectorAll('[data-tsk-id]').forEach(function(a) {
+    a.addEventListener('click', function(e) { e.preventDefault(); showTskForm(this.getAttribute('data-tsk-id')); });
+  });
+}
+async function showTskForm(name) {
+  const c = document.getElementById('tsk-content');
+  let r = {};
+  if (name) { try { r = await api('/api/resource/Task/'+encodeURIComponent(name)); r = r.data||{}; } catch(e) {} }
+  c.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">✅</span> '+(name?'编辑':'新建')+'任务</div><div class="form-grid">'
+    + '<input data-tsk-k="subject" placeholder="任务主题" value="'+esc(r.subject||'')+'"><input data-tsk-k="project" placeholder="所属项目" value="'+esc(r.project||'')+'"><input data-tsk-k="assigned_to" placeholder="负责人" value="'+esc(r.assigned_to||'')+'">'
+    + '<select data-tsk-k="status"><option value="Open"'+(r.status==='Open'?' selected':'')+'>待处理</option><option value="In Progress"'+(r.status==='In Progress'?' selected':'')+'>进行中</option><option value="Completed"'+(r.status==='Completed'?' selected':'')+'>已完成</option><option value="Cancelled"'+(r.status==='Cancelled'?' selected':'')+'>已取消</option></select>'
+    + '<select data-tsk-k="priority"><option value="Low"'+(r.priority==='Low'?' selected':'')+'>低</option><option value="Medium"'+(r.priority==='Medium'||!r.priority?' selected':'')+'>中</option><option value="High"'+(r.priority==='High'?' selected':'')+'>高</option><option value="Urgent"'+(r.priority==='Urgent'?' selected':'')+'>紧急</option></select>'
+    + '<input type="number" data-tsk-k="progress" placeholder="进度%" value="'+(r.progress||'0')+'"><input type="date" data-tsk-k="start_date" value="'+esc((r.start_date||'').slice(0,10))+'"><input type="date" data-tsk-k="end_date" value="'+esc((r.end_date||'').slice(0,10))+'">'
+    + '<textarea data-tsk-k="description" placeholder="描述" style="min-height:60px">'+esc(r.description||'')+'</textarea></div>'
+    + '<div style="margin-top:8px;display:flex;gap:8px"><button class="btn btn-primary" data-tsk-save="'+(name?'':'1')+'">保存</button><button class="btn" onclick="switchTskTab('all')">取消</button></div></div>';
+  c.querySelector('[data-tsk-save]').addEventListener('click', function() { _saveTsk(name||null); });
+}
+async function _saveTsk(name) {
+  var r = {};
+  document.querySelectorAll('[data-tsk-k]').forEach(function(inp){ var v = inp.value; if (inp.tagName==='SELECT') v = inp.value; if (inp.dataset.tskK==='progress') v = parseFloat(v)||0; r[inp.dataset.tskK] = v; });
+  try {
+    if (name) { await api('/api/resource/Task/'+encodeURIComponent(name), {method:'PUT',body:JSON.stringify(r)}); }
+    else { await api('/api/resource/Task', {method:'POST',body:JSON.stringify(r)}); }
+    toast('保存成功','ok'); switchTskTab('open');
+  } catch(e) { toast('保存失败: '+e.message,'error'); }
+}
 
 async function renderTickets(el) {
   el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">🎫</span> 客服工单 <button class="btn btn-primary" data-tkt-new="1">+ 新建工单</button></div>'
@@ -3710,61 +3771,33 @@ async function renderProfile(main) {
 }
 
 // ── 个人设置 ────────────────────────────────────────────────────
-async function renderSettings(main) {
-  var user = getCurrentUser();
-  if (!user) {
-    main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">\u2699\ufe0f</span> \u4e2a\u4eba\u8bbe\u7f6e</div><div class="empty">\u8bf7\u5148\u767b\u5f55</div></div>';
-    return;
-  }
-  var name = user.displayName || user.username;
-  var items = [
-    {icon:"\ud83d\udc64", label:"\u7528\u6237\u540d", value:user.username, tag:"\u53ea\u8bfb"},
-    {icon:"\ud83c\udff7\ufe0f", label:"\u663e\u793a\u540d\u79f0", value:name, tag:"\u53ea\u8bfb"},
-    {icon:"\ud83d\udcd0", label:"\u6539\u5bc6\u7801", value:"\u5728\u8d26\u6237\u7ba1\u7406\u4e2d\u64cd\u4f5c", goto:"registrations"},
-    {icon:"\ud83d\udc51", label:"API Key", value:"\u5728\u8d26\u6237\u7ba1\u7406\u4e2d\u67e5\u770b\u548c\u7ba1\u7406", goto:"registrations"},
-  ];
-  var html = '<div class="card"><div class="card-title"><span class="emoji">\u2699\ufe0f</span> \u4e2a\u4eba\u8bbe\u7f6e</div><div style="max-width:500px;display:grid;gap:12px">';
-  items.forEach(function(it) {
-    var actionHtml;
-    if (it.goto) {
-      actionHtml = '<button onclick="navigate(\'registrations\')" style="padding:6px 12px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer">\u53bb\u7ba1\u7406</button>';
-    } else {
-      actionHtml = '<span style="font-size:12px;color:var(--text3);padding:4px 10px;background:var(--surface2);border-radius:4px">' + it.tag + '</span>';
-    }
-    html += '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface)">' +
-      '<span style="font-size:18px">' + it.icon + '</span>' +
-      '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">' + it.label + '</div><div style="font-size:13px;color:var(--text2);margin-top:2px">' + it.value + '</div></div>' +
-      actionHtml + '</div>';
-  });
-  html += '</div></div>';
-  main.innerHTML = html;
-}
-
-
-async function renderAuditLog(main) {
-  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志</div><div class="skeleton-block"></div></div>';
-  var data = await api('/api/audit-log');
-  var items = data.items || [];
-  var rows = items.map(function(r) {
-    return '<tr><td>' + r.created_at + '</td><td>' + r.username + '</td><td>' + r.module +
-      '</td><td>' + r.action + '</td><td>' + (r.detail||'') + '</td><td>' + (r.ip||'') + '</td></tr>';
-  });
-  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">📋</span> 操作日志 <span style="font-size:12px;color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none;margin-left:8px">' + items.length + ' 条</span></div><div style="overflow-x:auto"><table class="oa-table"><thead><tr><th>时间</th><th>用户</th><th>模块</th><th>操作</th><th>详情</th><th>IP</th></tr></thead><tbody>' + (rows.join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text3)">暂无数据</td></tr>') + '</tbody></table></div></div>';
-}
-// ── 个人主页 ────────────────────────────────────────────────────
-async function renderProfile(main) {
+async function renderSettings(el) {
   const user = getCurrentUser();
-  if (!user) {
-    main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div class="empty">请先登录</div></div>';
-    return;
-  }
-  const name = user.displayName || user.username;
-  const role = user.role === 'admin' ? '管理员' : user.role === 'api' ? 'API用户' : '员工';
-  const roleColor = user.role === 'admin' ? 'var(--accent)' : 'var(--text2)';
-  main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div style="display:grid;gap:12px"><div style="display:flex;align-items:center;gap:16px;padding:16px;background:var(--surface2);border-radius:8px"><div style="width:56px;height:56px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;font-weight:600">' + (name[0]||'?') + '</div><div style="flex:1"><div style="font-size:18px;font-weight:600;color:var(--text)">' + name + '</div><div style="font-size:13px;color:var(--text3);margin-top:4px">用户名: ' + user.username + ' &nbsp;·&nbsp; 角色: <span style="color:' + roleColor + ';">' + role + '</span></div></div></div></div></div>';
+  if (!user) { el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">⚙️</span> 个人设置</div><div class="empty">请先登录</div></div>'; return; }
+  el.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">⚙️</span> 个人设置</div>'
+    + '<div style="display:grid;gap:16px">'
+    + '<div style="display:flex;gap:12px;padding:12px;background:var(--surface2);border-radius:8px"><span class="emoji" style="font-size:20px">👤</span><div style="flex:1"><div style="font-size:14px;color:var(--text3)">用户名</div><div style="font-size:16px;font-weight:500;margin-top:2px">'+esc(user.username)+'</div></div></div>'
+    + '<div style="display:flex;gap:12px;padding:12px;background:var(--surface2);border-radius:8px"><span class="emoji" style="font-size:20px">🏷️</span><div style="flex:1"><div style="font-size:14px;color:var(--text3)">显示名称</div><div style="display:flex;align-items:center;gap:8px;margin-top:2px"><input id="set-display-name" value="'+esc(user.displayName||'')+'" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--text);font-size:14px"/><button class="btn-sm" onclick="saveDisplayName()">保存</button></div></div></div>'
+    + '<div style="display:flex;gap:12px;padding:12px;background:var(--surface2);border-radius:8px"><span class="emoji" style="font-size:20px">🔑</span><div style="flex:1"><div style="font-size:14px;color:var(--text3)">修改密码</div><div style="display:flex;gap:8px;margin-top:6px"><input id="set-old-pwd" type="password" placeholder="当前密码" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--text);font-size:13px"/><input id="set-new-pwd" type="password" placeholder="新密码" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--text);font-size:13px"/><input id="set-cnf-pwd" type="password" placeholder="确认新密码" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--text);font-size:13px"/><button class="btn btn-sm btn-primary" onclick="changePassword()">修改</button></div></div></div>'
+    + '<div style="display:flex;gap:12px;padding:12px;background:var(--surface2);border-radius:8px"><span class="emoji" style="font-size:20px">🚪</span><div style="flex:1"><div style="font-size:14px;color:var(--text3)">退出登录</div><button class="btn btn-sm" style="margin-top:6px" onclick="logout()">退出</button></div></div>'
+    + '</div></div>';
 }
 
-// ── 个人设置 ────────────────────────────────────────────────────
+async function saveDisplayName() {
+  const v = document.getElementById('set-display-name').value.trim();
+  try { await api('/api/users/me', {method:'PATCH', body:JSON.stringify({display_name:v})}); toast('已更新','ok'); }
+  catch(e) { toast('失败: '+e.message,'error'); }
+}
+async function changePassword() {
+  const old = document.getElementById('set-old-pwd').value;
+  const newp = document.getElementById('set-new-pwd').value;
+  const cnf = document.getElementById('set-cnf-pwd').value;
+  if (!old || !newp) { toast('请填写完整','error'); return; }
+  if (newp !== cnf) { toast('两次密码不一致','error'); return; }
+  try { await api('/api/users/me/password', {method:'POST', body:JSON.stringify({old_password:old,new_password:newp})}); toast('密码已修改','ok'); document.querySelectorAll('#set-old-pwd,#set-new-pwd,#set-cnf-pwd').forEach(el=>el.value=''); }
+  catch(e) { toast('失败: '+e.message,'error'); }
+}
+
 async function renderNotifications(el) {
   const u = getCurrentUser();
   const username = u.username || u.user || 'admin';
