@@ -1281,7 +1281,7 @@ async function showTskForm(name) {
     + '<select data-tsk-k="priority"><option value="Low"'+(r.priority==='Low'?' selected':'')+'>低</option><option value="Medium"'+(r.priority==='Medium'||!r.priority?' selected':'')+'>中</option><option value="High"'+(r.priority==='High'?' selected':'')+'>高</option><option value="Urgent"'+(r.priority==='Urgent'?' selected':'')+'>紧急</option></select>'
     + '<input type="number" data-tsk-k="progress" placeholder="进度%" value="'+(r.progress||'0')+'"><input type="date" data-tsk-k="start_date" value="'+esc((r.start_date||'').slice(0,10))+'"><input type="date" data-tsk-k="end_date" value="'+esc((r.end_date||'').slice(0,10))+'">'
     + '<textarea data-tsk-k="description" placeholder="描述" style="min-height:60px">'+esc(r.description||'')+'</textarea></div>'
-    + '<div style="margin-top:8px;display:flex;gap:8px"><button class="btn btn-primary" data-tsk-save="'+(name?'':'1')+'">保存</button><button class="btn" onclick="switchTskTab('all')">取消</button></div></div>';
+    + '<div style="margin-top:8px;display:flex;gap:8px"><button class="btn btn-primary" data-tsk-save="'+(name?'':'1')+'">保存</button><button class="btn" onclick="switchTskTab(\'all\')">取消</button></div></div>';
   c.querySelector('[data-tsk-save]').addEventListener('click', function() { _saveTsk(name||null); });
 }
 async function _saveTsk(name) {
