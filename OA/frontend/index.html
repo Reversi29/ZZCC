@@ -1974,7 +1974,7 @@ async function renderDashboard(el) {
 
 // ── 公告栏 ──────────────────────────────────────────────────
 async function renderAnnouncements(el) {
-  el.innerHTML = skeletonCard('📢 企业公告'); document.getElementById('main').innerHTML = skeletonTable(3);
+  el.innerHTML = `<div class="card"><div class="card-title"><span class="emoji">📢</span> 企业公告</div><div id="annContent"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line medium"></div><div class="skeleton skeleton-line short"></div></div></div>`;
   await _loadAnnouncements();
 }
 
