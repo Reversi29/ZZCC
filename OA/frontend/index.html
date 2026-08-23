@@ -3931,7 +3931,7 @@ async function renderAuditLog(main) {
 // ── 个人主页 ────────────────────────────────────────────────────
 async function renderProfile(main) {
   const user = getCurrentUser();
-  if (!user) {
+  if (!user || !user.username) {
     main.innerHTML = '<div class="card"><div class="card-title"><span class="emoji">👤</span> 个人主页</div><div class="empty">请先登录</div></div>';
     return;
   }
