@@ -3966,7 +3966,7 @@ async function changePassword() {
   const cnf = document.getElementById('set-cnf-pwd').value;
   if (!old || !newp) { toast('请填写完整','error'); return; }
   if (newp !== cnf) { toast('两次密码不一致','error'); return; }
-  try { await api('/api/users/me/password', {method:'POST', body:JSON.stringify({old_password:old,new_password:newp})}); toast('密码已修改','ok'); document.querySelectorAll('#set-old-pwd,#set-new-pwd,#set-cnf-pwd').forEach(el=>el.value=''); }
+  try { await api('/api/users/me/password', {method:'POST', body:JSON.stringify({current_password:old,new_password:newp})}); toast('密码已修改','ok'); document.querySelectorAll('#set-old-pwd,#set-new-pwd,#set-cnf-pwd').forEach(el=>el.value=''); }
   catch(e) { toast('失败: '+e.message,'error'); }
 }
 

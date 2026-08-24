@@ -144,6 +144,16 @@ def list_users(
     return [UserResponse.from_user(u) for u in users]
 
 
+@router.get("/me", response_model=UserResponse)
+def get_me(
+    current_user: Annotated[CurrentUser, Depends(require_auth)],
+    db: Session = Depends(get_db),
+):
+    """获取当前用户信息"""
+    u = db.query(User).filter(User.username == current_user.username).first()
+    return UserResponse.from_user(u)
+
+
 @router.get("/{username}", response_model=UserResponse)
 def get_user(
     username: str,
