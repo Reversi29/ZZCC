@@ -1951,7 +1951,7 @@ async function renderDashboard(el) {
     var isFav = FAVORITES.indexOf(m.id)>=0;
     var star = isFav ? '★' : '☆';
     var favCls = isFav ? 'fav-btn active' : 'fav-btn';
-    var countStr = m.doctype ? (counts[m.doctype]||0) + ' 条' : (isFav ? '已收藏' : '点击收藏');
+    var countStr = (counts[m.doctype]||0) + ' 条';
     return '<div class="module-card" onclick="navigate(\'' + m.id + '\')">' +
       '<div class="module-card-head">' +
       '<span class="m-emoji">' + m.emoji + '</span>' +
@@ -1985,7 +1985,7 @@ async function renderDashboard(el) {
       recentHtml +
     '</div>' +
     '<div class="card">' +
-      '<div class="card-title"><span class="emoji">🏠</span> 模块导航 <span class="card-subtitle">点击 ☆ 收藏</span></div>' +
+      '<div class="card-title"><span class="emoji">🏠</span> 模块导航</div>' +
       '<div class="module-grid">' + modulesHtml + '</div>' +
     '</div>';
 }
