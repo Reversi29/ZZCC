@@ -1890,6 +1890,8 @@ async function renderDashboard(el) {
 
   var qs = { pending_approvals:0, pending_by_type:{}, unread_notifications:0, recent_notifications:[], total_employees:0, total_projects:0, total_contracts:0 };
   try { qs = await api('/api/dashboard/quickstats'); } catch(e) { console.warn('quickstats:', e.message); }
+  var an = {};
+  try { an = await api('/api/analytics/overview'); } catch(e) { console.warn('an:', e.message); }
 
   var doctypes = ['Lead','Project','Purchase Order','Journal Entry','Contract','Quality Inspection','Support Ticket','Employee','Item','Asset'];
   var counts = {};
@@ -1968,6 +1970,13 @@ async function renderDashboard(el) {
         kpiCard('👥','员工',employees,'default','hr') +
         kpiCard('📁','项目',projects,'default','project') +
         kpiCard('📝','合同',contracts,'default','compliance') +
+      '</div>' +
+      '<div class="kpi-grid" style="margin-top:12px">' +
+        kpiCard('🎯','商机',(an.crm&&an.crm.opportunities||0),'default','opportunities') +
+        kpiCard('🚀','线索',(an.crm&&an.crm.leads||0),'default','crm') +
+        kpiCard('📦','物料',(an.stock&&an.stock.total_items||0),'default','stock') +
+        kpiCard('✅','本月通过',((an.workflow||{}).approved_this_month||0),'ok','workflow') +
+        kpiCard('❌','本月驳回',((an.workflow||{}).rejected_this_month||0),(an.workflow&&an.workflow.rejected_this_month>0?'urgent':'default'),'workflow') +
       '</div>' +
       '<div class="pending-section">' +
         '<div class="pending-section-title">📋 待审批明细</div>' +
@@ -3719,11 +3728,12 @@ let notifPanelOpen=false; let _cachedNotifs={items:[],unread_count:0};
 
 
 // ── 通知列表页 ──────────────────────────────────────────────
-let _notifFilter = 'unread';
+let _notifFilter = localStorage.getItem("oa_notif_filter") || 'unread';
 let _notifData = [];
 
 async function loadNotifications(filter) {
-  _notifFilter = filter || 'unread';
+  _notifFilter = filter || _notifFilter || 'unread';
+  localStorage.setItem('oa_notif_filter', _notifFilter);
   const u = getCurrentUser();
   const username = u.username || u.user || 'admin';
   const res = await api('/api/workflow/notifications?recipient=' + encodeURIComponent(username));
@@ -4028,12 +4038,14 @@ async function _renderNotifList(el) {
 async function markNotifRead(id) {
   const u = getCurrentUser();
   const username = u.username || u.user || 'admin';
+  _notifData.forEach(function(n){if(n.id===id){n.is_read=true;n.isNew=false;}});
   await api('/api/workflow/notifications/' + id + '/read?recipient=' + encodeURIComponent(username), { method:'POST' });
   renderNotifications(document.getElementById('main'));
 }
 
 async function markAllNotifRead(username) {
   await api('/api/workflow/notifications/read-all?recipient=' + encodeURIComponent(username), { method:'POST' });
+  _notifData = _notifData.map(function(n){n.isNew=false;n.is_read=true;return n;});
   renderNotifications(document.getElementById('main'));
 }
 
