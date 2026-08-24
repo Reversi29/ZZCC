@@ -175,3 +175,8 @@ class TestAI:
     def test_thresholds(self, client, auth_headers):
         r = client.get("/api/ai/approval/thresholds", headers=auth_headers)
         assert r.status_code == 200
+
+class TestAuditLog:
+    def test_record_and_query(self, client, auth_headers):
+        r = client.get("/api/audit-log", headers=auth_headers)
+        assert r.status_code == 200, f"GET got {r.status_code}: {r.text[:200]}"
