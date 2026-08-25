@@ -625,6 +625,7 @@ const MODULES = [
   { id: 'audit-log', name: '操作日志', emoji: '📜' },
   { id: 'profile', name: '个人主页', emoji: '👤' },
   { id: 'settings', name: '个人设置', emoji: '⚙️' },
+  { id: 'flow-designer', name: '流程编排', emoji: '🔀' },
 ];
 
 // 用户收藏的业务模块（默认：CRM、财务、审批）
@@ -960,7 +961,7 @@ function render() {
   const main = document.getElementById('main');
   const map = { dashboard:renderDashboard, announcements:renderAnnouncements, calendar:renderCalendar, directory:renderDirectory, reports:renderReports, meetings:renderMeetings, forms:renderFormDesigner, netdrive:renderNetDrive, crm:renderCRM, contacts:renderCRM, opportunities:renderCRM, compliance:renderContract, finance:renderFinance, project:renderProject, tasks:renderTasks, procurement:renderProcurement,
     hr:renderEmployees, leaves:renderLeaves, attendance:renderAttendance, salary:renderSalary,
-    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, "approval-rules":renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, "notification-settings":renderNotificationSettings, moduleSwitch:renderModuleSwitch, "module-switch":renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, "audit-log":renderAuditLog, profile:renderProfile, settings:renderSettings, assets:renderAssets };
+    stock:renderStock, ai:renderAI, analytics:renderAnalytics, workflow:renderWorkflow, departments:renderDepartments, project:renderProject, tickets:renderTickets, quality:renderQuality, approvalRules:renderApprovalRules, "approval-rules":renderApprovalRules, budget:renderBudget, suppliers:renderSuppliers, notifications:renderNotifications, registrations:renderRegistrations, notificationSettings:renderNotificationSettings, "notification-settings":renderNotificationSettings, moduleSwitch:renderModuleSwitch, "module-switch":renderModuleSwitch, performance:renderPerformance, recruitment:renderRecruitment, auditLog:renderAuditLog, "audit-log":renderAuditLog, profile:renderProfile, settings:renderSettings, assets:renderAssets, "flow-designer":renderFlowDesigner, flowDesigner:renderFlowDesigner };
   if (main) {
     const fn = map[currentModule] || renderDashboard;
     fn(main);
@@ -4218,4 +4219,1083 @@ async function aiBatchExecute() {
   }
 }
 
+
+/* ============================================================
+   Flow Designer — 可视化业务流编排画布编辑器
+   ============================================================ */
+
+/* ── Global state ───────────────────────────────────────────── */
+var FLOW = {
+  templates: [],
+  instances: [],
+  nodeTypes: {},
+  categories: {},
+  currentTemplateId: null,
+  currentInstanceId: null,
+  canvas: { nodes: [], edges: [], nextId: 100 },
+  pan: { x: 0, y: 0, zoom: 1 },
+  dragging: null,          // {nodeId, offsetX, offsetY}
+  panning: false,
+  panStart: null,
+  hoverNodeId: null,
+  selectedNodeId: null,
+  pendingEdges: {},         // sourceId -> [{x,y}]
+  selectedEdgeId: null,
+  modal: null
+};
+
+/* ── Node config panel schemas (fallback; backend provides) ── */
+var FLOW_FIELD_SCHEMAS = {
+  input: [
+    { key: 'fields', label: '表单字段 (JSON array)', type: 'json' }
+  ],
+  action: [
+    { key: 'method', label: 'HTTP Method', type: 'select', options: 'GET|POST|PUT|PATCH|DELETE' },
+    { key: 'path', label: 'API Path', type: 'text' },
+    { key: 'body', label: 'Request Body (JSON)', type: 'json' }
+  ],
+  http: [
+    { key: 'url', label: 'URL', type: 'text' },
+    { key: 'method', label: 'HTTP Method', type: 'select', options: 'GET|POST|PUT' },
+    { key: 'body', label: 'Request Body', type: 'json' }
+  ],
+  decision: [
+    { key: 'condition', label: 'Condition (JS expression)', type: 'text' },
+    { key: 'true_label', label: 'True 分支标签', type: 'text' },
+    { key: 'false_label', label: 'False 分支标签', type: 'text' }
+  ],
+  approve: [
+    { key: 'approver_role', label: '审批角色', type: 'select', options: 'admin|operator|hr|finance' },
+    { key: 'message', label: '审批提示', type: 'text' }
+  ],
+  agent: [
+    { key: 'prompt', label: 'AI Prompt', type: 'textarea' },
+    { key: 'model', label: 'Model', type: 'text' }
+  ],
+  notify: [
+    { key: 'channels', label: 'Channels (JSON array)', type: 'json' },
+    { key: 'message', label: 'Message', type: 'text' }
+  ],
+  loop: [
+    { key: 'iterator', label: 'Iterator variable', type: 'text' },
+    { key: 'item_var', label: 'Item variable', type: 'text' }
+  ],
+  delay: [
+    { key: 'duration', label: 'Duration (ms)', type: 'number' }
+  ],
+  webhook: [
+    { key: 'url', label: 'Callback URL', type: 'text' },
+    { key: 'method', label: 'Method', type: 'select', options: 'GET|POST' }
+  ]
+};
+
+/* ── Canvas drawing ────────────────────────────────────────── */
+
+function _nodeLabel(nd) {
+  var nt = FLOW.nodeTypes[nd.type];
+  return (nt && nt.label ? nt.label : nd.type);
+}
+function _nodeEmoji(nd) {
+  var nt = FLOW.nodeTypes[nd.type];
+  return (nt && nt.emoji ? nt.emoji : '📦');
+}
+function _nodeX(nd) { return (nd.x || 0) + FLOW.pan.x; }
+function _nodeY(nd) { return (nd.y || 0) + FLOW.pan.y; }
+
+function renderCanvas(canvasEl) {
+  if (!canvasEl) return;
+  canvasEl.width  = canvasEl.clientWidth  * window.devicePixelRatio;
+  canvasEl.height = canvasEl.clientHeight * window.devicePixelRatio;
+  var ctx = canvasEl.getContext('2d');
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, canvasEl.clientWidth, canvasEl.clientHeight);
+  _drawGrid(ctx, canvasEl);
+  _drawEdges(ctx, canvasEl);
+  _drawNodes(ctx, canvasEl);
+}
+
+function _drawGrid(ctx, cv) {
+  var sz = 24 * FLOW.pan.zoom;
+  if (sz < 8) return;
+  var step = sz;
+  var offX = (FLOW.pan.x % step + step) % step;
+  var offY = (FLOW.pan.y % step + step) % step;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  for (var x = offX; x < cv.clientWidth; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.clientHeight); ctx.stroke();
+  }
+  for (var y = offY; y < cv.clientHeight; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cv.clientWidth, y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function _drawEdges(ctx, cv) {
+  ctx.save();
+  ctx.translate(FLOW.pan.x, FLOW.pan.y);
+  ctx.scale(FLOW.pan.zoom, FLOW.pan.zoom);
+
+  for (var ei = 0; ei < FLOW.canvas.edges.length; ei++) {
+    var e = FLOW.canvas.edges[ei];
+    var s = FLOW.canvas.nodes.find(n => n.id === e.source);
+    var t = FLOW.canvas.nodes.find(n => n.id === e.target);
+    if (!s || !t) continue;
+
+    var sx = s.x + 130, sy = s.y + 36;
+    var tx = t.x,     ty = t.y + 36;
+    var mx = (sx + tx) / 2;
+    var selected = FLOW.selectedEdgeId === e.id;
+
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.bezierCurveTo(mx, sy, mx, ty, tx, ty);
+    ctx.strokeStyle = selected ? '#3b82f6' : 'rgba(148,163,184,0.6)';
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.stroke();
+
+    // arrow
+    ctx.beginPath();
+    var ah = 8;
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - ah, ty - ah/2);
+    ctx.lineTo(tx - ah, ty + ah/2);
+    ctx.closePath();
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fill();
+
+    // condition label
+    if (e.condition && e.condition !== 'default') {
+      ctx.font = '11px sans-serif';
+      ctx.fillStyle = '#f59e0b';
+      ctx.textAlign = 'center';
+      ctx.fillText(e.condition, mx, (sy + ty) / 2 - 6);
+    }
+  }
+  ctx.restore();
+}
+
+function _drawNodes(ctx, cv) {
+  ctx.save();
+  ctx.translate(FLOW.pan.x, FLOW.pan.y);
+  ctx.scale(FLOW.pan.zoom, FLOW.pan.zoom);
+
+  for (var ni = 0; ni < FLOW.canvas.nodes.length; ni++) {
+    var n = FLOW.canvas.nodes[ni];
+    var x = n.x || 0, y = n.y || 0;
+    var w = 260, h = 72;
+    var nt = FLOW.nodeTypes[n.type];
+    var color = (nt && nt.color) || '#6366f1';
+    var selected = FLOW.selectedNodeId === n.id;
+    var isHover  = FLOW.hoverNodeId === n.id;
+
+    // shadow
+    ctx.shadowColor = selected ? 'rgba(99,102,241,0.6)' : 'rgba(0,0,0,0.3)';
+    ctx.shadowBlur = selected ? 16 : 6;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 2;
+
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(x, y, w, h, 10) : ctx.rect(x, y, w, h);
+    var grad = ctx.createLinearGradient(x, y, x, y + h);
+    grad.addColorStop(0, 'rgba(30,41,59,0.98)');
+    grad.addColorStop(1, 'rgba(15,23,42,0.98)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.lineWidth = selected ? 2.5 : (isHover ? 1.5 : 1);
+    ctx.strokeStyle = selected ? '#3b82f6' : (isHover ? '#64748b' : 'rgba(100,116,147,0.5)');
+    ctx.stroke();
+
+    // left color bar
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y + 4, 3, h - 8);
+
+    // emoji
+    ctx.font = '20px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.fillText(_nodeEmoji(n), x + 12, y + 30);
+
+    // label
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fillText(n.label || _nodeLabel(n), x + 42, y + 24);
+
+    // type
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(_nodeLabel(n) + '  ·  ' + n.id, x + 42, y + 46);
+
+    // config indicator
+    if (n.config && JSON.stringify(n.config) !== '{}') {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x + w - 14, y + 14, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
+
+/* ── Sidebar node palette ─────────────────────────────────── */
+
+function renderPalette(paletteEl) {
+  if (!paletteEl) return;
+  var html = '<div class="flow-palette-header">🧩 节点库</div>';
+  html += '<div class="flow-palette-search"><input id="flowSearch" type="text" placeholder="搜索节点..." value="' + (window._flowSearch || '') + '" /></div>';
+  html += '<div class="flow-palette-legend">';
+  var cats = Object.keys(FLOW.categories);
+  for (var ci = 0; ci < cats.length; ci++) {
+    var ck = cats[ci];
+    var cat = FLOW.categories[ck];
+    html += '<span class="flow-legend-tag" style="color:' + (cat.color || '#3b82f6') + '">' + (cat.emoji || '') + ' ' + cat.label + '</span>';
+  }
+  html += '</div>';
+
+  var filter = (window._flowSearch || '').toLowerCase();
+  var keys = Object.keys(FLOW.nodeTypes);
+  for (var ti = 0; ti < keys.length; ti++) {
+    var tk = keys[ti];
+    var t = FLOW.nodeTypes[tk];
+    if (filter && !t.label.toLowerCase().includes(filter) && !tk.includes(filter)) continue;
+    html += '<div class="flow-node-palette-item" draggable="true" data-type="' + tk + '">'
+          + '<span class="flow-node-emoji">' + (t.emoji || '📦') + '</span>'
+          + '<span class="flow-node-label">' + t.label + '</span>'
+          + '<span class="flow-node-desc">' + t.desc + '</span>'
+          + '</div>';
+  }
+  paletteEl.innerHTML = html;
+
+  paletteEl.querySelectorAll('.flow-node-palette-item').forEach(function(item) {
+    item.addEventListener('dragstart', function(ev) {
+      ev.dataTransfer.setData('text/plain', ev.target.dataset.type);
+    });
+  });
+}
+
+/* ── Properties panel ───────────────────────────────────────── */
+
+function renderProperties(propsEl) {
+  if (!propsEl) return;
+  if (FLOW.selectedNodeId === null && FLOW.selectedEdgeId === null) {
+    propsEl.innerHTML = '<div class="flow-empty">选择一个节点或连线<br>查看属性</div>';
+    return;
+  }
+  if (FLOW.selectedEdgeId !== null) {
+    renderEdgeProps(propsEl);
+    return;
+  }
+  var nd = FLOW.canvas.nodes.find(n => n.id === FLOW.selectedNodeId);
+  if (!nd) { propsEl.innerHTML = ''; return; }
+
+  var nt = FLOW.nodeTypes[nd.type];
+  var html = '<div class="flow-prop-header">' + (nt && nt.emoji ? nt.emoji : '📦') + ' ' + (nt ? nt.label : nd.type) + '</div>';
+  html += '<div class="flow-prop-group">';
+  html += '<label>ID</label><input class="flow-input" value="' + nd.id + '" disabled />';
+  html += '<label>标签</label><input class="flow-input" id="flowLabelInput" value="' + (nd.label || '') + '" />';
+  html += '<label>类型</label><input class="flow-input" value="' + nd.type + '" disabled />';
+  html += '</div>';
+
+  var fields = FLOW_FIELD_SCHEMAS[nd.type];
+  if (fields) {
+    html += '<div class="flow-prop-group">';
+    html += '<div class="flow-prop-group-title">配置</div>';
+    for (var fi = 0; fi < fields.length; fi++) {
+      var f = fields[fi];
+      var val = nd.config && nd.config[f.key] !== undefined ? nd.config[f.key] : (f.default || '');
+      if (typeof val === 'object') val = JSON.stringify(val, null, 2);
+      html += '<label>' + f.label + '</label>';
+      if (f.type === 'textarea') {
+        html += '<textarea class="flow-input flow-textarea" id="flowField_' + fi + '">' + (val || '') + '</textarea>';
+      } else if (f.type === 'number') {
+        html += '<input class="flow-input" type="number" id="flowField_' + fi + '" value="' + (val || '') + '" />';
+      } else if (f.type === 'json') {
+        html += '<textarea class="flow-input flow-textarea" id="flowField_' + fi + '" rows="3">' + (val || '') + '</textarea>';
+      } else {
+        html += '<input class="flow-input" id="flowField_' + fi + '" value="' + (val || '') + '" />';
+      }
+    }
+    html += '</div>';
+  } else if (nd.type === 'start' || nd.type === 'output') {
+    html += '<div class="flow-prop-group"><div class="flow-prop-group-title">配置</div><div class="flow-empty">终端节点，无需配置</div></div>';
+  }
+
+  html += '<button class="flow-btn flow-btn-danger" onclick="FLOW_deleteSelectedNode()">🗑️ 删除节点</button>';
+  propsEl.innerHTML = html;
+
+  // bind label change
+  var lbl = propsEl.querySelector('#flowLabelInput');
+  if (lbl) {
+    lbl.addEventListener('change', function() {
+      nd.label = lbl.value;
+      renderCanvas(FLOW._canvas);
+    });
+  }
+  var fieldInputs = propsEl.querySelectorAll('[id^="flowField_"]');
+  fieldInputs.forEach(function(inp) {
+    var idx = parseInt(inp.id.replace('flowField_', ''), 10);
+    inp.addEventListener('change', function() {
+      var key = fields[idx].key;
+      var raw = inp.value;
+      try {
+        if (['json', 'fields'].includes(fields[idx].key) || (typeof nd.config && nd.config[key] !== undefined && typeof nd.config[key] === 'object')) {
+          nd.config[key] = JSON.parse(raw);
+        } else if (fields[idx].type === 'number') {
+          nd.config[key] = parseFloat(raw) || 0;
+        } else {
+          nd.config[key] = raw;
+        }
+      } catch(e) {
+        nd.config[key] = raw;
+      }
+      renderCanvas(FLOW._canvas);
+    });
+  });
+}
+
+function renderEdgeProps(propsEl) {
+  var e = FLOW.canvas.edges.find(x => x.id === FLOW.selectedEdgeId);
+  if (!e) { propsEl.innerHTML = ''; return; }
+  var html = '<div class="flow-prop-header">🔗 连线属性</div>';
+  html += '<div class="flow-prop-group">';
+  html += '<label>Source</label><input class="flow-input" value="' + e.source + '" disabled />';
+  html += '<label>Target</label><input class="flow-input" value="' + e.target + '" disabled />';
+  html += '<label>Condition</label><input class="flow-input" id="flowEdgeCondition" value="' + (e.condition || 'default') + '" />';
+  html += '</div>';
+  html += '<button class="flow-btn flow-btn-danger" onclick="FLOW_deleteSelectedEdge()">🗑️ 删除连线</button>';
+  propsEl.innerHTML = html;
+  var cond = propsEl.querySelector('#flowEdgeCondition');
+  if (cond) {
+    cond.addEventListener('change', function() {
+      e.condition = cond.value || 'default';
+      renderCanvas(FLOW._canvas);
+    });
+  }
+}
+
+/* ── History panel ──────────────────────────────────────────── */
+
+async function renderHistory(historyEl) {
+  if (!historyEl) return;
+  try {
+    var j = await api('/api/flow/instances', 'GET', null, 'GET');
+    var items = j.data && j.data.data ? j.data.data : (j.data || []);
+    if (Array.isArray(j)) items = j;
+    if (items.length === 0) {
+      historyEl.innerHTML = '<div class="flow-empty">暂无执行实例</div>';
+      return;
+    }
+    var html = '<div class="flow-history-header">📜 执行记录</div>';
+    html += '<div class="flow-history-stats">';
+    var total = items.length, ok = 0, fail = 0, suspend = 0;
+    items.forEach(function(it) {
+      if (it.status === 'complete') ok++;
+      else if (it.status === 'suspended') suspend++;
+      else if (it.status === 'failed') fail++;
+    });
+    html += '<span class="stat-ok">' + ok + '</span> <span class="stat-fail">' + fail + '</span> <span class="stat-suspend">' + suspend + '</span>';
+    html += '</div>';
+    html += '<div class="flow-history-list">';
+    for (var i = 0; i < Math.min(items.length, 20); i++) {
+      var r = items[i];
+      var badge = r.status === 'complete' ? '✅' : r.status === 'suspended' ? '⏸️' : r.status === 'failed' ? '❌' : '🔄';
+      html += '<div class="flow-history-item" onclick="FLOW_viewInstance(' + r.id + ',\'' + (r.name || '').replace(/'/g, "\\'") + '\')">'
+            + '<span class="history-badge">' + badge + '</span>'
+            + '<div class="history-info">'
+            + '<div class="history-name">' + (r.name || 'Instance ' + r.id) + '</div>'
+            + '<div class="history-meta">' + (r.template_name || '') + ' · ' + (r.created_at ? r.created_at.substring(0, 16) : '') + '</div>'
+            + '</div></div>';
+    }
+    html += '</div>';
+    historyEl.innerHTML = html;
+  } catch(e) {
+    historyEl.innerHTML = '<div class="flow-empty">加载失败: ' + (e.message || e) + '</div>';
+  }
+}
+
+/* ── Toolbar ────────────────────────────────────────────────── */
+
+function renderToolbar(toolbarEl) {
+  if (!toolbarEl) return;
+  toolbarEl.innerHTML =
+    '<button class="flow-btn flow-btn-primary" onclick="FLOW_exportJson()">💾 导出 JSON</button>'
+    + '<button class="flow-btn" onclick="FLOW_importJson()">📂 导入</button>'
+    + '<button class="flow-btn" onclick="FLOW_saveTemplate()">🔖 保存模板</button>'
+    + '<button class="flow-btn" onclick="FLOW_createInstance()">▶️ 运行</button>'
+    + '<button class="flow-btn flow-btn-danger" onclick="FLOW_clearCanvas()">🧹 清空</button>'
+    + '<button class="flow-btn" onclick="FLOW_buildAI()">🤖 AI 编排</button>'
+    + '<span class="flow-zoom-label">' + Math.round(FLOW.pan.zoom * 100) + '%</span>'
+    + '<button class="flow-btn" onclick="FLOW_zoomTo(1)">100%</button>'
+    + '<button class="flow-btn" onclick="FLOW_zoomTo(0.75)">75%</button>'
+    + '<button class="flow-btn" onclick="FLOW_zoomTo(0.5)">50%</button>';
+}
+
+function renderTemplatesModal() {
+  if (FLOW.modal) {
+    FLOW.modal.remove();
+    FLOW.modal = null;
+    return;
+  }
+  var overlay = document.createElement('div');
+  overlay.className = 'flow-modal-overlay';
+  overlay.addEventListener('click', function(ev) { if (ev.target === overlay) renderTemplatesModal(); });
+  var dialog = document.createElement('div');
+  dialog.className = 'flow-modal';
+  dialog.innerHTML = '<h3>📋 保存为模板</h3>'
+    + '<input id="flowTemplateName" class="flow-input" placeholder="模板名称" style="width:100%;margin-bottom:8px" />'
+    + '<input id="flowTemplateDesc" class="flow-input" placeholder="描述" style="width:100%;margin-bottom:8px" />'
+    + '<input id="flowTemplateCategory" class="flow-input" placeholder="分类 (hr/finance/ops/custom)" style="width:100%;margin-bottom:12px" />'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+    + '<button class="flow-btn" onclick="renderTemplatesModal()">取消</button>'
+    + '<button class="flow-btn flow-btn-primary" onclick="FLOW_doSave()">保存</button>'
+    + '</div>';
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  FLOW.modal = overlay;
+  dialog.querySelector('#flowTemplateName').focus();
+}
+
+/* ── Actions ────────────────────────────────────────────────── */
+
+function FLOW_exportJson() {
+  var data = JSON.stringify(FLOW.canvas, null, 2);
+  var blob = new Blob([data], {type: 'application/json'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'flow_' + Date.now() + '.json';
+  a.click();
+}
+
+function FLOW_importJson() {
+  var inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.json';
+  inp.onchange = function() {
+    var fr = new FileReader();
+    fr.onload = function() {
+      try {
+        FLOW.canvas = JSON.parse(fr.result);
+        if (!FLOW.canvas.edges) FLOW.canvas.edges = [];
+        FLOW.canvas.nextId = Math.max(0, ...FLOW.canvas.nodes.map(n => n.id)) + 1;
+        renderCanvas(FLOW._canvas);
+        renderProperties(FLOW._props);
+      } catch(e) { toast('导入失败: ' + e.message, 'error'); }
+    };
+    fr.readAsText(inp.files[0]);
+  };
+  inp.click();
+}
+
+function FLOW_clearCanvas() {
+  if (!confirm('确定清空画布？')) return;
+  FLOW.canvas = { nodes: [], edges: [], nextId: 100 };
+  FLOW.selectedNodeId = null;
+  FLOW.selectedEdgeId = null;
+  renderCanvas(FLOW._canvas);
+  renderProperties(FLOW._props);
+}
+
+function FLOW_zoomTo(z) {
+  FLOW.pan.zoom = z;
+  renderCanvas(FLOW._canvas);
+  renderToolbar(FLOW._toolbar);
+}
+
+async function FLOW_saveTemplate() {
+  if (FLOW.canvas.nodes.length === 0) { toast('画布为空', 'error'); return; }
+  renderTemplatesModal();
+}
+
+async function FLOW_doSave() {
+  var name = document.getElementById('flowTemplateName').value.trim();
+  if (!name) { toast('请输入模板名称', 'error'); return; }
+  var req = {
+    name: name,
+    description: document.getElementById('flowTemplateDesc').value,
+    category: document.getElementById('flowTemplateCategory').value || 'custom',
+    config: FLOW.canvas
+  };
+  try {
+    var j = await api('/api/flow/templates', 'POST', req);
+    toast('模板已保存', 'success');
+    if (j.data && j.data.id) FLOW.currentTemplateId = j.data.id;
+    renderTemplatesModal();
+  } catch(e) {
+    toast('保存失败: ' + (e.message || e), 'error');
+  }
+}
+
+async function FLOW_createInstance() {
+  if (FLOW.canvas.nodes.length === 0) { toast('画布为空', 'error'); return; }
+  if (!FLOW.currentTemplateId) {
+    toast('请先保存为模板', 'error');
+    return;
+  }
+  try {
+    var j = await api('/api/flow/instances', 'POST', {
+      template_id: FLOW.currentTemplateId,
+      name: 'run-' + Date.now(),
+      context: {}
+    });
+    toast('实例已创建', 'success');
+    if (j.data && j.data.id) {
+      FLOW.currentInstanceId = j.data.id;
+      FLOW_viewInstance(FLOW.currentInstanceId, '新建实例');
+    }
+  } catch(e) {
+    toast('创建实例失败: ' + (e.message || e), 'error');
+  }
+}
+
+async function FLOW_viewInstance(id, name) {
+  try {
+    var j = await api('/api/flow/instances/' + id);
+    var inst = j.data || j;
+    if (!inst || !inst.nodes) { toast('实例不存在', 'error'); return; }
+
+    var modal = document.createElement('div');
+    modal.className = 'flow-modal-overlay';
+    modal.addEventListener('click', function(ev) { if (ev.target === modal) modal.remove(); });
+
+    var dialog = document.createElement('div');
+    dialog.className = 'flow-modal flow-modal-wide';
+    var statusIcon = inst.status === 'complete' ? '✅' : inst.status === 'suspended' ? '⏸️' : inst.status === 'failed' ? '❌' : '🔄';
+    var html = '<h3>' + statusIcon + ' ' + (name || inst.name) + '</h3>';
+    html += '<div class="flow-instance-meta">状态: ' + inst.status + ' | 模板: ' + (inst.template_name || '') + ' | ' + (inst.created_at ? inst.created_at.substring(0, 19) : '') + '</div>';
+
+    if (inst.error) html += '<div class="flow-instance-error">❌ ' + (inst.error || '') + '</div>';
+
+    html += '<div class="flow-steps">';
+    for (var i = 0; i < inst.nodes.length; i++) {
+      var n = inst.nodes[i];
+      var nIcon = n.status === 'done' ? '✅' : n.status === 'failed' ? '❌' : n.status === 'suspended' ? '⏸️' : '⏳';
+      html += '<div class="flow-step-item">'
+            + '<span class="flow-step-icon">' + nIcon + '</span>'
+            + '<div><strong>' + (n.label || n.node_type) + '</strong> <span class="flow-step-type">' + n.node_type + '</span></div>'
+            + '<span class="flow-step-status">' + n.status + '</span>'
+            + '</div>';
+      if (n.output_data) {
+        try {
+          var out = JSON.parse(n.output_data);
+          var outStr = JSON.stringify(out);
+          if (outStr.length > 200) outStr = outStr.substring(0, 200) + '...';
+          html += '<div class="flow-step-detail">' + outStr + '</div>';
+        } catch(e) {}
+      }
+    }
+    html += '</div>';
+
+    // actions
+    if (inst.status === 'suspended') {
+      html += '<button class="flow-btn flow-btn-primary" onclick="FLOW_approveInstance(' + id + ')">✅ 审批通过</button>';
+      html += '<button class="flow-btn" onclick="FLOW_approveInstance(' + id + ',false)\">❌ 驳回</button>';
+    }
+    if (inst.status === 'pending') {
+      html += '<button class="flow-btn flow-btn-primary" onclick="FLOW_executeInstance(' + id + ')">▶️ 执行</button>';
+    }
+    html += '<div style="margin-top:16px;text-align:right"><button class="flow-btn" onclick="this.closest(\'.flow-modal-overlay\').remove()">关闭</button></div>';
+    dialog.innerHTML = html;
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+  } catch(e) {
+    toast('加载实例失败: ' + (e.message || e), 'error');
+  }
+}
+
+async function FLOW_executeInstance(id) {
+  try {
+    var j = await api('/api/flow/instances/' + id + '/execute', 'POST', { context: {}, dry_run: false });
+    toast('执行完成', 'success');
+    setTimeout(function() { FLOW_viewInstance(id, '执行中'); }, 500);
+  } catch(e) { toast('执行失败: ' + (e.message || e), 'error'); }
+}
+
+async function FLOW_approveInstance(id, approved) {
+  try {
+    await api('/api/flow/instances/' + id + '/approve', 'POST', {
+      decision: approved !== false ? 'approve' : 'reject',
+      comment: approved !== false ? '通过' : '驳回'
+    });
+    toast(approved !== false ? '审批通过' : '已驳回', 'success');
+    setTimeout(function() { FLOW_viewInstance(id, '审批中'); }, 500);
+  } catch(e) { toast('审批失败: ' + (e.message || e), 'error'); }
+}
+
+async function FLOW_buildAI() {
+  var goal = prompt('描述你想自动化的流程（如"报销审批"、"招聘流程"、"工单流转"）:');
+  if (!goal) return;
+  try {
+    var j = await api('/api/flow/build', 'POST', { goal: goal, category: 'custom' });
+    if (j.data && j.data.template) {
+      var tpl = j.data.template;
+      var cfg = tpl.config;
+      if (cfg && cfg.nodes) {
+        FLOW.canvas = { nodes: cfg.nodes, edges: cfg.edges, nextId: Math.max(...cfg.nodes.map(n => n.id)) + 10 };
+        FLOW.currentTemplateId = tpl.id;
+        renderCanvas(FLOW._canvas);
+        renderProperties(FLOW._props);
+        toast('AI 已生成模板 (' + (j.data.method || 'rule') + ')', 'success');
+      }
+    } else {
+      toast(j.suggestion || 'AI 生成失败', 'info');
+    }
+  } catch(e) {
+    toast('AI 编排失败: ' + (e.message || e), 'error');
+  }
+}
+
+function FLOW_deleteSelectedNode() {
+  if (FLOW.selectedNodeId === null) return;
+  FLOW.canvas.nodes = FLOW.canvas.nodes.filter(n => n.id !== FLOW.selectedNodeId);
+  FLOW.canvas.edges = FLOW.canvas.edges.filter(e => e.source !== FLOW.selectedNodeId && e.target !== FLOW.selectedNodeId);
+  FLOW.selectedNodeId = null;
+  renderCanvas(FLOW._canvas);
+  renderProperties(FLOW._props);
+}
+
+function FLOW_deleteSelectedEdge() {
+  if (FLOW.selectedEdgeId === null) return;
+  FLOW.canvas.edges = FLOW.canvas.edges.filter(e => e.id !== FLOW.selectedEdgeId);
+  FLOW.selectedEdgeId = null;
+  renderCanvas(FLOW._canvas);
+  renderProperties(FLOW._props);
+}
+
+/* ── Canvas mouse/touch interaction ─────────────────────────── */
+
+function FLOW_onMouseDown(e) {
+  var rect = FLOW._canvas.getBoundingClientRect();
+  var mx = (e.clientX - rect.left) / FLOW.pan.zoom - FLOW.pan.x / FLOW.pan.zoom;
+  var my = (e.clientY - rect.top)  / FLOW.pan.zoom - FLOW.pan.y  / FLOW.pan.zoom;
+
+  // hit test nodes (reverse order — top first)
+  var hit = null;
+  for (var i = FLOW.canvas.nodes.length - 1; i >= 0; i--) {
+    var n = FLOW.canvas.nodes[i];
+    if (mx >= n.x && mx <= n.x + 260 && my >= n.y && my <= n.y + 72) {
+      hit = n;
+      break;
+    }
+  }
+
+  if (hit) {
+    FLOW.selectedNodeId = hit.id;
+    FLOW.selectedEdgeId = null;
+    FLOW.dragging = { nodeId: hit.id, startX: e.clientX, startY: e.clientY, origX: hit.x, origY: hit.y };
+    FLOW._lastDragType = 'node';
+    renderCanvas(FLOW._canvas);
+    renderProperties(FLOW._props);
+  } else {
+    // check edge click
+    var edgeHit = _edgeHitTest(mx, my);
+    if (edgeHit) {
+      FLOW.selectedEdgeId = edgeHit.id;
+      FLOW.selectedNodeId = null;
+      renderCanvas(FLOW._canvas);
+      renderProperties(FLOW._props);
+    } else {
+      FLOW.selectedNodeId = null;
+      FLOW.selectedEdgeId = null;
+      FLOW.panning = true;
+      FLOW.panStart = { x: e.clientX - FLOW.pan.x, y: e.clientY - FLOW.pan.y };
+      FLOW._lastDragType = 'pan';
+      renderProperties(FLOW._props);
+    }
+  }
+  if (e.type === 'touchstart') {
+    var t = e.touches[0];
+    FLOW._lastPos = { x: t.clientX, y: t.clientY };
+  }
+}
+
+function FLOW_onMouseMove(e) {
+  var touch = e.touches && e.touches[0];
+  var cx = touch ? touch.clientX : e.clientX;
+  var cy = touch ? touch.clientY : e.clientY;
+
+  if (FLOW.dragging) {
+    var dx = (cx - FLOW.dragging.startX) / FLOW.pan.zoom;
+    var dy = (cy - FLOW.dragging.startY) / FLOW.pan.zoom;
+    var n = FLOW.canvas.nodes.find(x => x.id === FLOW.dragging.nodeId);
+    if (n) {
+      n.x = FLOW.dragging.origX + dx;
+      n.y = FLOW.dragging.origY + dy;
+    }
+    renderCanvas(FLOW._canvas);
+    return;
+  }
+
+  if (FLOW.panning) {
+    FLOW.pan.x = cx - FLOW.panStart.x;
+    FLOW.pan.y = cy - FLOW.panStart.y;
+    renderCanvas(FLOW._canvas);
+    return;
+  }
+
+  // hover
+  var rect = FLOW._canvas.getBoundingClientRect();
+  var mx = (cx - rect.left) / FLOW.pan.zoom - FLOW.pan.x / FLOW.pan.zoom;
+  var my = (cy - rect.top)  / FLOW.pan.zoom - FLOW.pan.y  / FLOW.pan.zoom;
+  var hit = null;
+  for (var i = FLOW.canvas.nodes.length - 1; i >= 0; i--) {
+    var nd = FLOW.canvas.nodes[i];
+    if (mx >= nd.x && mx <= nd.x + 260 && my >= nd.y && my <= nd.y + 72) {
+      hit = nd.id;
+      break;
+    }
+  }
+  if (hit !== FLOW.hoverNodeId) {
+    FLOW.hoverNodeId = hit;
+    FLOW._canvas.style.cursor = hit ? 'pointer' : 'default';
+    renderCanvas(FLOW._canvas);
+  }
+}
+
+function FLOW_onMouseUp(e) {
+  if (FLOW.dragging) {
+    var touch = e.changedTouches && e.changedTouches[0];
+    var cx = touch ? touch.clientX : e.clientX;
+    var cy = touch ? touch.clientY : e.clientY;
+    var moved = Math.abs(cx - FLOW.dragging.startX) + Math.abs(cy - FLOW.dragging.startY);
+    if (moved < 5) {
+      // click — enter edge draw mode if shift/ctrl
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        FLOW.pendingEdges[FLOW.dragging.nodeId] = [{x: cx - FLOW._canvas.getBoundingClientRect().left, y: cy - FLOW._canvas.getBoundingClientRect().top}];
+      }
+    }
+    FLOW.dragging = null;
+  }
+  FLOW.panning = false;
+  FLOW.panStart = null;
+}
+
+function FLOW_onWheel(e) {
+  e.preventDefault();
+  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+  FLOW.pan.zoom = Math.max(0.25, Math.min(2, FLOW.pan.zoom * delta));
+  renderCanvas(FLOW._canvas);
+  renderToolbar(FLOW._toolbar);
+}
+
+function FLOW_onDrop(e) {
+  e.preventDefault();
+  var type = e.dataTransfer.getData('text/plain');
+  if (!type || !FLOW.nodeTypes[type]) return;
+  var rect = FLOW._canvas.getBoundingClientRect();
+  var mx = (e.clientX - rect.left) / FLOW.pan.zoom - FLOW.pan.x / FLOW.pan.zoom;
+  var my = (e.clientY - rect.top)  / FLOW.pan.zoom - FLOW.pan.y  / FLOW.pan.zoom;
+  var id = FLOW.canvas.nextId++;
+  var nt = FLOW.nodeTypes[type];
+  FLOW.canvas.nodes.push({
+    id: id,
+    x: Math.round(mx / 20) * 20,
+    y: Math.round(my / 20) * 20,
+    type: type,
+    label: nt ? nt.label : type,
+    config: {}
+  });
+  FLOW.selectedNodeId = id;
+  FLOW.selectedEdgeId = null;
+  renderCanvas(FLOW._canvas);
+  renderProperties(FLOW._props);
+}
+
+function _edgeHitTest(mx, my) {
+  for (var ei = 0; ei < FLOW.canvas.edges.length; ei++) {
+    var e = FLOW.canvas.edges[ei];
+    var s = FLOW.canvas.nodes.find(n => n.id === e.source);
+    var t = FLOW.canvas.nodes.find(n => n.id === e.target);
+    if (!s || !t) continue;
+    var sx = s.x + 130, sy = s.y + 36, tx = t.x, ty = t.y + 36;
+    var dist = _pointToBezierDist(mx, my, sx, sy, tx, ty, sx, sy, tx, ty);
+    if (dist < 10) return e;
+  }
+  return null;
+}
+
+function _pointToBezierDist(px, py, x1, y1, x2, y2, cx1, cy1, cx2, cy2) {
+  // approximate: check several sample points along bezier
+  var min = 9999;
+  for (var i = 0; i <= 10; i++) {
+    var t = i / 10;
+    var it = 1 - t;
+    var bx = it*it*it*x1 + 3*it*it*t*cx1 + 3*it*t*t*cx2 + t*t*t*x2;
+    var by = it*it*it*y1 + 3*it*it*t*cy1 + 3*it*t*t*cy2 + t*t*t*y2;
+    var dx = px - bx, dy = py - by;
+    var d = dx*dx + dy*dy;
+    if (d < min) min = d;
+  }
+  return Math.sqrt(min);
+}
+
+/* ── Keyboard shortcuts ─────────────────────────────────────── */
+
+function FLOW_onKeyDown(e) {
+  if (!FLOW._active) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (FLOW.selectedNodeId !== null) {
+      e.preventDefault();
+      FLOW_deleteSelectedNode();
+    } else if (FLOW.selectedEdgeId !== null) {
+      e.preventDefault();
+      FLOW_deleteSelectedEdge();
+    }
+  }
+  if (e.key === 'Escape') {
+    FLOW.selectedNodeId = null;
+    FLOW.selectedEdgeId = null;
+    renderCanvas(FLOW._canvas);
+    renderProperties(FLOW._props);
+  }
+}
+
+/* ── Main entry point ───────────────────────────────────────── */
+
+async function renderFlowDesigner(main) {
+  FLOW._active = true;
+  main.innerHTML =
+    '<div class="flow-container">'
+    + '<div class="flow-toolbar" id="flowToolbar"></div>'
+    + '<div class="flow-body">'
+    + '<div class="flow-sidebar">'
+    + '<div class="flow-palette" id="flowPalette"></div>'
+    + '</div>'
+    + '<div class="flow-canvas-area" id="flowCanvasArea">'
+    + '<canvas id="flowCanvasEl" class="flow-canvas"></canvas>'
+    + '<div class="flow-canvas-hint">拖拽节点到画布 · 滚轮缩放 · Shift+点击连点连线 · 双击节点编辑</div>'
+    + '</div>'
+    + '<div class="flow-panel">'
+    + '<div class="flow-panel-tab active">属性</div>'
+    + '<div class="flow-panel-tab" onclick="FLOW_switchPanel(\'props\')">📝 属性</div>'
+    + '<div class="flow-panel-tab" onclick="FLOW_switchPanel(\'history\')">📜 执行记录</div>'
+    + '<div class="flow-panel-content" id="flowProps"></div>'
+    + '<div class="flow-panel-content" id="flowHistory" style="display:none"></div>'
+    + '</div>'
+    + '</div>'
+    + '</div>';
+
+  FLOW._canvas   = document.getElementById('flowCanvasEl');
+  FLOW._toolbar  = document.getElementById('flowToolbar');
+  FLOW._props    = document.getElementById('flowProps');
+  FLOW._history  = document.getElementById('flowHistory');
+  FLOW._canvasArea = document.getElementById('flowCanvasArea');
+
+  renderToolbar(FLOW._toolbar);
+
+  var initCanvas = function() {
+    FLOW._canvas.width  = FLOW._canvas.clientWidth  * window.devicePixelRatio;
+    FLOW._canvas.height = FLOW._canvas.clientHeight * window.devicePixelRatio;
+    renderCanvas(FLOW._canvas);
+  };
+
+  window.addEventListener('resize', initCanvas);
+  requestAnimationFrame(async function() {
+    initCanvas();
+    FLOW._canvas.addEventListener('mousedown',  FLOW_onMouseDown);
+    FLOW._canvas.addEventListener('mousemove',  FLOW_onMouseMove);
+    FLOW._canvas.addEventListener('mouseup',    FLOW_onMouseUp);
+    FLOW._canvas.addEventListener('wheel',      FLOW_onWheel, {passive: false});
+    FLOW._canvas.addEventListener('touchstart', FLOW_onMouseDown, {passive: true});
+    FLOW._canvas.addEventListener('touchmove',  FLOW_onMouseMove, {passive: true});
+    FLOW._canvas.addEventListener('touchend',   FLOW_onMouseUp, {passive: true});
+    FLOW._canvasArea.addEventListener('dragover', function(e) { e.preventDefault(); });
+    FLOW._canvasArea.addEventListener('drop',   FLOW_onDrop);
+    document.addEventListener('keydown', FLOW_onKeyDown);
+
+    // search
+    var search = document.getElementById('flowSearch');
+    if (search) {
+      search.addEventListener('input', function() {
+        window._flowSearch = search.value;
+        renderPalette(FLOW._paletteEl = document.getElementById('flowPalette'));
+      });
+    }
+
+    // Load node types
+    try {
+      var ntJ = await api('/api/flow/node-types');
+      var ntData = ntJ.data || ntJ;
+      if (ntData.types) FLOW.nodeTypes = ntData.types;
+      if (ntData.categories) FLOW.categories = ntData.categories;
+      renderPalette(document.getElementById('flowPalette'));
+    } catch(e) {
+      toast('加载节点类型失败: ' + (e.message || e), 'error');
+    }
+
+    renderProperties(FLOW._props);
+    renderHistory(FLOW._history);
+
+    // load existing templates
+    try {
+      var tj = await api('/api/flow/templates');
+      FLOW.templates = tj.data || tj;
+    } catch(e) {}
+
+    // If no nodes on canvas, add demo start/output
+    if (FLOW.canvas.nodes.length === 0) {
+      FLOW.canvas.nodes.push({ id: 1, x: 100, y: 200, type: 'start',    label: '开始', config: {} });
+      FLOW.canvas.nodes.push({ id: 2, x: 440, y: 200, type: 'decision', label: '条件判断', config: { condition: 'true' } });
+      FLOW.canvas.nodes.push({ id: 3, x: 780, y: 200, type: 'output',   label: '结束', config: {} });
+      FLOW.canvas.edges.push({ id: 'e1', source: 1, target: 2, condition: 'default' });
+      FLOW.canvas.edges.push({ id: 'e2', source: 2, target: 3, condition: 'true' });
+      FLOW.canvas.nextId = 10;
+      renderCanvas(FLOW._canvas);
+    }
+  });
+}
+
+function FLOW_switchPanel(tab) {
+  var props = document.getElementById('flowProps');
+  var history = document.getElementById('flowHistory');
+  if (tab === 'props') {
+    if (props) props.style.display = '';
+    if (history) history.style.display = 'none';
+  } else {
+    if (props) props.style.display = 'none';
+    if (history) history.style.display = '';
+    renderHistory(FLOW._history);
+  }
+}
+
+/* ── Flow Designer CSS ─────────────────────────────────────── */
+(function() {
+  var style = document.createElement('style');
+  style.textContent = `
+.flow-container {
+  display: flex; flex-direction: column; height: 100vh;
+  background: var(--surface); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.flow-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; z-index: 10;
+}
+.flow-toolbar .flow-btn { font-size: 13px; padding: 6px 12px; }
+.flow-toolbar .flow-zoom-label {
+  color: var(--text3); font-size: 12px; margin: 0 4px;
+  min-width: 36px; text-align: center;
+}
+.flow-body {
+  display: flex; flex: 1; overflow: hidden; min-height: 0;
+}
+.flow-sidebar {
+  width: 260px; border-right: 1px solid var(--border);
+  background: var(--panel); overflow-y: auto; flex-shrink: 0;
+  padding: 12px;
+}
+.flow-palette-header, .flow-history-header {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  padding: 8px 0; margin-bottom: 8px;
+}
+.flow-palette-search input {
+  width: 100%; padding: 8px 10px; background: var(--input-bg);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  font-size: 13px; box-sizing: border-box; margin-bottom: 12px;
+}
+.flow-palette-legend {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;
+}
+.flow-legend-tag {
+  font-size: 11px; padding: 2px 8px; background: rgba(255,255,255,0.05);
+  border-radius: 10px; border: 1px solid var(--border);
+}
+.flow-node-palette-item {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
+  cursor: grab; transition: all 0.15s;
+  background: rgba(255,255,255,0.02);
+}
+.flow-node-palette-item:hover {
+  background: rgba(59,130,246,0.1); border-color: #3b82f6;
+}
+.flow-node-emoji { font-size: 18px; line-height: 1.4; }
+.flow-node-label { font-size: 13px; font-weight: 600; color: var(--text); display: block; margin-bottom: 2px; }
+.flow-node-desc  { font-size: 11px; color: var(--text3); display: block; line-height: 1.3; }
+.flow-canvas-area {
+  flex: 1; position: relative; overflow: hidden; background: #0f172a;
+  cursor: default;
+}
+.flow-canvas {
+  width: 100%; height: 100%; display: block;
+}
+.flow-canvas-hint {
+  position: absolute; bottom: 12px; left: 12px;
+  color: var(--text3); font-size: 11px; opacity: 0.7;
+  pointer-events: none;
+}
+.flow-panel {
+  width: 320px; border-left: 1px solid var(--border);
+  background: var(--panel); overflow-y: auto; flex-shrink: 0;
+  padding: 12px;
+}
+.flow-panel-tab {
+  font-size: 12px; padding: 6px 12px; cursor: pointer;
+  color: var(--text3); border-bottom: 1px solid var(--border);
+  margin-bottom: 4px; transition: color 0.15s;
+}
+.flow-panel-tab:hover, .flow-panel-tab.active { color: var(--text); }
+.flow-prop-header {
+  font-size: 15px; font-weight: 600; color: var(--text);
+  padding: 4px 0 12px; margin-bottom: 12px;
+}
+.flow-prop-group { margin-bottom: 16px; }
+.flow-prop-group-title { font-size: 12px; color: var(--text3); margin-bottom: 8px; font-weight: 600; }
+.flow-prop-group label {
+  display: block; font-size: 12px; color: var(--text3);
+  margin-bottom: 4px; margin-top: 8px;
+}
+.flow-input {
+  width: 100%; padding: 8px 10px; background: var(--input-bg);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  font-size: 13px; box-sizing: border-box; font-family: inherit;
+}
+.flow-input:focus { outline: none; border-color: #3b82f6; }
+.flow-textarea { min-height: 60px; resize: vertical; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; }
+.flow-btn {
+  padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); cursor: pointer;
+  font-size: 13px; transition: all 0.15s;
+}
+.flow-btn:hover { border-color: #3b82f6; color: #3b82f6; }
+.flow-btn-primary {
+  background: #3b82f6; border-color: #3b82f6; color: #fff;
+}
+.flow-btn-primary:hover { background: #2563eb; border-color: #2563eb; color: #fff; }
+.flow-btn-danger { background: rgba(239,68,68,0.1); border-color: #ef4444; color: #ef4444; }
+.flow-btn-danger:hover { background: #ef4444; color: #fff; }
+.flow-empty { color: var(--text3); font-size: 13px; text-align: center; padding: 24px 0; line-height: 1.6; }
+.flow-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 1000;
+}
+.flow-modal {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; min-width: 360px; max-width: 90vw; max-height: 80vh; overflow-y: auto;
+}
+.flow-modal-wide { min-width: 520px; max-width: 90vw; }
+.flow-modal h3 { margin: 0 0 16px; color: var(--text); font-size: 16px; }
+.flow-instance-meta { font-size: 12px; color: var(--text3); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.flow-instance-error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; border-radius: 6px; padding: 8px 12px; color: #ef4444; font-size: 13px; margin-bottom: 12px; }
+.flow-steps { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.flow-step-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); border-radius: 6px; border: 1px solid var(--border); font-size: 13px; }
+.flow-step-icon { font-size: 16px; }
+.flow-step-type { font-size: 11px; color: var(--text3); margin-left: 4px; }
+.flow-step-status { margin-left: auto; font-size: 11px; color: var(--text3); }
+.flow-step-detail { padding: 4px 10px 4px 32px; font-size: 11px; color: var(--text3); font-family: 'SF Mono', monospace; }
+.flow-history-stats { font-size: 12px; padding: 4px 0; margin-bottom: 8px; }
+.flow-history-stats .stat-ok { color: var(--green); margin-right: 8px; }
+.flow-history-stats .stat-fail { color: var(--red); margin-right: 8px; }
+.flow-history-stats .stat-suspend { color: var(--yellow); }
+.flow-history-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; cursor: pointer; transition: background 0.15s; }
+.flow-history-item:hover { background: rgba(59,130,246,0.08); }
+.flow-history-item .history-badge { font-size: 16px; }
+.flow-history-item .history-name { font-size: 13px; color: var(--text); }
+.flow-history-item .history-meta { font-size: 11px; color: var(--text3); margin-top: 2px; }
+`;
+  document.head.appendChild(style);
+})();
 </script>
