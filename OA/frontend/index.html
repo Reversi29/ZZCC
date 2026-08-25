@@ -1100,11 +1100,11 @@ function _renderQIList(rows) {
     var dateStr = r.created ? r.created.slice(0,16) : '';
     var readingCount = 0;
     try { readingCount = (JSON.parse(r.readings_json||'[]')||[]).length; } catch(e) {}
-    return '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:#fff;border-radius:4px">'
+    return '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:var(--surface);border-radius:4px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-qi-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none">'+esc(r.name)+'</a>'
       + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:2px">'+tLabel+' · 物料: '+esc(r.item_code||'-')+' · 批次: '+esc(r.batch_no||'-')+' · '+readingCount+' 项读数</div>'
-      + '<div style="font-size:11px;color:#aaa;margin-top:2px;display:flex;justify-content:space-between">'
+      + '<div style="font-size:11px;color:var(--text3);margin-top:2px;display:flex;justify-content:space-between">'
       + '<span>'+dateStr+'</span>'
       + '<span><button class="btn-sm" data-qi-id="'+esc(r.name)+'" data-qi-action="approve">✓</button> <button class="btn-sm" data-qi-id="'+esc(r.name)+'" data-qi-action="reject">✗</button></span></div>'
       + '</div>';
@@ -1193,7 +1193,7 @@ async function switchPJTab(tab) {
     var priColor = _PJ_PRI_COLOR[r.priority]||'#888';
     var dateStr = (r.start_date||'').slice(0,10);
     var dueStr = (r.end_date||'').slice(0,10);
-    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:#fff;border-radius:4px">'
+    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:var(--surface);border-radius:4px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-pj-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:14px">'+esc(r.project_name||r.name)+'</a>'
       + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:12px"><span>负责人: '+esc(r.project_manager||'-')+'</span><span>部门: '+esc(r.department||'-')+'</span><span style="color:'+priColor+'">优先级: '+esc(r.priority||'')+'</span><span>开始: '+dateStr+'</span><span>截止: '+dueStr+'</span></div>'
@@ -1272,7 +1272,7 @@ async function switchTskTab(tab) {
     var sColor = {Open:'#1976d2','In Progress':'#f9a825',Completed:'#388e3c',Cancelled:'#aaa'}[r.status]||'#888';
     var priColor = {Low:'#388e3c',Medium:'#f9a825',High:'#1565c0',Urgent:'#d33'}[r.priority]||'#888';
     var dueStr = (r.end_date||'').slice(0,10);
-    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:#fff;border-radius:4px;display:flex;gap:16px;align-items:center">'
+    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:var(--surface);border-radius:4px;display:flex;gap:16px;align-items:center">'
       + '<div style="flex:1"><div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-tsk-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:14px">'+esc(r.subject||r.name)+'</a><span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap"><span>项目: '+esc(r.project||'-')+'</span><span>负责人: '+esc(r.assigned_to||'-')+'</span><span style="color:'+priColor+'">优先级: '+esc(r.priority||'')+'</span><span>截止: '+dueStr+'</span></div>'
       + '<div style="margin-top:4px"><div style="height:5px;background:#eee;border-radius:3px"><div style="width:'+p+'%;background:'+pColor+';height:100%;border-radius:3px"></div></div></div></div>'
@@ -1333,12 +1333,12 @@ async function switchTktTab(tab) {
     var priColor = _TKT_PRI_COLOR[r.priority]||'#888';
     var typeLabel = _TKT_TYPE_LABEL[r.ticket_type] || (r.ticket_type||'');
     var dateStr = r.created ? r.created.slice(0,16) : '';
-    return '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:#fff;border-radius:4px">'
+    return '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:var(--surface);border-radius:4px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-tkt-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none">'+esc(r.subject||r.name)+'</a>'
       + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap"><span>'+typeLabel+'</span><span style="color:'+priColor+'">优先级: '+esc(r.priority||'')+'</span><span>提交人: '+esc(r.raised_by||'-')+'</span><span>'+dateStr+'</span></div>'
       + (r.description?'<div style="font-size:12px;color:var(--text2);margin-top:2px;border-left:2px solid #eee;padding-left:6px">'+esc(r.description.slice(0,150))+'</div>':'')
-      + '<div style="font-size:11px;color:#aaa;margin-top:2px;display:flex;justify-content:flex-end;gap:4px">'
+      + '<div style="font-size:11px;color:var(--text3);margin-top:2px;display:flex;justify-content:flex-end;gap:4px">'
       + '<button class="btn-sm" data-tkt-id="'+esc(r.name)+'" data-tkt-action="pending">处理中</button>'
       + '<button class="btn-sm" data-tkt-id="'+esc(r.name)+'" data-tkt-action="resolved">解决</button>'
       + '<button class="btn-sm" data-tkt-id="'+esc(r.name)+'" data-tkt-action="closed">关闭</button>'
@@ -1420,9 +1420,9 @@ function _renderARList(el, rows) {
     var label = _DOCTYPE_LABEL[r.doctype] || r.doctype;
     var dept = r.department_id || '全局';
     var note = cond.notes || '';
-    return '<div style="border-left:3px solid #1976d2;padding:8px 12px;margin-bottom:4px;background:#fff;border-radius:4px">'
+    return '<div style="border-left:3px solid #1976d2;padding:8px 12px;margin-bottom:4px;background:var(--surface);border-radius:4px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600">'+esc(r.doctype)+' <span style="font-size:11px;color:var(--text2)">('+esc(dept)+', L'+(r.level||0)+')</span></span>'
-      + '<span style="font-size:11px;background:#e3f2fd;padding:2px 6px;border-radius:3px">'+esc(r.approver_role||'')+'</span></div>'
+      + '<span style="font-size:11px;background:rgba(25,118,210,0.2);color:#90caf9;padding:2px 6px;border-radius:3px">'+esc(r.approver_role||'')+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:4px">阈值: ¥'+esc(amount)+' · '+days+'天限制 · '+llm+' · '+note+'</div>'
       + '<div style="font-size:11px;margin-top:4px;display:flex;gap:4px;justify-content:flex-end">'
       + '<button class="btn-sm" data-ar-edit="'+esc(r.id)+'">编辑</button>'
@@ -1509,10 +1509,10 @@ async function loadBudSummary(el) {
     + rows.map(function(r) {
       var pct = r.pct || 0;
       var color = pct>90?'#d33':pct>70?'#f9a825':'#388e3c';
-      return '<div style="border:1px solid #eee;padding:8px 12px;margin-bottom:4px;border-radius:4px">'
+      return '<div style="border:1px solid var(--border);padding:8px 12px;margin-bottom:4px;border-radius:4px;background:var(--surface)">'
         + '<div style="display:flex;justify-content:space-between"><b>'+esc(r.doctype)+'</b><span style="font-size:12px;color:'+color+'">'+pct+'% (¥'+fmtMoney(r.used)+'/'+fmtMoney(r.limit)+')</span></div>'
-        + '<div style="height:5px;background:#eee;border-radius:3px;margin-top:2px"><div style="width:'+Math.min(pct,100)+'%;background:'+color+';height:100%;border-radius:3px"></div></div>'
-        + '<div style="font-size:11px;color:#aaa;margin-top:2px">剩余: ¥'+fmtMoney(r.remaining)+' · 周期: '+(r.periods||[]).join(', ')+'</div></div>';
+        + '<div style="height:5px;background:var(--surface);border-radius:3px;margin-top:2px"><div style="width:'+Math.min(pct,100)+'%;background:'+color+';height:100%;border-radius:3px"></div></div>'
+        + '<div style="font-size:11px;color:var(--text3);margin-top:2px">剩余: ¥'+fmtMoney(r.remaining)+' · 周期: '+(r.periods||[]).join(', ')+'</div></div>';
     }).join('');
 }
 
@@ -1526,11 +1526,11 @@ async function loadBudList(el) {
       var dept = r.department_id || '全局';
       var pct = r.limit_amount ? Math.round(r.used_amount/r.limit_amount*100) : 0;
       var color = pct>90?'#d33':pct>70?'#f9a825':'#388e3c';
-      return '<div style="border-left:3px solid '+color+';padding:6px 10px;margin-bottom:3px;background:#fff;border-radius:4px">'
+      return '<div style="border-left:3px solid '+color+';padding:6px 10px;margin-bottom:3px;background:var(--surface);border-radius:4px">'
         + '<div style="display:flex;justify-content:space-between"><span style="font-weight:600;font-size:12px">'+esc(r.doctype)+' · '+esc(r.period||'')+' · '+esc(dept)+'</span>'
         + '<span style="font-size:11px;color:'+color+'">'+pct+'%</span></div>'
         + '<div style="font-size:11px;color:var(--text2)">额度: ¥'+fmtMoney(r.limit_amount||0)+' · 已用: ¥'+fmtMoney(r.used_amount||0)+' · 剩余: ¥'+fmtMoney((r.limit_amount||0)-(r.used_amount||0))+'</div>'
-        + '<div style="font-size:10px;color:#aaa;margin-top:2px;display:flex;gap:4px;justify-content:flex-end">'
+        + '<div style="font-size:10px;color:var(--text3);margin-top:2px;display:flex;gap:4px;justify-content:flex-end">'
         + '<button class="btn-sm" data-bud-edit="'+esc(r.id)+'">编辑</button>'
         + '<button class="btn-sm" data-bud-del="'+esc(r.id)+'">删除</button></div></div>';
     }).join('');
@@ -1587,9 +1587,9 @@ async function renderSuppliers(el) {
     return '<span class="badge" style="background:#e3f2fd">'+g[0]+' ('+g[1]+')</span>';
   }).join('')+'</div>'
     + rows.map(function(r) {
-      return '<div style="border-left:3px solid #1976d2;padding:8px 12px;margin-bottom:4px;background:#fff;border-radius:4px">'
+      return '<div style="border-left:3px solid #1976d2;padding:8px 12px;margin-bottom:4px;background:var(--surface);border-radius:4px">'
         + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-sup-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none">'+esc(r.supplier_name||r.name)+'</a>'
-        + '<span style="font-size:11px;background:#e3f2fd;padding:2px 6px;border-radius:3px">'+esc(r.supplier_group||'-')+'</span></div>'
+        + '<span style="font-size:11px;background:rgba(25,118,210,0.2);color:#90caf9;padding:2px 6px;border-radius:3px">'+esc(r.supplier_group||'-')+'</span></div>'
         + '<div style="font-size:12px;color:var(--text2);margin-top:2px;display:flex;gap:12px;flex-wrap:wrap"><span>'+esc(r.supplier_type||'')+'</span><span>税号: '+esc(r.tax_id||'-')+'</span><span>'+esc(r.website||'-')+'</span></div>'
         + (r.notes?'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+esc(r.notes.slice(0,100))+'</div>':'')
         + '</div>';
@@ -1688,14 +1688,14 @@ async function switchCtTab(tab) {
       var left = (new Date(r.end_date)-new Date(now));
       pctLeft = Math.max(0, Math.min(100, Math.round(left/total*100)));
     }
-    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:#fff;border-radius:4px">'
+    return '<div style="border-left:3px solid '+sColor+';padding:10px 14px;margin-bottom:6px;background:var(--surface);border-radius:4px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-ct-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:14px">'+esc(r.contract_name||r.name)+'</a>'
       + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+esc(r.status||'')+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap">'
       + '<span>甲方: '+esc(r.party_a||'-')+'</span><span>乙方: '+esc(r.party_b||'-')+'</span>'
       + '<span style="color:'+valColor+'">¥'+fmtMoney(amount)+'</span><span>有效期: '+start+' → '+end+'</span></div>'
       + '<div style="margin-top:6px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)"><span>剩余时长</span><span>'+pctLeft+'%</span></div>'
-      + '<div style="height:5px;background:#eee;border-radius:3px;margin-top:2px"><div style="width:'+pctLeft+'%;background:'+(pctLeft<20?'#d33':pctLeft<50?'#f9a825':'#388e3c')+';height:100%;border-radius:3px"></div></div></div>'
+      + '<div style="height:5px;background:var(--surface);border-radius:3px;margin-top:2px"><div style="width:'+pctLeft+'%;background:'+(pctLeft<20?'#d33':pctLeft<50?'#f9a825':'#388e3c')+';height:100%;border-radius:3px"></div></div></div>'
       + (r.terms?'<div style="font-size:12px;color:var(--text2);margin-top:4px;border-left:2px solid #eee;padding-left:8px">'+esc((r.terms||'').slice(0,120))+'</div>':'')
       + '</div>';
   }).join('');
@@ -1783,7 +1783,7 @@ async function loadCRMList(el, isLead) {
     var phone = isLead ? (r.phone||'-') : '';
     var closing = isLead ? '' : ((r.expected_closing_date||'').slice(0,10));
 
-    var html = '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:#fff;border-radius:4px">'
+    var html = '<div style="border-left:3px solid '+sColor+';padding:8px 12px;margin-bottom:4px;background:var(--surface);border-radius:4px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center"><a href="#" data-crm-id="'+esc(r.name)+'" style="font-weight:600;color:var(--accent);text-decoration:none;font-size:13px">'+esc(name)+'</a>'
       + '<span style="font-size:11px;padding:2px 6px;background:'+sColor+';color:#fff;border-radius:3px">'+_CRM_STAGE_LABEL[st]||st+'</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap"><span>客户: '+esc(party)+'</span>';
@@ -4029,7 +4029,7 @@ async function _renderNotifList(el) {
       + '<b style="font-size:12px">' + dot + n.title + '</b>'
       + '<span style="font-size:11px;color:' + n.priorityColor + '">' + n.priorityLabel + '</span></div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + n.body + ' ' + docHtml + '</div>'
-      + '<div style="font-size:11px;color:#aaa;margin-top:2px">' + n.timeLabel + ' · ' + n.typeLabel + '</div></div>';
+      + '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + n.timeLabel + ' · ' + n.typeLabel + '</div></div>';
   });
   itemsDiv.innerHTML = rows.join('');
   itemsDiv.querySelectorAll("[data-nid]").forEach(function(e){e.addEventListener("click",function(a){a.preventDefault();markNotifRead(parseInt(e.getAttribute("data-nid")));if(e.getAttribute("data-docname"))showWfDoc(e.getAttribute("data-doctype"),e.getAttribute("data-docname"));});});
