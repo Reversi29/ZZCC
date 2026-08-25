@@ -169,6 +169,13 @@ def execute_instance(db: Session, inst: FlowInstance, context: dict = None,
 
         # 处理当前节点
         result = _execute_node(db, node, context, dry_run)
+        # Merge branch (from decision) and output into context for next node
+        if "branch" in result:
+            context["_branch"] = result["branch"]
+        if "output" in result and isinstance(result["output"], dict):
+            # Inject flat result keys for decision-like nodes
+            if node.node_type == "decision" and "decision" in result["output"]:
+                context["decision_result"] = result["output"]["decision"]
         node.status = result["status"]
         node.input_data = json.dumps(context, ensure_ascii=False, default=str)
         node.output_data = json.dumps(result.get("output", {}), ensure_ascii=False, default=str)
@@ -339,21 +346,31 @@ def _execute_node(db: Session, node: FlowNode, context: dict, dry_run: bool) -> 
 
 
 def _next_node(db: Session, current_id: int, adj: dict, nodes: dict, context: dict) -> Optional[int]:
-    """根据边和当前上下文选择下一个节点"""
+    """根据边和当前上下文选择下一个节点。
+
+    优先级：
+    1. 显式匹配：_branch == 边 condition（来自 decision 节点的 true/false 输出）
+    2. 默认边：condition 为 "default" 或 "true"
+    3. 兜底：权重最高的第一条边
+    """
     outgoing = adj.get(current_id, [])
     if not outgoing:
         return None
 
-    # 如果有 decision 分支，根据上下文中的 _branch 值选择
-    branch = context.get("_branch", "true")
-    for e in sorted(outgoing, key=lambda x: x.weight):
-        if e.condition and e.condition not in ("true", "default"):
-            if str(e.condition) == str(branch):
-                return e.target_id
-            continue
-        # 默认分支
-        return e.target_id
+    branch = context.get("_branch")
 
+    # 第一轮：显式匹配 _branch
+    if branch is not None:
+        for e in sorted(outgoing, key=lambda x: x.weight):
+            if e.condition and str(e.condition) == str(branch):
+                return e.target_id
+
+    # 第二轮：默认边（condition=default 或 true）
+    for e in sorted(outgoing, key=lambda x: x.weight):
+        if not e.condition or e.condition in ("default", "true"):
+            return e.target_id
+
+    # 第三轮：兜底第一条
     return outgoing[0].target_id
 
 
