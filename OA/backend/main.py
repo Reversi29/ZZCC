@@ -218,6 +218,7 @@ def _register():
         "routers.analytics",
         "routers.budget",
         "routers.approval_rules",
+        "routers.flow",
         "routers.announcements",
         "routers.calendar",
         "routers.directory",
