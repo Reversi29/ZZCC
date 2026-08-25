@@ -5,7 +5,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 测试环境关闭 API 限流（TestClient 所有请求共享同一 IP，全量跑易触发 429）
 os.environ["RATELIMIT_ENABLED"] = "false"
-
+# 生产启动守卫需要这些环境变量，测试环境统一覆盖
+os.environ["API_KEY"] = "zzcc_oadev_key_2024"
+os.environ["API_SECRET"] = "zzcc_oadev_key_2024"
+os.environ["JWT_SECRET_KEY"] = "test-jwt-secret-key-32chars-plus"
+os.environ["PASSWORD_SALT_HEX"] = "7a7a63632d6f612d73616c74"
+os.environ["OAUTH_CLIENT_ID"] = "zzcc-oa-test-client"
+os.environ["OAUTH_CLIENT_SECRET"] = "zzcc-oa-test-secret"
 # 必须在 import database 之前设置（database.py 在模块加载时就创建 engine）
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
