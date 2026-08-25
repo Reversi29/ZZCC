@@ -226,7 +226,7 @@ def _execute_node(db: Session, node: FlowNode, context: dict, dry_run: bool) -> 
         pass
 
     if node.node_type in ("start", "output"):
-        return {"status": "done", "output": {"context": context}}
+        return {"status": "done", "output": {"complete": True, "context": context}}
 
     if node.node_type == "input":
         # 输入节点：等待外部提供数据（模拟）
@@ -252,32 +252,87 @@ def _execute_node(db: Session, node: FlowNode, context: dict, dry_run: bool) -> 
         return {"status": "suspended", "output": {"message": f"等待 {approver} 审批", "approver": approver}}
 
     if node.node_type == "agent":
-        # AI Agent 节点 — 占位执行
+        # AI Agent 节点 — 通过 HTTP 调用 AI 咨询 API
         prompt = config.get("prompt", "")
-        # 实际调用 LLM 的接口在 ai.py
-        return {"status": "done", "output": {"ai_response": f"Agent executed: {prompt[:50]}"}}
+        module = config.get("module", "procurement")
+        if dry_run:
+            return {"status": "done", "output": {"ai_response": f"[dry_run] Agent: {prompt[:50]}"}}
+        try:
+            result = call_internal_api("POST", "/api/ai/consult", {"module": module, "context": {"prompt": prompt, **context}})
+            return {"status": "done", "output": result.get("body", result)}
+        except Exception as e:
+            return {"status": "done", "output": {"ai_response": f"AI 暂不可用: {str(e)}"}}
 
     if node.node_type == "action":
         # API 调用
         method = config.get("method", "GET")
         path = config.get("path", "")
         body = config.get("body", {})
-        return {"status": "done", "output": {"method": method, "path": path, "body": body}}
+        if dry_run:
+            return {"status": "done", "output": {"method": method, "path": path, "body": body}}
+        result = call_internal_api(method, path, body or {})
+        ctx_key = config.get("ctx_key") or path.split("/")[-1]
+        context[ctx_key] = result.get("body", result)
+        return {"status": "done", "output": result}
 
     if node.node_type == "http":
         url = config.get("url", "")
-        return {"status": "done", "output": {"url": url, "note": "dry_run 模式未实际发送"}}
+        method = config.get("method", "GET")
+        body = config.get("body", {})
+        if dry_run:
+            return {"status": "done", "output": {"url": url, "note": "dry_run 模式未实际发送"}}
+        import urllib.request, urllib.error
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode())
+                context[config.get("ctx_key") or "http_result"] = body
+                return {"status": "done", "output": {"status": resp.status, "body": body}}
+        except urllib.error.HTTPError as e:
+            return {"status": "failed", "error": f"HTTP {e.code}: {e.read().decode()[:500]}"}
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
 
     if node.node_type == "notify":
         channels = config.get("channels", ["inapp"])
         message = config.get("message", "")
-        return {"status": "done", "output": {"channels": channels, "message": message}}
+        try:
+            from routers.notifications import push_external
+            push_external(message, json.dumps(context, ensure_ascii=False))
+            return {"status": "done", "output": {"channels": channels, "message": message}}
+        except Exception as e:
+            return {"status": "done", "output": {"note": f"通知跳过: {str(e)}", "channels": channels}}
 
     if node.node_type == "delay":
         duration = config.get("duration", 0)
+        if dry_run:
+            return {"status": "done", "output": {"delayed_ms": duration}}
+        import time
+        delay_s = min(int(duration) / 1000.0, 60)
+        time.sleep(delay_s)
+        context["_delayed"] = duration
         return {"status": "done", "output": {"delayed_ms": duration}}
 
     if node.node_type == "webhook":
+        url = config.get("url", "")
+        method = config.get("method", "POST")
+        payload = config.get("payload", {})
+        if dry_run:
+            return {"status": "done", "output": {"url": url, "note": "dry_run 模式未实际发送"}}
+        if url:
+            import urllib.request, urllib.error
+            data = json.dumps({**payload, "_context": json.dumps(context, ensure_ascii=False)}).encode()
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return {"status": "done", "output": {"url": url, "status": resp.status}}
+            except urllib.error.HTTPError as e:
+                return {"status": "failed", "error": f"Webhook {e.code}"}
+            except Exception as e:
+                return {"status": "failed", "error": str(e)}
         return {"status": "suspended", "output": {"message": "等待 Webhook 回调"}}
 
     return {"status": "done", "output": {"type": node.node_type}}
