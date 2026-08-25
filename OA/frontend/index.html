@@ -3408,24 +3408,24 @@ async function _loadNotifSettings(main) {
 function _renderNotifSettingsForm(s) {
   return ''
     + '<div class="nf-card"><h3>🏢 企业微信</h3>'
-    + '<label class="nf-label">Webhook URL</label><input class="nf-input" id="nf-wecom-url" value="'+(s.wecom_webhook||'')+'">'
-    + '<label class="nf-label"><input type="checkbox" id="nf-wecom-enable" '+(s.channels&&s.channels.wecom?'checked':'')+'> 启用</label></div>'
+    + '<label class="nf-label standalone">Webhook URL</label><input class="nf-input" id="nf-wecom-url" value="'+(s.wecom_webhook||'')+'">'
+    + '<label class="nf-check-label"><input type="checkbox" id="nf-wecom-enable" '+(s.channels&&s.channels.wecom?'checked':'')+'> 启用</label></div>'
     + '<div class="nf-card"><h3>📱 钉钉</h3>'
-    + '<label class="nf-label">Webhook URL</label><input class="nf-input" id="nf-ding-url" value="'+(s.dingtalk_webhook||'')+'">'
-    + '<label class="nf-label">Secret（可选）</label><input class="nf-input" id="nf-ding-secret" value="'+(s.dingtalk_secret||'')+'">'
-    + '<label class="nf-label"><input type="checkbox" id="nf-ding-enable" '+(s.channels&&s.channels.dingtalk?'checked':'')+'> 启用</label></div>'
+    + '<label class="nf-label standalone">Webhook URL</label><input class="nf-input" id="nf-ding-url" value="'+(s.dingtalk_webhook||'')+'">'
+    + '<label class="nf-label standalone">Secret（可选）</label><input class="nf-input" id="nf-ding-secret" value="'+(s.dingtalk_secret||'')+'">'
+    + '<label class="nf-check-label"><input type="checkbox" id="nf-ding-enable" '+(s.channels&&s.channels.dingtalk?'checked':'')+'> 启用</label></div>'
     + '<div class="nf-card"><h3>✉️ 邮件 (SMTP)</h3>'
-    + '<label class="nf-label">SMTP Host</label><input class="nf-input" id="nf-smtp-host" value="'+(s.smtp_host||'')+'">'
-    + '<label class="nf-label">SMTP Port</label><input class="nf-input" id="nf-smtp-port" type="number" value="'+(s.smtp_port||587)+'">'
-    + '<label class="nf-label">SMTP User</label><input class="nf-input" id="nf-smtp-user" value="'+(s.smtp_user||'')+'">'
-    + '<label class="nf-label">SMTP Password</label><input class="nf-input" id="nf-smtp-pass" type="password" value="'+(s.smtp_pass||'')+'">'
-    + '<label class="nf-label">From</label><input class="nf-input" id="nf-smtp-from" value="'+(s.smtp_from||'')+'">'
-    + '<label class="nf-label">To（逗号分隔）</label><input class="nf-input" id="nf-smtp-to" value="'+(s.smtp_to||'')+'">'
-    + '<label class="nf-label"><input type="checkbox" id="nf-smtp-tls" '+(s.smtp_tls!==false?'checked':'')+'> 启用 TLS</label>'
-    + '<label class="nf-label"><input type="checkbox" id="nf-smtp-enable" '+(s.channels&&s.channels.email?'checked':'')+'> 启用</label></div>'
+    + '<label class="nf-label standalone">SMTP Host</label><input class="nf-input" id="nf-smtp-host" value="'+(s.smtp_host||'')+'">'
+    + '<label class="nf-label standalone">SMTP Port</label><input class="nf-input" id="nf-smtp-port" type="number" value="'+(s.smtp_port||587)+'">'
+    + '<label class="nf-label standalone">SMTP User</label><input class="nf-input" id="nf-smtp-user" value="'+(s.smtp_user||'')+'">'
+    + '<label class="nf-label standalone">SMTP Password</label><input class="nf-input" id="nf-smtp-pass" type="password" value="'+(s.smtp_pass||'')+'">'
+    + '<label class="nf-label standalone">From</label><input class="nf-input" id="nf-smtp-from" value="'+(s.smtp_from||'')+'">'
+    + '<label class="nf-label standalone">To（逗号分隔）</label><input class="nf-input" id="nf-smtp-to" value="'+(s.smtp_to||'')+'">'
+    + '<label class="nf-check-label"><input type="checkbox" id="nf-smtp-tls" '+(s.smtp_tls!==false?'checked':'')+'> 启用 TLS</label>'
+    + '<label class="nf-check-label"><input type="checkbox" id="nf-smtp-enable" '+(s.channels&&s.channels.email?'checked':'')+'> 启用</label></div>'
     + '<div class="nf-card"><h3>🌐 通用 Webhook</h3>'
-    + '<label class="nf-label">Webhook URL</label><input class="nf-input" id="nf-webhook-url" value="'+(s.webhook_url||'')+'">'
-    + '<label class="nf-label"><input type="checkbox" id="nf-webhook-enable" '+(s.channels&&s.channels.webhook?'checked':'')+'> 启用</label></div>'
+    + '<label class="nf-label standalone">Webhook URL</label><input class="nf-input" id="nf-webhook-url" value="'+(s.webhook_url||'')+'">'
+    + '<label class="nf-check-label"><input type="checkbox" id="nf-webhook-enable" '+(s.channels&&s.channels.webhook?'checked':'')+'> 启用</label></div>'
     + '<div style="display:flex;gap:10px;padding:12px 0">'
     + '<button id="nf-save-btn" class="btn-sm" style="padding:8px 24px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer">💾 保存</button>'
     + '<button id="nf-test-btn" class="btn-sm" style="padding:8px 24px;background:#0ea5e9;color:white;border:none;border-radius:6px;cursor:pointer">🔔 发送测试</button>'
@@ -3485,13 +3485,13 @@ function _readNotifForm() {
 // Notification Settings CSS
 const nfStyle = document.createElement('style');
 nfStyle.textContent = ''
-+ '.nf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:12px 0}'
-+ '.nf-card{background:var(--surface2);padding:14px;border-radius:8px}'
-+ '.nf-card h3{margin:0 0 10px 0;font-size:15px}'
-+ '.nf-label{display:block;margin:6px 0 3px 0;font-size:12px;color:var(--text2)}'
-+ '.nf-input{width:100%;padding:7px 10px;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);box-sizing:border-box}'
++ '.nf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin:14px 0}'
++ '.nf-card{background:var(--surface2);padding:16px;border-radius:8px}'
++ '.nf-card h3{margin:0 0 12px 0;font-size:15px;display:flex;align-items:center;gap:8px}'
++ '.nf-label{display:flex;align-items:center;gap:8px;margin:8px 0 4px 0;font-size:12px;color:var(--text2)}'
++ '.nf-input{width:100%;padding:8px 12px;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);box-sizing:border-box}'
 + '.nf-input[type=checkbox]{width:auto;margin-right:6px}'
-+ '#nf-test-result{margin-top:8px}'
++ '#nf-test-result{margin-top:8px}.nf-label.standalone{display:block;align-items:flex-start}.nf-input[type=checkbox]{width:16px;height:16px;flex-shrink:0}.nf-check-label{display:flex;align-items:center;gap:8px;margin:12px 0 4px 0;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text)}.nf-check-label input[type=checkbox]{width:16px;height:16px;flex-shrink:0}'
 ;
 document.head.appendChild(nfStyle);
 
@@ -4784,6 +4784,16 @@ async function FLOW_viewInstance(id, name) {
           var outStr = JSON.stringify(out);
           if (outStr.length > 200) outStr = outStr.substring(0, 200) + '...';
           html += '<div class="flow-step-detail">' + outStr + '</div>';
+          if (n.node_type === 'loop' && out && out.body_steps && out.body_steps.length > 0) {
+            var subHtml = '<div style="padding-left:16px"><strong>🔁 循环 ' + out.iterations + ' 次</strong>';
+            for (var j2 = 0; j2 < out.body_steps.length; j2++) {
+              var bs = out.body_steps[j2];
+              var sib = bs.status === 'done' ? '✅' : bs.status === 'failed' ? '❌' : '⏳';
+              subHtml += '<div style="padding-left:16px;padding-top:2px">' + sib + ' iter=' + bs.iteration + ' ' + bs.type + '/' + (bs.label || '') + ' ' + bs.status + '</div>';
+            }
+            subHtml += '</div>';
+            html += subHtml;
+          }
         } catch(e) {}
       }
     }
@@ -4797,7 +4807,7 @@ async function FLOW_viewInstance(id, name) {
     if (inst.status === 'pending') {
       html += '<button class="flow-btn flow-btn-primary" onclick="FLOW_executeInstance(' + id + ')">▶️ 执行</button>';
     }
-    html += '<div style="margin-top:16px;text-align:right"><button class="flow-btn" onclick="this.closest(\'.flow-modal-overlay\').remove()">关闭</button></div>';
+    html += '<div style="margin-top:16px;text-align:right"><button class="flow-btn" onclick="flowCloseModal(this)">关闭</button></div>';
     dialog.innerHTML = html;
     modal.appendChild(dialog);
     document.body.appendChild(modal);
@@ -4808,9 +4818,96 @@ async function FLOW_viewInstance(id, name) {
 
 async function FLOW_executeInstance(id) {
   try {
+    var modal = document.createElement('div');
+    modal.className = 'flow-modal-overlay';
+    modal.addEventListener('click', function(ev) { if (ev.target === modal) modal.remove(); });
+
+    var dialog = document.createElement('div');
+    dialog.className = 'flow-modal flow-modal-wide';
+
+    function closeModal(el) {
+      var m = el.closest('.flow-modal-overlay');
+      if (m) m.remove();
+    }
+
+    var html = '<h3>&#9881;&#65039; 执行中...</h3>'
+      + '<div style="padding:12px 0;border-bottom:1px solid var(--surface3)"><span class="flow-step-icon">&#9851;</span> 正在提交执行任务</div>'
+      + '<div class="flow-steps" id="flow-exec-steps"></div>'
+      + '<div style="margin-top:16px;text-align:right">'
+      + '<button class="flow-btn" onclick="flowCloseModal(this)">关闭</button>'
+      + '</div>';
+    dialog.innerHTML = html;
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    var stepsEl = document.getElementById('flow-exec-steps');
+    var iconMap = { done: '\u2705', failed: '\u274c', suspended: '\u23f8', pending: '\u23f3' };
+
+    function renderStep(s) {
+      var icon = iconMap[s.status] || '\u23f3';
+      var item = document.createElement('div');
+      item.className = 'flow-step-item';
+      item.innerHTML = '<span class="flow-step-icon">' + icon + '</span>'
+        + '<div><strong>' + (s.label || s.type) + '</strong> <span class="flow-step-type">' + s.type + '</span></div>'
+        + '<span class="flow-step-status">' + s.status + '</span>';
+      stepsEl.appendChild(item);
+      var out = s.output;
+      if (out) {
+        var outStr = JSON.stringify(out);
+        if (outStr.length > 200) outStr = outStr.substring(0, 200) + '...';
+        var detail = document.createElement('div');
+        detail.className = 'flow-step-detail';
+        detail.textContent = outStr;
+        stepsEl.appendChild(detail);
+      }
+      if (s.type === 'loop' && out && out.body_steps) {
+        var subList = document.createElement('div');
+        subList.className = 'flow-step-detail';
+        var subHtml = '<strong>\ud83d\udd01 循环 ' + out.iterations + ' 次</strong>';
+        for (var j = 0; j < out.body_steps.length; j++) {
+          var bs = out.body_steps[j];
+          var sib = iconMap[bs.status] || '\u23f3';
+          subHtml += '<div style="padding-left:16px;padding-top:2px">' + sib + ' iter=' + bs.iteration + ' ' + bs.type + '/' + (bs.label || '') + ' ' + bs.status + '</div>';
+        }
+        subList.innerHTML = subHtml;
+        stepsEl.appendChild(subList);
+      }
+    }
+
     var j = await api('/api/flow/instances/' + id + '/execute', 'POST', { context: {}, dry_run: false });
-    toast('执行完成', 'success');
-    setTimeout(function() { FLOW_viewInstance(id, '执行中'); }, 500);
+    var instStatus = j.status;
+    var statusText = instStatus === 'complete' ? '\u2705 执行完成' : instStatus === 'suspended' ? '\u23f8 已暂停（等待审批）' : '\u274c 执行失败';
+    dialog.querySelector('h3').textContent = statusText;
+    stepsEl.innerHTML = '';
+    var steps = j.steps || [];
+    for (var k = 0; k < steps.length; k++) {
+      renderStep(steps[k]);
+    }
+    if (instStatus === 'complete') {
+      var okBtn = document.createElement('button');
+      okBtn.className = 'flow-btn flow-btn-primary';
+      okBtn.textContent = '查看实例详情';
+      okBtn.onclick = function() { FLOW_viewInstance(id, statusText); closeModal(okBtn); };
+      dialog.querySelector('div[style]').appendChild(okBtn);
+    }
+    if (instStatus === 'suspended') {
+      var appBtn = document.createElement('button');
+      appBtn.className = 'flow-btn flow-btn-primary';
+      appBtn.textContent = '\u2705 审批通过';
+      appBtn.onclick = function() { FLOW_approveInstance(id); closeModal(appBtn); };
+      var rejBtn = document.createElement('button');
+      rejBtn.className = 'flow-btn';
+      rejBtn.textContent = '\u274c 驳回';
+      rejBtn.onclick = function() { FLOW_approveInstance(id, false); closeModal(rejBtn); };
+      dialog.querySelector('div[style]').appendChild(appBtn);
+      dialog.querySelector('div[style]').appendChild(rejBtn);
+    }
+    if (j.error) {
+      var errDiv = document.createElement('div');
+      errDiv.className = 'flow-instance-error';
+      errDiv.textContent = '\u274c ' + j.error;
+      dialog.insertBefore(errDiv, dialog.querySelector('h3').nextSibling);
+    }
   } catch(e) { toast('执行失败: ' + (e.message || e), 'error'); }
 }
 

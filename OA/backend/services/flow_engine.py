@@ -252,7 +252,74 @@ def _execute_node(db: Session, node: FlowNode, context: dict, dry_run: bool) -> 
             return {"status": "done", "output": {"decision": True}, "branch": "true"}
 
     if node.node_type == "loop":
-        return {"status": "done", "output": {"loops": 0}}
+        # Loop 节点：内联执行 body_nodes 序列 iterations 次
+        iterations = config.get("iterations", 1)
+        variable = config.get("variable", "i")
+        body_defs = config.get("body_nodes", [])
+        ctx_key = config.get("ctx_key") or f"loop_{variable}"
+
+        # body_nodes: 逻辑子节点定义列表 [{"type":..., "label":..., "config":...}]
+        # 不是 DB 节点引用，而是在 loop 内部直接执行
+        if not body_defs:
+            return {"status": "done", "output": {"iterations": 0, "variable": variable}}
+
+        try:
+            iterations = int(iterations)
+        except (ValueError, TypeError):
+            iterations = 1
+        iterations = max(1, min(iterations, 100))
+
+        body_steps = []
+        failed = False
+        for idx in range(iterations):
+            ctx_iter = context.copy()
+            ctx_iter[variable] = idx
+            ctx_iter[ctx_key] = idx
+            for bi, bdef in enumerate(body_defs):
+                btype = bdef.get("type", "action")
+                blabel = bdef.get("label", f"loop_step_{bi}")
+                bconfig = bdef.get("config", {})
+                # 创建临时 node 对象供 _execute_node 使用
+                class _LoopNode:
+                    pass
+                tmp = _LoopNode()
+                tmp.id = f"{node.id}_{idx}_{bi}"
+                tmp.node_type = btype
+                tmp.label = blabel
+                tmp.config = json.dumps(bconfig)
+                tmp.status = "pending"
+                tmp.output_data = None
+                tmp.input_data = None
+                tmp.error = None
+
+                # 模拟执行
+                result = _execute_node(db, tmp, ctx_iter, dry_run)
+                if "branch" in result:
+                    ctx_iter["_branch"] = result["branch"]
+                if "output" in result and isinstance(result["output"], dict):
+                    if btype == "decision" and "decision" in result["output"]:
+                        ctx_iter["decision_result"] = result["output"]["decision"]
+                body_steps.append({
+                    "node_id": tmp.id,
+                    "type": btype,
+                    "label": blabel,
+                    "iteration": idx,
+                    "status": result["status"],
+                    "output": result.get("output")
+                })
+                if result["status"] == "failed":
+                    failed = True
+                    break
+                context.update(ctx_iter)
+            if failed:
+                break
+
+        context[ctx_key] = iterations - 1
+        return {"status": "done", "output": {
+            "iterations": iterations,
+            "variable": variable,
+            "body_steps": body_steps
+        }}
 
     if node.node_type == "approve":
         approver = config.get("approver_role", "admin")
