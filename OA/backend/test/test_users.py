@@ -354,3 +354,48 @@ class TestRegistrationApproval:
     def test_approve_nonexistent(self, client, auth_headers):
         r = client.post("/api/users/ghost/approve", headers=auth_headers)
         assert r.status_code == 404
+
+
+class TestMeEndpoints:
+    """测试 GET/PATCH /api/users/me + POST /api/users/me/password"""
+
+    def _get_me_token(self, client, username, password):
+        r = client.post("/api/auth/login", json={"username": username, "password": password})
+        return r.json()["access_token"]
+
+    def test_get_me(self, client, db):
+        token = self._get_me_token(client, "admin", "admin123")
+        r = client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["username"] == "admin"
+        assert "display_name" in data
+        assert "role" in data
+
+    def test_patch_me_display_name(self, client, db):
+        token = self._get_me_token(client, "admin", "admin123")
+        r = client.patch("/api/users/me", headers={"Authorization": f"Bearer {token}"},
+                         json={"display_name": "新管理员"})
+        assert r.status_code == 200
+        assert r.json()["display_name"] == "新管理员"
+        # 再次确认持久化
+        r2 = client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
+        assert r2.json()["display_name"] == "新管理员"
+
+    def test_change_password_correct(self, client, db):
+        token = self._get_me_token(client, "alice", "pass01")
+        r = client.post("/api/users/me/password", headers={"Authorization": f"Bearer {token}"},
+                        json={"current_password": "pass01", "new_password": "newpass123"})
+        assert r.status_code == 204
+
+    def test_change_password_wrong_old(self, client, db):
+        token = self._get_me_token(client, "alice", "pass01")
+        r = client.post("/api/users/me/password", headers={"Authorization": f"Bearer {token}"},
+                        json={"current_password": "wrongold", "new_password": "newpass123"})
+        assert r.status_code == 400
+        assert "旧密码" in r.json()["detail"]
+
+    def test_change_password_no_auth(self, client, db):
+        r = client.post("/api/users/me/password",
+                        json={"current_password": "x", "new_password": "y"})
+        assert r.status_code == 401

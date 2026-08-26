@@ -95,3 +95,67 @@ class TestSalary:
     def test_salary_requires_auth(self, client):
         r = client.get("/api/hr/salary")
         assert r.status_code in (401, 403)
+
+
+class TestEmployeesCRUD:
+    """员工 CRUD 测试"""
+
+    def test_list_employees(self, client, auth_headers):
+        r = client.get("/api/hr/employees", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert "data" in data
+        assert isinstance(data["data"], list)
+
+    def test_create_employee(self, client, auth_headers, db):
+        r = client.post("/api/hr/employees", headers=auth_headers,
+                        json={"name": "EMP-TEST-001", "employee_name": "测试员工"})
+        assert r.status_code == 200
+        assert r.json()["data"]["employee_name"] == "测试员工"
+
+    def test_create_employee_auto_seq(self, client, auth_headers, db):
+        r = client.post("/api/hr/employees", headers=auth_headers,
+                        json={"employee_name": "自动序列"})
+        assert r.status_code == 200
+        name = r.json()["data"]["name"]
+        assert name.startswith("EMP")
+
+    def test_create_employee_duplicate(self, client, auth_headers, db):
+        client.post("/api/hr/employees", headers=auth_headers,
+                    json={"name": "EMP-DUP-001", "employee_name": "重复"})
+        r2 = client.post("/api/hr/employees", headers=auth_headers,
+                         json={"name": "EMP-DUP-001", "employee_name": "重复"})
+        assert r2.status_code == 400
+
+    def test_get_employee(self, client, auth_headers, db):
+        r = client.post("/api/hr/employees", headers=auth_headers,
+                        json={"name": "EMP-GET-001", "employee_name": "查找"})
+        name = r.json()["data"]["name"]
+        r2 = client.get(f"/api/hr/employees/{name}", headers=auth_headers)
+        assert r2.status_code == 200
+        assert r2.json()["data"]["employee_name"] == "查找"
+
+    def test_get_employee_not_found(self, client, auth_headers, db):
+        r = client.get("/api/hr/employees/NOTEXIST", headers=auth_headers)
+        assert r.status_code == 404
+
+    def test_update_employee(self, client, auth_headers, db):
+        r = client.post("/api/hr/employees", headers=auth_headers,
+                        json={"name": "EMP-UPD-001", "employee_name": "待改"})
+        name = r.json()["data"]["name"]
+        r2 = client.put(f"/api/hr/employees/{name}", headers=auth_headers,
+                        json={"employee_name": "已改", "phone": "13800000001"})
+        assert r2.status_code == 200
+        assert r2.json()["data"]["employee_name"] == "已改"
+
+    def test_update_employee_not_found(self, client, auth_headers, db):
+        r = client.put("/api/hr/employees/NOTEXIST", headers=auth_headers,
+                       json={"employee_name": "x"})
+        assert r.status_code == 404
+
+    def test_employees_requires_auth(self, client, db):
+        r = client.get("/api/hr/employees")
+        assert r.status_code == 401
+
+        r2 = client.post("/api/hr/employees", json={"employee_name": "x"})
+        assert r2.status_code == 401

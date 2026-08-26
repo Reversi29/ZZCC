@@ -107,3 +107,64 @@ def test_stock_entry_reject_no_ledger(client, auth_headers):
     r = client.get("/api/resource/stock_summary", headers=auth_headers)
     items = r.json()["items"]
     assert not any(i["item_code"] == "REJ-001" for i in items)
+
+
+def test_asset_crud(client, auth_headers):
+    """Asset CRUD"""
+    r = client.post("/api/resource/Asset", json={
+        "asset_name": "测试资产", "asset_category": "设备",
+        "purchase_value": 12000.0, "custodian": "张三", "location": "深圳"
+    }, headers=auth_headers)
+    assert r.status_code == 200
+    name = r.json()["data"]["name"]
+
+    r = client.get(f"/api/resource/Asset/{name}", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["asset_name"] == "测试资产"
+    assert data["purchase_value"] == 12000.0
+
+    r = client.put(f"/api/resource/Asset/{name}", json={"status": "In Use"}, headers=auth_headers)
+    assert r.status_code == 200
+
+    r = client.delete(f"/api/resource/Asset/{name}", headers=auth_headers)
+    assert r.status_code == 200
+
+
+def test_asset_negative_value(client, auth_headers):
+    r = client.post("/api/resource/Asset", json={
+        "asset_name": "Bad", "purchase_value": -100
+    }, headers=auth_headers)
+    assert r.status_code == 400
+
+
+def test_stock_summary(client, auth_headers, db):
+    """stock_summary 返回库存汇总"""
+    r = client.get("/api/resource/stock_summary", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_stock_value" in data or "data" in data
+
+
+def test_low_stock(client, auth_headers, db):
+    """low_stock 返回库存预警列表"""
+    r = client.get("/api/resource/low_stock", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    # 至少是一个 list 或 dict
+    assert isinstance(data, (list, dict))
+
+
+def test_stock_ledger(client, auth_headers, db):
+    """stock_ledger 返回台账"""
+    r = client.get("/api/resource/stock_ledger", headers=auth_headers)
+    assert r.status_code == 200
+
+
+def test_stock_requires_auth(client, db):
+    r = client.get("/api/resource/Item")
+    assert r.status_code == 401
+    r = client.get("/api/resource/Asset")
+    assert r.status_code == 401
+    r = client.get("/api/resource/stock_summary")
+    assert r.status_code == 401
