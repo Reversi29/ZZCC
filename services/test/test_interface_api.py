@@ -376,8 +376,10 @@ class TestAPIEndpoints:
     # -- Spaces -----------------------------------------------------------
     def test_list_spaces(self):
         row = MagicMock()
-        v = MagicMock()
-        v.as_string.return_value = "Sage"
+        # _unwrap_value reads v.__dict__["field"] and v.__dict__["value"]
+        v = MagicMock(spec=[])
+        v.__dict__["field"] = 5   # STRING
+        v.__dict__["value"] = b"Sage"
         row.values = [v]
         self.mock_resp.rows.return_value = [row]
 
@@ -469,9 +471,9 @@ class TestAPIEndpoints:
     # -- Query -------------------------------------------------------------
     def test_query_success(self):
         row = MagicMock()
-        v = MagicMock()
-        v.is_string.return_value = True
-        v.as_string.return_value = "Alice"
+        v = MagicMock(spec=[])
+        v.__dict__["field"] = 5   # STRING
+        v.__dict__["value"] = b"Alice"
         row.values = [v]
         self.mock_resp.rows.return_value = [row]
         self.mock_resp.keys.return_value = ["name"]
@@ -575,6 +577,7 @@ class TestPatchEndpoints:
         self.mock_resp.keys.return_value = ["Name"]
         self.mock_resp.rows.return_value = []
         self.mock_sess.execute.return_value = self.mock_resp
+        import modules.nebula_client as nb_mod
         mock_client = MagicMock()
         mock_client.list_spaces = MagicMock(return_value=[])
 
@@ -586,7 +589,6 @@ class TestPatchEndpoints:
             import main as m
             importlib.reload(m)
             import dependencies
-            import modules.nebula_client as nb_mod
             nb_mod._client = mock_client
 
             async def fake_sess(
@@ -677,6 +679,7 @@ class TestDocumentConvert:
         mock_client = MagicMock()
         mock_client.list_spaces = MagicMock(return_value=[])
 
+        import modules.nebula_client as nb_mod
         @contextmanager
         def _scm(*args, **kw):
             yield self.mock_sess
@@ -691,7 +694,6 @@ class TestDocumentConvert:
             import main as m
             importlib.reload(m)
             import dependencies
-            import modules.nebula_client as nb_mod
             nb_mod._client = mock_client
 
             async def fake_sess(
@@ -785,6 +787,7 @@ class TestDocumentImport:
         @contextmanager
         def _scm(*args, **kw):
             yield self.mock_sess
+        import modules.nebula_client as nb_mod
         mock_client.session_with = MagicMock(side_effect=lambda *a, **kw: _scm(*a, **kw))
 
         with patch("modules.nebula_client.ConnectionPool") as MockPool, \
@@ -795,7 +798,6 @@ class TestDocumentImport:
             import main as m
             importlib.reload(m)
             import dependencies
-            import modules.nebula_client as nb_mod
             nb_mod._client = mock_client
 
             async def fake_sess(
