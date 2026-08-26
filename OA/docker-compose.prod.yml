@@ -68,4 +68,6 @@ services:
       - "8080:80"
     volumes:
       - /Users/mac/ZZCC/OA/frontend/index.html:/usr/share/nginx/html/index.html:ro
+      - /Users/mac/ZZCC/OA/frontend/style.css:/usr/share/nginx/html/style.css:ro
+      - /Users/mac/ZZCC/OA/frontend/app.js:/usr/share/nginx/html/app.js:ro
       - /Users/mac/ZZCC/OA/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
