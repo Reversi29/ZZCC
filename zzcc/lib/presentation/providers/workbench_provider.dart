@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
@@ -199,6 +200,14 @@ class WorkbenchProvider extends ChangeNotifier {
 
   Future<void> openFile(BuildContext context) async {
     try {
+      if (kIsWeb) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Web 端暂不支持打开本地文件')),
+          );
+        }
+        return;
+      }
       FilePickerResult? result = await FilePicker.platform.pickFiles();
       if (result != null && result.files.single.path != null) {
         final filePath = result.files.single.path!;
@@ -408,6 +417,14 @@ class WorkbenchProvider extends ChangeNotifier {
 
   Future<void> openFolder(BuildContext context) async {
     try {
+      if (kIsWeb) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Web 端暂不支持打开本地目录')),
+          );
+        }
+        return;
+      }
       _isLoading = true;
       notifyListeners();
       
@@ -793,6 +810,14 @@ class WorkbenchProvider extends ChangeNotifier {
     }
     
     try {
+      if (kIsWeb) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Web 端暂不支持保存本地文件')),
+          );
+        }
+        return;
+      }
       _isLoading = true;
       notifyListeners();
       

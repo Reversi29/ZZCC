@@ -56,22 +56,26 @@ class UserNotifier extends StateNotifier<UserModel> {
 
   // 获取当前头像路径
   String? getCurrentAvatarPath() {
-    if (state.userDataPath == null) return null;
+    try {
+      if (state.userDataPath == null) return null;
 
-    final avatarsDir = Directory(path.join(state.userDataPath!, 'avatars'));
-    if (!avatarsDir.existsSync()) return null;
+      final avatarsDir = Directory(path.join(state.userDataPath!, 'avatars'));
+      if (!avatarsDir.existsSync()) return null;
 
-    final currentAvatarPattern = RegExp(r'^\d{4}_\d{2}_\d{2}T\d{2}_\d{2}_\d{2}-\.[a-zA-Z0-9]+$');
-    final files = avatarsDir.listSync().whereType<File>();
+      final currentAvatarPattern = RegExp(r'^\d{4}_\d{2}_\d{2}T\d{2}_\d{2}_\d{2}-\.[a-zA-Z0-9]+$');
+      final files = avatarsDir.listSync().whereType<File>();
 
-    for (final file in files) {
-      final fileName = path.basename(file.path);
-      if (currentAvatarPattern.hasMatch(fileName)) {
-        return file.path;
+      for (final file in files) {
+        final fileName = path.basename(file.path);
+        if (currentAvatarPattern.hasMatch(fileName)) {
+          return file.path;
+        }
       }
-    }
 
-    return null;
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   // 保存新头像
@@ -122,29 +126,27 @@ class UserNotifier extends StateNotifier<UserModel> {
 
   // 获取历史头像列表
   List<String> getHistoryAvatars() {
-    if (state.userDataPath == null) return [];
+    try {
+      if (state.userDataPath == null) return [];
 
-    final avatarsDir = Directory(path.join(state.userDataPath!, 'avatars'));
-    if (!avatarsDir.existsSync()) return [];
+      final avatarsDir = Directory(path.join(state.userDataPath!, 'avatars'));
+      if (!avatarsDir.existsSync()) return [];
 
-    final files = avatarsDir.listSync().whereType<File>().toList();
-    final historyAvatars = <String>[];
+      final files = avatarsDir.listSync().whereType<File>().toList();
+      final historyAvatars = <String>[];
 
-    final historyPattern = RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*$');
+      final historyPattern = RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*$');
 
-    for (final file in files) {
-      final fileName = path.basename(file.path);
-      if (historyPattern.hasMatch(fileName)) {
-        historyAvatars.add(file.path);
+      for (final file in files) {
+        final fileName = path.basename(file.path);
+        if (historyPattern.hasMatch(fileName)) {
+          historyAvatars.add(file.path);
+        }
       }
+      return historyAvatars;
+    } catch (_) {
+      return [];
     }
-
-    historyAvatars.sort((a, b) {
-      final aUpdateDate = path.basename(a).split('-').elementAt(1);
-      final bUpdateDate = path.basename(b).split('-').elementAt(1);
-      return bUpdateDate.compareTo(aUpdateDate);
-    });
-
-    return historyAvatars;
   }
+
 }

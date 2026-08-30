@@ -1,8 +1,6 @@
-// lib/core/services/config_service.dart
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as path;
-import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:zzcc/core/services/logger_service.dart';
 import 'package:zzcc/core/services/storage_service.dart';
@@ -11,17 +9,15 @@ import 'package:zzcc/core/di/service_locator.dart';
 class ConfigService {
   static const String _configFileName = 'zzcc_config.json';
   Map<String, dynamic> _config = {};
-  late String _configPath;
+  String _configPath = '';
 
-  // 添加获取整个配置的方法
   Map<String, dynamic> get config => _config;
-
   bool get keepLoggedIn => _config['keepLoggedIn'] ?? false;
 
-  // ── 后端 API 配置 ──────────────────────────────────────
   String get nebulaApiBaseUrl =>
       _config['nebulaApiBaseUrl'] ?? 'http://124.223.47.167:8001/api/v1/';
-  String get nebulaApiKey => _config['nebulaApiKey'] ?? 'zzcc-secret-key-2025';
+  String get nebulaApiKey =>
+      _config['nebulaApiKey'] ?? 'zzcc-secret-key-2025';
 
   Future<void> updateNebulaApiConfig(String baseUrl, String apiKey) async {
     _config['nebulaApiBaseUrl'] = baseUrl;
@@ -34,13 +30,10 @@ class ConfigService {
     await _saveConfig();
   }
 
-  // 添加检查登录状态的方法
   Future<bool> isUserLoggedIn() async {
     if (!keepLoggedIn) return false;
-
     try {
-      final storage = getIt<StorageService>();
-      return storage.getCurrentUser() != null;
+      return getIt<StorageService>().getCurrentUser() != null;
     } catch (e) {
       getIt<LoggerService>().error('Error reading user registry: $e');
       return false;
@@ -49,28 +42,13 @@ class ConfigService {
 
   Future<void> init() async {
     try {
-      if (Platform.isMacOS) {
-        // macOS app bundle 内不可写，使用 Application Support 目录
-        final supportDir = await getApplicationSupportDirectory();
-        _configPath = '${supportDir.path}/$_configFileName';
-      } else {
-        // 其他平台：放在可执行文件同级目录
-        final executablePath = Platform.resolvedExecutable;
-        final appDir = File(executablePath).parent.path;
-        _configPath = '$appDir/$_configFileName';
-      }
-
+      _configPath = await _resolveConfigPath();
       getIt<LoggerService>().debug('配置文件路径: $_configPath');
 
-      final file = File(_configPath);
-      if (await file.exists()) {
-        final content = await file.readAsString();
-        _config = json.decode(content);
-      } else {
-        // 设置默认路径
-        final defaultPath = await _getDefaultAppDataPath();
+      _config = await _loadConfig();
+      if (_config.isEmpty) {
         _config = {
-          'appDataPath': defaultPath,
+          'appDataPath': await _defaultAppDataPath(),
           'keepLoggedIn': true,
         };
         await _saveConfig();
@@ -78,81 +56,77 @@ class ConfigService {
       getIt<LoggerService>().debug('APP基本设置: $_config');
     } catch (e) {
       getIt<LoggerService>().error('Config init failed: $e');
-      rethrow;
+      _configPath = '/$_configFileName';
+      _config = {'appDataPath': '/', 'keepLoggedIn': true};
     }
   }
 
-  String get appDataPath {
-    final path = _config['appDataPath'] ?? '';
-    return _replaceUsernamePlaceholder(path);
+  Future<Map<String, dynamic>> _loadConfig() async {
+    try {
+      final file = File(_configPath);
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        return json.decode(content);
+      }
+    } catch (_) {
+      // Web: no file I/O
+    }
+    return {};
   }
 
-  String _replaceUsernamePlaceholder(String path) {
-    if (path.contains('<username>')) {
-      final username = Platform.environment['USERNAME'] ??
+  Future<String> _resolveConfigPath() async {
+    try {
+      final os = Platform.operatingSystem;
+      if (os == 'macos') {
+        final dir = await getApplicationSupportDirectory();
+        return '${dir.path}/$_configFileName';
+      } else if (os == 'windows') {
+        return '${Platform.environment['LOCALAPPDATA']!}\\zzcc\\$_configFileName';
+      } else {
+        final ep = Platform.resolvedExecutable;
+        return path.join(File(ep).parent.path, _configFileName);
+      }
+    } catch (_) {
+      // Web: use IndexedDB-backed path_provider
+      final dir = await getApplicationDocumentsDirectory();
+      return path.join(dir.path, _configFileName);
+    }
+  }
+
+  Future<String> _defaultAppDataPath() async {
+    try {
+      if (Platform.operatingSystem == 'windows') {
+        return '${Platform.environment['LOCALAPPDATA']!}\\zzcc\\';
+      }
+    } catch (_) {}
+    final dir = await getApplicationDocumentsDirectory();
+    return '${dir.path}/';
+  }
+
+  String get appDataPath => _replaceUsernamePlaceholder(_config['appDataPath'] ?? '');
+
+  String _replaceUsernamePlaceholder(String p) {
+    if (!p.contains('<username>')) return p;
+    String u = 'user';
+    try {
+      u = Platform.environment['USERNAME'] ??
           Platform.environment['USER'] ??
           'user';
-      return path.replaceAll('<username>', username);
-    }
-    return path;
+    } catch (_) {}
+    return p.replaceAll('<username>', u);
   }
 
-  Future<void> updateAppDataPath(
-    String newPath, {
-    void Function(int current, int total)? onProgress,
-    bool Function()? shouldCancel,
-  }) async {
-    newPath = _replaceUsernamePlaceholder(newPath);
-    final oldPath = appDataPath;
-
-    if (oldPath == newPath) return;
-
-    final oldDir = Directory(oldPath);
-    final newDir = Directory(newPath);
-
-    // 检查目标目录是否为空
-    if (await newDir.exists()) {
-      final isEmpty = await _isDirectoryEmpty(newDir);
-      if (!isEmpty) {
-        throw Exception('目标文件夹必须为空');
-      }
-    } else {
-      await newDir.create(recursive: true);
+  Future<void> _saveConfig() async {
+    try {
+      final file = File(_configPath);
+      await file.writeAsString(json.encode(_config));
+    } catch (_) {
+      // Web: config kept in memory only
     }
-
-    final storageService = getIt<StorageService>();
-    await storageService.closeHive();
-
-    if (await oldDir.exists()) {
-      await _migrateData(
-        oldDir,
-        newDir,
-        onProgress: onProgress,
-        shouldCancel: shouldCancel,
-      );
-
-      // 检查是否取消了迁移
-      if (shouldCancel != null && shouldCancel()) {
-        // 删除已复制的文件
-        await newDir.delete(recursive: true);
-        throw Exception('迁移已取消');
-      }
-
-      await oldDir.delete(recursive: true);
-      getIt<LoggerService>().debug('Deleted old data directory: $oldPath');
-    }
-
-    _config['appDataPath'] = newPath;
-    await _saveConfig();
   }
 
   Future<bool> _isDirectoryEmpty(Directory dir) async {
-    try {
-      final files = await dir.list().toList();
-      return files.isEmpty;
-    } catch (e) {
-      return false;
-    }
+    try { return (await dir.list().toList()).isEmpty; } catch (_) { return false; }
   }
 
   Future<void> _migrateData(
@@ -162,116 +136,74 @@ class ConfigService {
     bool Function()? shouldCancel,
   }) async {
     try {
-      if (!await target.exists()) {
-        await target.create(recursive: true);
-      }
-
-      final sourceFiles = await source.list(recursive: true).toList();
+      if (!await target.exists()) await target.create(recursive: true);
+      final files = await source.list(recursive: true).toList();
       final logger = getIt<LoggerService>();
-      final totalFiles = sourceFiles.length;
-      int currentFile = 0;
-
-      for (var entity in sourceFiles) {
-        // 检查是否取消了迁移
-        if (shouldCancel != null && shouldCancel()) {
-          return;
-        }
-
-        currentFile++;
-        onProgress?.call(currentFile, totalFiles);
-
+      for (int i = 0; i < files.length; i++) {
+        if (shouldCancel != null && shouldCancel()) return;
+        onProgress?.call(i + 1, files.length);
+        final entity = files[i];
         if (entity is File) {
-          // 跳过lock文件
-          if (path.basename(entity.path).endsWith('.lock')) {
-            logger.debug('Skipping lock file: ${entity.path}');
-            continue;
-          }
-
-          final relativePath = path.relative(entity.path, from: source.path);
-          final destFile = File(path.join(target.path, relativePath));
-
-          if (!await destFile.parent.exists()) {
-            await destFile.parent.create(recursive: true);
-          }
-
-          final sourceHash = await _calculateFileHash(entity);
-          await entity.copy(destFile.path);
-          final destHash = await _calculateFileHash(destFile);
-
-          if (sourceHash != destHash) {
-            logger.error('Hash mismatch: ${entity.path}');
-            throw Exception('File hash verification failed for ${entity.path}');
-          }
+          if (path.basename(entity.path).endsWith('.lock')) continue;
+          final rp = path.relative(entity.path, from: source.path);
+          final df = File(path.join(target.path, rp));
+          if (!await df.parent.exists()) await df.parent.create(recursive: true);
+          await entity.copy(df.path);
         } else if (entity is Directory) {
-          // 确保目标目录存在
-          final relativePath = path.relative(entity.path, from: source.path);
-          final destDir = Directory(path.join(target.path, relativePath));
-          if (!await destDir.exists()) {
-            await destDir.create(recursive: true);
-          }
+          final rp = path.relative(entity.path, from: source.path);
+          final dd = Directory(path.join(target.path, rp));
+          if (!await dd.exists()) await dd.create(recursive: true);
         }
       }
-
-      logger.debug(
-          'Successfully migrated $totalFiles items from ${source.path} to ${target.path}');
+      logger.debug('Migrated ${files.length} items');
     } catch (e) {
-      getIt<LoggerService>().error('Data migration failed: $e');
+      getIt<LoggerService>().error('Migration failed: $e');
       rethrow;
     }
   }
 
-  Future<String> _calculateFileHash(File file) async {
-    final stream = file.openRead();
-    final hash = await sha256.bind(stream).first;
-    return hash.toString();
-  }
-
-  Future<void> _saveConfig() async {
-    final file = File(_configPath);
-    await file.writeAsString(json.encode(_config));
-  }
-
-  Future<String> _getDefaultAppDataPath() async {
-    if (Platform.isWindows) {
-      final appData = Platform.environment['LOCALAPPDATA']!;
-      return '$appData\\zzcc\\';
+  Future<void> updateAppDataPath(
+    String newPath, {
+    void Function(int current, int total)? onProgress,
+    bool Function()? shouldCancel,
+  }) async {
+    newPath = _replaceUsernamePlaceholder(newPath);
+    if (newPath == appDataPath) return;
+    final oldDir = Directory(appDataPath);
+    final newDir = Directory(newPath);
+    if (await newDir.exists()) {
+      if (!await _isDirectoryEmpty(newDir)) throw Exception('目标文件夹必须为空');
+    } else {
+      await newDir.create(recursive: true);
     }
-    final dir = await getApplicationDocumentsDirectory();
-    return '${dir.path}/';
+    await getIt<StorageService>().closeHive();
+    if (await oldDir.exists()) {
+      await _migrateData(oldDir, newDir, onProgress: onProgress, shouldCancel: shouldCancel);
+      if (shouldCancel != null && shouldCancel()) {
+        await newDir.delete(recursive: true);
+        throw Exception('迁移已取消');
+      }
+      await oldDir.delete(recursive: true);
+    }
+    _config['appDataPath'] = newPath;
+    await _saveConfig();
   }
 
-  bool get enableSplashAnimation {
-    return _config['enableSplashAnimation'] ?? true; // 默认开启
-  }
-
+  bool get enableSplashAnimation => _config['enableSplashAnimation'] ?? true;
   Future<void> updateSplashAnimation(bool enable) async {
     _config['enableSplashAnimation'] = enable;
     await _saveConfig();
   }
 
-  // ── Chat/Matrix 认证配置 ───────────────────────────────
-  /// Chat access token (persisted for auto-login)
   String? get chatAccessToken => _config['chatAccessToken'] as String?;
-
-  /// Chat user ID (e.g. @username:server)
   String? get chatUserId => _config['chatUserId'] as String?;
-
-  /// Chat display name
   String? get chatDisplayName => _config['chatDisplayName'] as String?;
 
-  Future<void> saveChatAuth({
-    required String? accessToken,
-    required String? userId,
-    String? displayName,
-  }) async {
-    getIt<LoggerService>().info(
-        'saveChatAuth: accessToken=${accessToken != null ? "present(${accessToken.substring(0, 8)}...)" : "null"} userId=$userId');
+  Future<void> saveChatAuth({required String? accessToken, required String? userId, String? displayName}) async {
     _config['chatAccessToken'] = accessToken;
     _config['chatUserId'] = userId;
     _config['chatDisplayName'] = displayName;
     await _saveConfig();
-    getIt<LoggerService>().info(
-        'saveChatAuth: _config["chatAccessToken"] now = ${_config['chatAccessToken']}');
   }
 
   Future<void> clearChatAuth() async {

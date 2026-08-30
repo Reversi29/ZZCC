@@ -72,9 +72,11 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await setupServiceLocator();
+  debugPrint('TRACE: setupServiceLocator done');
 
   final logger = getIt<LoggerService>();
   await logger.init();
+  debugPrint('TRACE: logger.init done');
 
   // Bridge dart `logging` package to LoggerService so that ChatRepository /
   // ChatRemoteSource logs are visible in the console and log file.
@@ -101,6 +103,7 @@ void main() async {
   final userNotifier = UserNotifier();
 
   await storageService.init(configService.appDataPath);
+  debugPrint('TRACE: storageService.init(2) done, keepLoggedIn=${configService.keepLoggedIn}');
 
   if (configService.keepLoggedIn) {
     final currentUserId = storageService.getCurrentUser();
@@ -148,6 +151,7 @@ void main() async {
 
   final localeProvider = LocaleProvider();
 
+  debugPrint('TRACE: about to runApp');
   runApp(ProviderScope(
     overrides: [
       userProvider.overrideWith((ref) => userNotifier),

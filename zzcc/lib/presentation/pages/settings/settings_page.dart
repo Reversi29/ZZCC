@@ -18,6 +18,7 @@ import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:svg_flag/svg_flag.dart';
 import 'package:zzcc/presentation/providers/font_provider.dart';
 import 'package:zzcc/presentation/providers/splash_provider.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:go_router/go_router.dart';
@@ -61,6 +62,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _loadCacheSize() async {
     try {
+      if (kIsWeb) {
+        if (mounted) setState(() => _cacheSize = '--');
+        return;
+      }
       final tmpDir = await getTemporaryDirectory();
       final size = await _dirSize(tmpDir);
       if (mounted) {
@@ -110,6 +115,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       // 清除图片缓存
       PaintingBinding.instance.imageCache.clear();
       PaintingBinding.instance.imageCache.clearLiveImages();
+
+      if (kIsWeb) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Web 端仅已清除图片缓存')),
+          );
+        }
+        return;
+      }
 
       // 清除临时目录
       final tmpDir = await getTemporaryDirectory();
@@ -189,6 +203,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     setState(() => _isClearingData = true);
     try {
+      if (kIsWeb) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Web 端暂不支持清除本地文件系统数据')),
+          );
+        }
+        return;
+      }
+
       final storageService = getIt<StorageService>();
 
       // 1. 清除聊天认证
