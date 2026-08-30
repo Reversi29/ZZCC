@@ -15,7 +15,7 @@ class ConfigService {
   bool get keepLoggedIn => _config['keepLoggedIn'] ?? false;
 
   String get nebulaApiBaseUrl =>
-      _config['nebulaApiBaseUrl'] ?? 'http://124.223.47.167:8001/api/v1/';
+      _config['nebulaApiBaseUrl'] ?? 'http://127.0.0.1:8001/api/v1/';
   String get nebulaApiKey =>
       _config['nebulaApiKey'] ?? 'zzcc-secret-key-2025';
 

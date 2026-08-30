@@ -156,6 +156,23 @@ flutter:
   # list giving the asset and other descriptors for the font. For
   # example:
   fonts:
+    # Roboto 本地化：消除 Flutter Web 默认从 fonts.gstatic.com 拉取 Roboto 的网络依赖
+    # （fonts.gstatic.com 大陆不可达，会报 ERR_CONNECTION_CLOSED warning）
+    # 文件来自 Flutter SDK 自带 cache/artifacts/material_fonts/（Apache 2.0）
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto/Roboto-Italic.ttf
+          style: italic
+        - asset: assets/fonts/Roboto/Roboto-Light.ttf
+          weight: 300
+        - asset: assets/fonts/Roboto/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto/Roboto-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Roboto/Roboto-BoldItalic.ttf
+          weight: 700
+          style: italic
     - family: NotoSansSC
       fonts:
         - asset: assets/fonts/NotoSansSC/NotoSansSC(TrueType).otf
