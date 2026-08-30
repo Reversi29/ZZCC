@@ -48,3 +48,7 @@ docker-compose.override.yml
 
 # Dify
 Dify/volumes/
+
+# NebulaGraph runtime data
+NebulaGraph/data/
+NebulaGraph/logs/
