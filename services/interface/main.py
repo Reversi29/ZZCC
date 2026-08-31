@@ -45,6 +45,13 @@ async def lifespan(app: FastAPI):
     set_client(client)          # publish singleton to all routers
     _log.info("nebula_pool_ready")
 
+    # Ensure chat user/room/message tables exist (idempotent)
+    try:
+        from services.user_db import init_schema as chat_init_schema
+        await chat_init_schema()
+    except Exception as exc:
+        _log.error("chat_schema_init_failed", error=str(exc))
+
     yield
 
     client.close()
@@ -96,7 +103,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -110,6 +117,8 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix=v1)
     app.include_router(documents.convert_router, prefix=v1)
     app.include_router(chat.router, prefix=v1)
+    app.include_router(chat_user.router, prefix=v1)
+    app.include_router(auth.router, prefix=v1)
 
     # Root
     @app.get("/")
