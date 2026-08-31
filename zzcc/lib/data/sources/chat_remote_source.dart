@@ -28,6 +28,8 @@ class ChatRemoteSource {
   final Logger _log = Logger('ChatRemoteSource');
   late final ConfigService _config;
   String? _accessToken;
+  String? _currentUserId;
+  String? _currentUserDisplayName;
 
   /// Expose config for session restore in ChatRepositoryImpl
   ConfigService get config => _config;
@@ -61,6 +63,19 @@ class ChatRemoteSource {
   
   /// Check if authenticated
   bool get isAuthenticated => _accessToken != null && _accessToken!.isNotEmpty;
+
+  /// Lightweight current-user view (id + display name).
+  ChatUser? get currentUser {
+    final id = _currentUserId;
+    if (id == null || id.isEmpty) return null;
+    return ChatUser(userId: id, displayName: _currentUserDisplayName);
+  }
+
+  /// Update the current user's id/name on auth state change.
+  void setCurrentUserId(String? userId, {String? displayName}) {
+    _currentUserId = userId;
+    _currentUserDisplayName = displayName;
+  }
   
   /// Build request headers with auth
   Map<String, String> _headers() {
@@ -108,14 +123,10 @@ class ChatRemoteSource {
       );
       
       _log.info('register: statusCode=${response.statusCode}');
-      _log.info('register: response.data=${response.data}');
       final data = response.data['data'] as Map<String, dynamic>;
-      _log.info('register: data keys=${data.keys}');
-      _log.info('register: data[access_token]=${data['access_token']}');
-      _log.info('register: data[user_id]=${data['user_id']}');
       final user = ChatUser.fromAuthResponse(data);
-      _log.info('register: user.accessToken=${user.accessToken} user.userId=${user.userId}');
       setAccessToken(user.accessToken);
+      setCurrentUserId(user.userId, displayName: user.displayName);
       await _config.saveChatAuth(
         accessToken: user.accessToken,
         userId: user.userId,
@@ -161,6 +172,7 @@ class ChatRemoteSource {
       final data = response.data['data'] as Map<String, dynamic>;
       final user = ChatUser.fromAuthResponse(data);
       setAccessToken(user.accessToken);
+      setCurrentUserId(user.userId, displayName: user.displayName);
       await _config.saveChatAuth(
         accessToken: user.accessToken,
         userId: user.userId,
@@ -195,6 +207,7 @@ class ChatRemoteSource {
       _log.warning('Logout error (ignored): $e');
     } finally {
       setAccessToken(null);
+      setCurrentUserId(null);
       await _config.clearChatAuth();
     }
   }
@@ -219,6 +232,7 @@ class ChatRemoteSource {
       rethrow;
     } finally {
       setAccessToken(null);
+      setCurrentUserId(null);
       await _config.clearChatAuth();
     }
   }
@@ -241,7 +255,6 @@ class ChatRemoteSource {
           if (displayName != null) 'display_name': displayName,
         },
       );
-
       final data = response.data['data'] as Map<String, dynamic>;
       final user = ChatUser(
         userId: data['user_id'] as String,
@@ -250,6 +263,7 @@ class ChatRemoteSource {
         needsSync: false,
       );
       setAccessToken(user.accessToken);
+      setCurrentUserId(user.userId, displayName: user.displayName);
       await _config.saveChatAuth(
         accessToken: user.accessToken,
         userId: user.userId,
@@ -317,9 +331,20 @@ class ChatRemoteSource {
       
       _log.info('getRooms: resp status=${response.statusCode} data=${response.data}');
       final data = response.data['data'] as Map<String, dynamic>;
-      final rooms = (data['rooms'] as List<dynamic>)
-          .map((r) => ChatRoom.fromMatrixResponse(r as Map<String, dynamic>))
-          .toList();
+      final roomsList = (data['rooms'] as List<dynamic>?) ?? [];
+      final rooms = roomsList.map((raw) {
+        final r = raw as Map<String, dynamic>;
+        final roomId = (r['room_id'] ?? r['roomId']) as String;
+        return ChatRoom(
+          roomId: roomId,
+          name: r['name'] as String?,
+          topic: r['topic'] as String?,
+          isDirect: r['is_direct'] as bool? ?? r['isDirect'] as bool? ?? false,
+          lastMessage: r['last_message'] as String? ?? r['lastMessage'] as String?,
+          lastMessageTimestamp: _parseInt(r['last_message_ts'] ?? r['lastMessageTimestamp']),
+          unreadCount: _parseInt(r['unread_count'] ?? r['unreadCount']) ?? 0,
+        );
+      }).toList();
       
       _log.info('getRooms: ${rooms.length} rooms');
       return rooms;
@@ -436,9 +461,13 @@ class ChatRemoteSource {
       );
       
       final data = response.data['data'] as Map<String, dynamic>;
-      final messages = (data['messages'] as List<dynamic>)
-          .map((m) => ChatMessage.fromMatrixResponse(m as Map<String, dynamic>))
-          .toList();
+      final rawMessages = (data['messages'] as List<dynamic>?) ?? [];
+      final messages = rawMessages.map((raw) {
+        final m = raw as Map<String, dynamic>;
+        final msg = ChatMessage.fromMatrixResponse(m);
+        final uid = currentUser?.userId;
+        return uid != null ? msg.copyWith(isMe: msg.sender == uid) : msg;
+      }).toList();
       
       _log.fine('Fetched ${messages.length} messages');
       return messages;
@@ -506,6 +535,15 @@ class ChatRemoteSource {
     } catch (e) {
       _handleError(e, 'sync');
     }
+  }
+
+  /// Parse a nullable int from dynamic JSON value.
+  int? _parseInt(Object? v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
   }
 }
 
