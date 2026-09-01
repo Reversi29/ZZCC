@@ -12,6 +12,9 @@ services:
     depends_on:
       - db
       - redis
+    networks:
+      - interface_default
+      - nebulagraph-stack_nebula-net
 
   db:
     image: postgres:15-alpine
@@ -25,6 +28,8 @@ services:
       - kt-db-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    networks:
+      - interface_default
 
   redis:
     image: redis:7-alpine
@@ -34,6 +39,14 @@ services:
       - "6379:6379"
     volumes:
       - kt-redis-data:/data
+    networks:
+      - interface_default
+
+networks:
+  interface_default:
+    driver: bridge
+  nebulagraph-stack_nebula-net:
+    external: true
 
 volumes:
   kt-db-data:
