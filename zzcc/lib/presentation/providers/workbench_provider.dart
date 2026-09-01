@@ -256,7 +256,7 @@ class WorkbenchProvider extends ChangeNotifier {
         final isDirectory = stat.type == FileSystemEntityType.directory;
         
         final node = FileNode(
-          name: entity.path.split(Platform.pathSeparator).last,
+          name: entity.path.split('/').last,
           path: entity.path,
           isDirectory: isDirectory,
           depth: depth,
@@ -357,7 +357,7 @@ class WorkbenchProvider extends ChangeNotifier {
         
         // 2. 重建根节点
         final rootNode = FileNode(
-          name: dir.path.split(Platform.pathSeparator).last,
+          name: dir.path.split('/').last,
           path: dir.path,
           isDirectory: true,
           isExpanded: expandedStateMap[dir.path] ?? true, // 默认展开
@@ -440,7 +440,7 @@ class WorkbenchProvider extends ChangeNotifier {
         // 确保根目录节点存在
         if (_fileTree.isEmpty || _fileTree[0].path != directory) {
           final rootNode = FileNode(
-            name: directory.split(Platform.pathSeparator).last,
+            name: directory.split('/').last,
             path: directory,
             isDirectory: true,
             isExpanded: true,
@@ -480,7 +480,7 @@ class WorkbenchProvider extends ChangeNotifier {
 
     if (_fileTree.isEmpty || _fileTree[0].path != path) {
       final rootNode = FileNode(
-        name: path.split(Platform.pathSeparator).last,
+        name: path.split('/').last,
         path: path,
         isDirectory: true,
         isExpanded: true,
@@ -725,16 +725,11 @@ class WorkbenchProvider extends ChangeNotifier {
 
   String _normalizePath(String path) {
     // 统一路径分隔符
-    String normalized = path.replaceAll(RegExp(r'[\\/]+'), Platform.pathSeparator);
+    String normalized = path.replaceAll(RegExp(r'[\\/]+'), '/');
     
     // 解析为绝对路径
-    if (path.isNotEmpty && !path.startsWith(Platform.pathSeparator)) {
-      normalized = File(path).absolute.path;
-    }
-    
-    // 在 Windows 上统一为小写
-    if (Platform.isWindows) {
-      normalized = normalized.toLowerCase();
+    if (path.isNotEmpty && !path.startsWith('/')) {
+      normalized = path;
     }
     
     return normalized;
@@ -969,7 +964,7 @@ class WorkbenchProvider extends ChangeNotifier {
     if (sameNameCount > 0) {
       final segments = path.split(RegExp(r'[\\\/]'));
       if (segments.length > 2) {
-        return '${segments[segments.length - 2]}${Platform.pathSeparator}$fileName';
+        return '${segments[segments.length - 2]}${'/'}$fileName';
       }
     }
     return fileName;

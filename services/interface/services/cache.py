@@ -45,7 +45,7 @@ async def get_redis() -> "redis.Redis":
 async def health_check() -> dict:
     """Return status dict: {'status': 'ok'|'degraded', 'detail': ...}."""
     if not _REDIS_OK:
-        _log.error("redis_health_check_skipped", reason="redis package not installed")
+        _log.error("redis_health_check_skipped: redis package not installed")
         return {"status": "degraded", "detail": "redis package not installed"}
     try:
         client = await get_redis()
@@ -53,7 +53,7 @@ async def health_check() -> dict:
         await client.aclose()
         return {"status": "ok"}
     except Exception as exc:
-        _log.error("redis_health_check_failed", reason=str(exc))
+        _log.error(f"redis_health_check_failed: {exc}")
         return {"status": "degraded", "detail": str(exc)}
 
 

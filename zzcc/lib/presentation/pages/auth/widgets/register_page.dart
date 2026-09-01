@@ -320,10 +320,13 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
       final ciphertext = EncryptUtils.encryptUID(localUid, passwordController.text);
       storageService.registerUser(localUid, ciphertext);
 
-      final userDir = Directory(path.join(configService.appDataPath, ciphertext));
-      if (!await userDir.exists()) {
-        await userDir.create(recursive: true);
-      }
+      final userDirPath = path.join(configService.appDataPath, ciphertext);
+      try {
+        final userDir = Directory(userDirPath);
+        if (!await userDir.exists()) {
+          await userDir.create(recursive: true);
+        }
+      } catch (_) { /* Web: Directory ops unsupported, Hive handles storage */ }
       await storageService.saveUserInfo(ciphertext, {
         'name': nameController.text,
         'uid': localUid,
@@ -331,7 +334,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
         'registerTime': DateTime.now().toIso8601String(),
         'lastLoginTime': null,
       });
-      loggerService.debug('本地存储完成: ${userDir.path}');
+      loggerService.debug('本地存储完成: $userDirPath');
 
       // 3. 优先尝试服务器注册（UID 由服务器分发）
       final chatRepo = getIt<ChatRepository>();
@@ -350,7 +353,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
       ref.read(userProvider.notifier).loginUser(
         name: nameController.text,
         uid: finalUid,
-        userDataPath: userDir.path,
+        userDataPath: userDirPath,
       );
       storageService.setCurrentUser(localUid);
       await configService.updateKeepLoggedIn(true);

@@ -14,7 +14,7 @@ class EncryptUtils {
     final iv = encrypt.IV.fromSecureRandom(16);
     final encrypter = encrypt.Encrypter(encrypt.AES(key));
     final encrypted = encrypter.encrypt(uid, iv: iv);
-    
+
     // 将List<int>转换为Uint8List
     final combinedBytes = Uint8List.fromList(iv.bytes + encrypted.bytes);
     return _customBaseEncode(combinedBytes);
@@ -38,12 +38,60 @@ class EncryptUtils {
 
       final encrypted = encrypt.Encrypted(encryptedBytes);
       return encrypter.decrypt(encrypted, iv: iv);
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
 
-  // 自定义Base编码（与注册时一致）
+  /// 加密密码本身（使用静态密钥，区别于以密码为密钥的 UID 加密）
+  static String encryptPassword(String plain) {
+    final key = _passwordKey();
+    final iv = encrypt.IV(Uint8List.fromList(Uint8List(16))); // 固定 IV
+    final encrypter = encrypt.Encrypter(encrypt.AES(key));
+    final encrypted = encrypter.encrypt(plain);
+    final combined = Uint8List.fromList(iv.bytes + encrypted.bytes);
+    return _customBaseEncode(combined);
+  }
+
+  /// 解密密码
+  static String? decryptPassword(String cipher) {
+    try {
+      final bytes = _customBaseDecode(cipher);
+      if (bytes.length < 16) return null;
+      final allBytes = Uint8List.fromList(bytes);
+      final ivBytes = allBytes.sublist(0, 16);
+      final encryptedBytes = allBytes.sublist(16);
+
+      final key = _passwordKey();
+      final iv = encrypt.IV(ivBytes);
+      final encrypter = encrypt.Encrypter(encrypt.AES(key));
+      final encrypted = encrypt.Encrypted(encryptedBytes);
+      return encrypter.decrypt(encrypted, iv: iv);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 判断字段值是否已加密
+  static bool isPasswordEncrypted(String value) {
+    try {
+      final bytes = _customBaseDecode(value);
+      return bytes.length >= 16;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // --- 静态密钥（用于密码加密，独立于用户密码） ---
+  static encrypt.Key _passwordKey() {
+    final keyBytes = Uint8List(16);
+    for (int i = 0; i < 16; i++) {
+      keyBytes[i] = 0x6a;
+    }
+    return encrypt.Key(Uint8List.fromList(keyBytes));
+  }
+
+  // --- 自定义Base编码 ---
   static String _customBaseEncode(List<int> bytes) {
     if (bytes.isEmpty) return '';
     BigInt big = BigInt.zero;

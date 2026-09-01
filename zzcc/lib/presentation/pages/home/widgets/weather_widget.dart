@@ -40,8 +40,10 @@ class WeatherWidget extends ConsumerWidget {
                   child: CircularProgressIndicator(),
                 ),
               ),
-              error: (e, _) => Text('天气获取失败：$e',
-                  style: const TextStyle(color: Colors.red)),
+              error: (e, _) => Text(
+                '天气获取失败：${_errorStr(e)}',
+                style: const TextStyle(color: Colors.red, fontSize: 12),
+              ),
               data: (data) => _buildBody(context, data),
             ),
           ],
@@ -93,6 +95,12 @@ class WeatherWidget extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  String _errorStr(Object e) {
+    final s = e.toString();
+    if (s.startsWith('Instance of ')) return 'IP 定位或天气服务暂不可用（Web 网络受限）';
+    return s;
   }
 
   String _weekdayOf(String date) {

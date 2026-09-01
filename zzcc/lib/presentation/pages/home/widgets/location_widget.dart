@@ -38,8 +38,8 @@ class LocationWidget extends ConsumerWidget {
                 error: (e, _) => Center(
                   child: Padding(
                     padding: const EdgeInsets.all(12.0),
-                    child: Text('位置获取失败：$e',
-                        style: const TextStyle(color: Colors.red),
+                    child: Text(LocationWidget._errorStr(e),
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
                         textAlign: TextAlign.center),
                   ),
                 ),
@@ -87,5 +87,11 @@ class LocationWidget extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  static String _errorStr(Object e) {
+    final s = e.toString();
+    if (s.startsWith('Instance of ')) return 'IP 定位或地图服务暂不可用（Web 网络受限）';
+    return s;
   }
 }

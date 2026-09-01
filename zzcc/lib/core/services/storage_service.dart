@@ -3,6 +3,7 @@ import 'package:hive/hive.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:zzcc/core/services/logger_service.dart';
+import 'package:zzcc/core/utils/encrypt_utils.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 import 'package:flutter/material.dart';
 import 'package:zzcc/data/models/user_settings_model.dart';
@@ -121,17 +122,28 @@ class StorageService {
   }
 
   Future<Box> _openUserBox(String ciphertext) async {
-    final userDir = Directory(path.join(_storagePath, ciphertext));
-    if (!await userDir.exists()) {
-      await userDir.create(recursive: true);
-    }
-    return await Hive.openBox('user_data', path: userDir.path);
+    final dirPath = path.join(_storagePath, ciphertext);
+    try {
+      final userDir = Directory(dirPath);
+      if (!await userDir.exists()) {
+        await userDir.create(recursive: true);
+      }
+    } catch (_) { /* Web: no filesystem, Hive uses IndexedDB */ }
+    return await Hive.openBox('user_data', path: dirPath);
   }
 
   // 新增：保存用户信息到对应用户的盒子
   Future<void> saveUserInfo(String ciphertext, Map<String, dynamic> info) async {
     final userBox = await _openUserBox(ciphertext);
-    await userBox.putAll(info);
+    final toSave = Map<String, dynamic>.from(info);
+    // 加密 password 字段（如果存在且未加密）
+    if (toSave.containsKey('password')) {
+      final pw = toSave['password'] as String? ?? '';
+      if (pw.isNotEmpty && !EncryptUtils.isPasswordEncrypted(pw)) {
+        toSave['password'] = EncryptUtils.encryptPassword(pw);
+      }
+    }
+    await userBox.putAll(toSave);
     await userBox.close();
   }
 
@@ -141,6 +153,13 @@ class StorageService {
       final userBox = await _openUserBox(ciphertext);
       final info = userBox.toMap().cast<String, dynamic>();
       await userBox.close();
+      // 解密 password 字段（如果存在且已加密）
+      if (info.containsKey('password')) {
+        final pw = info['password'] as String? ?? '';
+        if (EncryptUtils.isPasswordEncrypted(pw)) {
+          info['password'] = EncryptUtils.decryptPassword(pw) ?? pw;
+        }
+      }
       return info;
     } catch (e) {
       return null;
@@ -151,14 +170,19 @@ class StorageService {
     if (userDataPath.isEmpty) return;
 
     try {
-      // 打开用户数据盒子（user_data.hive）
       final box = await Hive.openBox(
         'user_data',
         path: userDataPath,
       );
 
-      // 合并并更新数据
       for (final entry in newInfo.entries) {
+        if (entry.key == 'password') {
+          final pw = entry.value as String? ?? '';
+          if (pw.isNotEmpty && !EncryptUtils.isPasswordEncrypted(pw)) {
+            await box.put(entry.key, EncryptUtils.encryptPassword(pw));
+            continue;
+          }
+        }
         await box.put(entry.key, entry.value);
       }
 
@@ -172,23 +196,31 @@ class StorageService {
   // 新增：获取指定用户的特定信息
   Future<dynamic> getUserInfoByKey(String ciphertext, String key) async {
     final userBox = await _openUserBox(ciphertext);
-    final value = userBox.get(key);
+    var value = userBox.get(key);
     await userBox.close();
+    if (key == 'password' && value is String && EncryptUtils.isPasswordEncrypted(value)) {
+      value = EncryptUtils.decryptPassword(value) ?? value;
+    }
     return value;
   }
 
   Future<Map<String, dynamic>> readExternalHiveFile(String filePath) async {
-    final file = File(filePath);
-    if (!await file.exists()) {
+    bool fileExists = true;
+    try {
+      final file = File(filePath);
+      fileExists = await file.exists();
+    } catch (_) {
+      fileExists = true;
+    }
+    if (!fileExists) {
       return {'success': false, 'message': '文件不存在'};
     }
 
     final dirPath = path.dirname(filePath);
-    final fileName = path.basenameWithoutExtension(filePath); // 原文件名（不含扩展名）
-    final lockFile = File('$dirPath/$fileName.lock'); // 锁文件路径
+    final fileName = path.basenameWithoutExtension(filePath);
+    final lockFile = File('$dirPath/$fileName.lock');
 
     try {
-      // 1. 检查并删除残留的锁文件（防止上次异常关闭导致的冲突）
       if (await lockFile.exists()) {
         await lockFile.delete();
       }
@@ -214,9 +246,8 @@ class StorageService {
         'message': '读取成功'
       };
     } catch (e) {
-      // 异常时清理可能产生的临时文件
       final possibleTempFile = File('$dirPath/$fileName.hive');
-      if (await possibleTempFile.exists() && possibleTempFile.path != file.path) {
+      if (await possibleTempFile.exists()) {
         await possibleTempFile.delete();
       }
       if (await lockFile.exists()) {
@@ -228,11 +259,14 @@ class StorageService {
 
   // 用户设置相关操作
   Future<Box> _openUserSettingsBox(String ciphertext) async {
-    final userDir = Directory(path.join(_storagePath, ciphertext));
-    if (!await userDir.exists()) {
-      await userDir.create(recursive: true);
-    }
-    return await Hive.openBox('user_settings', path: userDir.path);
+    final dirPath = path.join(_storagePath, ciphertext);
+    try {
+      final userDir = Directory(dirPath);
+      if (!await userDir.exists()) {
+        await userDir.create(recursive: true);
+      }
+    } catch (_) { /* Web: no filesystem */ }
+    return await Hive.openBox('user_settings', path: dirPath);
   }
 
   // 保存用户设置
@@ -405,15 +439,18 @@ class StorageService {
       throw Exception('当前用户无加密配置');
     }
     
-    final settingsDir = Directory(path.join(_storagePath, storedCiphertext));
-    if (!await settingsDir.exists()) {
-      await settingsDir.create(recursive: true);
-    }
+    final dirPath = path.join(_storagePath, storedCiphertext);
+    try {
+      final settingsDir = Directory(dirPath);
+      if (!await settingsDir.exists()) {
+        await settingsDir.create(recursive: true);
+      }
+    } catch (_) { /* Web: no filesystem */ }
 
     // 打开box并缓存
     _cachedSharedFileBox = await Hive.openBox(
       'shared_file_settings',
-      path: settingsDir.path
+      path: dirPath
     );
     return _cachedSharedFileBox!;
   }
@@ -429,13 +466,16 @@ class StorageService {
       throw Exception('当前用户无加密配置');
     }
 
-    final settingsDir = Directory(path.join(_storagePath, storedCiphertext));
-    if (!await settingsDir.exists()) {
-      await settingsDir.create(recursive: true);
-    }
+    final dirPath = path.join(_storagePath, storedCiphertext);
+    try {
+      final settingsDir = Directory(dirPath);
+      if (!await settingsDir.exists()) {
+        await settingsDir.create(recursive: true);
+      }
+    } catch (_) { /* Web: no filesystem */ }
 
     // 使用专用盒子名称保存任务队列
-    final box = await Hive.openBox('torrent_tasks', path: settingsDir.path);
+    final box = await Hive.openBox('torrent_tasks', path: dirPath);
     return box;
   }
 

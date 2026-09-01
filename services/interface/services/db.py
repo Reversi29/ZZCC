@@ -61,14 +61,14 @@ async def managed_session() -> AsyncGenerator[AsyncSession, None]:
 async def health_check() -> dict:
     """Return status dict: {'status': 'ok'|'degraded', 'detail': ...}."""
     if not _GREENLET_OK:
-        _log.error("postgres_health_check_skipped", reason="greenlet not installed")
+        _log.error("postgres_health_check_skipped: greenlet not installed")
         return {"status": "degraded", "detail": "greenlet not installed"}
     try:
         async with managed_session() as sess:
             await sess.execute(text("SELECT 1"))
         return {"status": "ok"}
     except Exception as exc:
-        _log.error("postgres_health_check_failed", reason=str(exc))
+        _log.error(f"postgres_health_check_failed: {exc}")
         return {"status": "degraded", "detail": str(exc)}
 
 
@@ -88,7 +88,7 @@ async def log_audit(
     );
     """
     if not _GREENLET_OK:
-        _log.error("audit_log_skipped", reason="greenlet not installed")
+        _log.error("audit_log_skipped: greenlet not installed")
         return False
     try:
         async with managed_session() as sess:
