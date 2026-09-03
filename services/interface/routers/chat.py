@@ -97,7 +97,18 @@ class CreateRoomRequest(BaseModel):
     name: Optional[str] = None
     topic: Optional[str] = None
     invite: Optional[list[str]] = None
+    invitees: Optional[list[str]] = None  # alias for invite
     is_direct: bool = False
+
+    @property
+    def all_invitees(self) -> list[str]:
+        seen: list[str] = []
+        for lst in (self.invite, self.invitees):
+            if lst:
+                for x in lst:
+                    if x not in seen:
+                        seen.append(x)
+        return seen
 
 
 class SendMessageRequest(BaseModel):
@@ -128,13 +139,33 @@ async def resolve_user_from_token(token: Optional[str]) -> Optional[dict]:
         payload = parse_access_token(token)
     except Exception:
         return None
+    if payload is None:
+        return None
     uid = payload.get("id")
     if not uid:
         return None
-    return await fetch_one(
+    row = await fetch_one(
         "SELECT * FROM chat_user WHERE id = CAST(:uid AS UUID) AND is_deleted = FALSE AND is_active = TRUE",
         {"uid": str(uid)},
     )
+    if not row:
+        return None
+    # Reject tokens issued before the last logout
+    logged_out_at = row.get("logged_out_at")
+    if logged_out_at:
+        try:
+            token_iat = payload.get("iat", 0)
+            # logged_out_at is a datetime; convert to epoch seconds
+            from datetime import datetime, timezone
+            if isinstance(logged_out_at, str):
+                logged_out_at = datetime.fromisoformat(logged_out_at.replace("Z", "+00:00"))
+            if isinstance(logged_out_at, datetime):
+                logout_ts = int(logged_out_at.timestamp())
+                if token_iat <= logout_ts:
+                    return None
+        except Exception:
+            pass
+    return row
 
 
 async def _auth_user(
@@ -270,7 +301,7 @@ async def login(
         raise HTTPException(401, "用户不存在或密码错误")
 
     await execute(
-        "UPDATE chat_user SET last_login_at = NOW(), updated_at = NOW() WHERE id = :id",
+        "UPDATE chat_user SET last_login_at = NOW(), logged_out_at = NULL, updated_at = NOW() WHERE id = :id",
         {"id": str(row["id"])},
     )
     token = create_access_token(str(row["id"]), row["username"])
@@ -292,8 +323,13 @@ async def logout(
     user: dict = Depends(_auth_user),
     auth: str = Depends(verify_api_key),
 ):
+    uid = str(user["id"])
+    await execute(
+        "UPDATE chat_user SET logged_out_at = NOW(), updated_at = NOW() WHERE id = :id",
+        {"id": uid},
+    )
     log_audit(actor=user["username"], action="logout", resource="chat_user")
-    return {"ok": True, "data": {"message": "Logged out", "user_id": str(user["id"])}}
+    return {"ok": True, "data": {"message": "Logged out", "user_id": uid}}
 
 
 class DeleteAccountRequest(BaseModel):
@@ -494,7 +530,7 @@ async def create_room(
                VALUES (CAST(:rid AS UUID), CAST(:uid AS UUID), 'owner')
             """
         ), {"rid": str(room_id), "uid": uid})
-        for invitee in req.invite or []:
+        for invitee in req.all_invitees:
             try:
                 await sess.execute(text(
                     """INSERT INTO chat_room_member (room_id, user_id, role)
@@ -567,6 +603,7 @@ async def get_messages(
     room_id: str,
     limit: int = 50,
     from_token: Optional[str] = None,
+    from_start: bool = False,
     user: dict = Depends(_auth_user),
     auth: str = Depends(verify_api_key),
 ):
@@ -592,14 +629,23 @@ async def get_messages(
         else:
             rows = [r for r in rows if int(r["id"]) > since_id]
     else:
-        rows = await fetch_all(
-            """SELECT * FROM chat_message
-               WHERE room_id = CAST(:rid AS UUID) AND is_deleted = FALSE
-               ORDER BY sent_at DESC
-               LIMIT :lim""",
-            {"rid": rid, "lim": limit},
-        )
-        rows.reverse()
+        if from_start:
+            rows = await fetch_all(
+                """SELECT * FROM chat_message
+                   WHERE room_id = CAST(:rid AS UUID) AND is_deleted = FALSE
+                   ORDER BY sent_at ASC, id ASC
+                   LIMIT :lim""",
+                {"rid": rid, "lim": limit},
+            )
+        else:
+            rows = await fetch_all(
+                """SELECT * FROM chat_message
+                   WHERE room_id = CAST(:rid AS UUID) AND is_deleted = FALSE
+                   ORDER BY sent_at DESC
+                   LIMIT :lim""",
+                {"rid": rid, "lim": limit},
+            )
+            rows.reverse()
 
     messages = [_row_to_message(r) for r in rows]
     next_batch = None

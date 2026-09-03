@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS chat_user (
     phone VARCHAR(32),
     avatar_url TEXT,
     matrix_user_id VARCHAR(255),
+    logged_out_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_login_at TIMESTAMPTZ,
