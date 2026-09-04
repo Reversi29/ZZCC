@@ -34,8 +34,8 @@ class ReasoningEngine:
     ):
         self.l1_threshold = l1_threshold
         self.l2_threshold = l2_threshold
-        self.llm_api_key = llm_api_key or os.environ.get("OPENAI_API_KEY", "")
-        self.llm_model = llm_model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        self.llm_api_key = llm_api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("QCLAW_LLM_API_KEY", "")
+        self.llm_model = llm_model or os.environ.get("OPENAI_MODEL") or os.environ.get("QCLAW_LLM_MODEL") or "qwen/qwen3.8-flash"
         # 简单调用计数
         self._stats = {
             "l1_calls": 0, "l1_hits": 0,
@@ -244,7 +244,7 @@ class ReasoningEngine:
         """调用 OpenAI 兼容 API（支持 OpenAI/Claude proxy/Ollama/OpenRouter 等）。"""
         import httpx
 
-        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        base_url = (os.environ.get("OPENAI_BASE_URL") or os.environ.get("QCLAW_LLM_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",

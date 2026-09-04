@@ -145,7 +145,7 @@ async def _list_packages() -> List[Dict[str, Any]]:
     return pkgs
 
 
-async def _install_package(app: Request, pkg_id: str) -> R:
+async def _install_package(app, pkg_id: str) -> R:
     """从插件广场安装到当前插件系统。"""
     zip_path = _zip_path(pkg_id)
     if not zip_path.exists():
@@ -320,7 +320,7 @@ async def publish_package(
 @router.post("/packages/{pkg_id}/install")
 async def install_package(pkg_id: str, request: Request, user: dict = Depends(get_current_user_dep)) -> R:
     """从插件广场安装指定插件包到当前插件系统。"""
-    return await _install_package(request, pkg_id)
+    return await _install_package(request.app, pkg_id)
 
 
 @router.delete("/packages/{pkg_id}")
