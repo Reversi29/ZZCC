@@ -124,6 +124,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         _log.error("plugin_system_init_failed", error=str(exc))
 
+    # Brain AI system init (best-effort; failure is non-fatal)
+    try:
+        from services.db import managed_session
+        from services.brain import init_brain_tables, init_builtin_rules
+        async with managed_session() as db:
+            await init_brain_tables(db)
+            await db.commit()
+        rule_count = init_builtin_rules()
+        _log.info("brain_system_ready", rules=rule_count)
+    except Exception as exc:
+        _log.error("brain_system_init_failed", error=str(exc))
+
     yield
 
     client.close()
@@ -175,7 +187,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, brain as brain_router
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -192,6 +204,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_user.router, prefix=v1)
     app.include_router(auth.router, prefix=v1)
     app.include_router(plugins_router.router, prefix=v1)
+    app.include_router(brain_router.router, prefix=v1)
 
     # Root
     @app.get("/")
