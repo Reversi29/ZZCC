@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import json
 import structlog
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -18,6 +19,71 @@ from middleware.rate_limit import setup_middleware
 from modules.nebula_client import NebulaClient, set_client
 
 _log = structlog.get_logger()
+
+
+async def _init_plugin_system(app: FastAPI) -> None:
+    """初始化插件系统：建表 + 加载已注册插件 + 扫描新插件。
+
+    表结构使用 PostgreSQL 方言（asyncpg）。表不存在时静默返回，不阻塞主流程。
+    """
+    try:
+        from plugins import registry as _registry, event_bus as _event_bus
+        from plugins.loader import scan_and_load_plugins
+        from services.db import managed_session
+        from sqlalchemy import text
+
+        # 1. 建表（idempotent）
+        async with managed_session() as db:
+            await db.execute(text("""
+                CREATE TABLE IF NOT EXISTS plugin_registry (
+                    id VARCHAR(64) PRIMARY KEY,
+                    name VARCHAR(128) NOT NULL,
+                    version VARCHAR(32) NOT NULL,
+                    author VARCHAR(64) DEFAULT '',
+                    description TEXT,
+                    manifest JSONB,
+                    status VARCHAR(16) DEFAULT 'installed',
+                    config JSONB,
+                    installed_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            await db.execute(text("""
+                CREATE TABLE IF NOT EXISTS plugin_event_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    plugin_id VARCHAR(64) NOT NULL,
+                    event_name VARCHAR(128) NOT NULL,
+                    payload JSONB,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            await db.execute(text("CREATE INDEX IF NOT EXISTS idx_plugin_evt_pid ON plugin_event_log (plugin_id)"))
+            await db.execute(text("CREATE INDEX IF NOT EXISTS idx_plugin_evt_name ON plugin_event_log (event_name)"))
+            await db.commit()
+
+        # 2. 从 DB 恢复注册信息到内存
+        db_rows = await _registry.load_from_db()
+        for row in db_rows:
+            try:
+                manifest = json.loads(row.get("manifest") or "{}") if isinstance(row.get("manifest"), str) else row.get("manifest") or {}
+                config = json.loads(row.get("config") or "{}") if isinstance(row.get("config"), str) else row.get("config") or {}
+                from plugins.registry import PluginMetadata, PluginStatus
+                meta = PluginMetadata(
+                    id=row["id"], name=row["name"], version=row["version"],
+                    author=row.get("author", "") or "",
+                    description=row.get("description", "") or "",
+                    manifest=manifest, status=PluginStatus(row.get("status", "installed")),
+                    config=config,
+                )
+                _registry.register(meta)
+            except Exception as exc:
+                _log.warning("plugin_row_parse_failed", plugin_id=row.get("id"), error=str(exc))
+
+        # 3. 扫描目录并加载插件（新插件从 DB 恢复 config）
+        loaded = await scan_and_load_plugins(app, _registry, _event_bus)
+        _log.info("plugins_loaded", count=len(loaded))
+    except Exception as exc:
+        _log.error("plugin_system_init_failed", error=str(exc))
 
 
 # ============================================================
@@ -51,6 +117,12 @@ async def lifespan(app: FastAPI):
         await chat_init_schema()
     except Exception as exc:
         _log.error("chat_schema_init_failed", error=str(exc))
+
+    # Plugin system init (best-effort; failure is non-fatal)
+    try:
+        await _init_plugin_system(app)
+    except Exception as exc:
+        _log.error("plugin_system_init_failed", error=str(exc))
 
     yield
 
@@ -103,7 +175,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -119,6 +191,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix=v1)
     app.include_router(chat_user.router, prefix=v1)
     app.include_router(auth.router, prefix=v1)
+    app.include_router(plugins_router.router, prefix=v1)
 
     # Root
     @app.get("/")
