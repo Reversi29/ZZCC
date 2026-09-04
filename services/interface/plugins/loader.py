@@ -196,7 +196,7 @@ async def load_plugin(app: FastAPI, plugin_dir: Path,
         if frontend_module:
             frontend_module["plugin_id"] = pid
 
-    # ── 恢复 DB 里的配置（避免重启后 config 回默认值） ──
+    # ── 恢复 DB 里的配置（避免重启/卸载后重装 config 回默认值） ──
     existing_meta = registry.get(pid)
     db_config = await _load_config_from_db(registry, pid)
     if db_config:
@@ -205,6 +205,14 @@ async def load_plugin(app: FastAPI, plugin_dir: Path,
         config = existing_meta.config
     else:
         config = manifest.get("config", {})
+        schema = manifest.get("config_schema", {})
+        if isinstance(schema, dict):
+            defaults = {}
+            for key, spec in schema.items():
+                if isinstance(spec, dict) and "default" in spec:
+                    defaults[key] = spec["default"]
+            if defaults:
+                config = {**defaults, **config}
 
     metadata = PluginMetadata(
         id=pid,

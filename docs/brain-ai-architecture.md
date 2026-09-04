@@ -389,10 +389,15 @@ Phase 2: 统一（中等改动）
   - 新增 brain_memory + brain_decision_log 表
   - 实现 WorkingMemory + AttentionMechanism
 
-Phase 3: 增强（大改动）
-  - L2 统计推理（历史模式匹配、异常检测）
+Phase 3: 增强（插件生态 + LLM）
+  - 插件广场：发布/搜索/安装插件 zip 包
   - L3 LLM 推理（接入外部 API）
   - 学习闭环（决策日志 → 记忆更新 → 推理权重调整）
+
+已落地：
+- Brain Plugin SDK：插件可注册 L1 规则、自定义 Action、Brain signal handler
+- Plugin Marketplace API：/api/v1/plugin-market/*，文件系统后端，支持发布/搜索/安装/下载计数
+- L3 OpenAI 兼容 API 调用骨架：OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
 ```
 
 ---

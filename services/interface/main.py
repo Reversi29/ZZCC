@@ -61,6 +61,14 @@ async def _init_plugin_system(app: FastAPI) -> None:
             await db.execute(text("CREATE INDEX IF NOT EXISTS idx_plugin_evt_name ON plugin_event_log (event_name)"))
             await db.commit()
 
+        # Plugin marketplace metadata is intentionally filesystem-backed in Phase 3.
+        try:
+            from routers.plugin_marketplace import _market_dir
+            market_dir = _market_dir()
+            _log.info("plugin_market_ready", path=str(market_dir))
+        except Exception as market_exc:
+            _log.warning("plugin_market_init_failed", error=str(market_exc))
+
         # 2. 从 DB 恢复注册信息到内存
         db_rows = await _registry.load_from_db()
         for row in db_rows:
@@ -187,7 +195,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, brain as brain_router
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, plugin_marketplace as plugin_marketplace_router, brain as brain_router
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -204,6 +212,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_user.router, prefix=v1)
     app.include_router(auth.router, prefix=v1)
     app.include_router(plugins_router.router, prefix=v1)
+    app.include_router(plugin_marketplace_router.router, prefix=v1)
     app.include_router(brain_router.router, prefix=v1)
 
     # Root

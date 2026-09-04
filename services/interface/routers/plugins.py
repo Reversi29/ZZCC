@@ -244,7 +244,7 @@ async def install_plugin_file(
             # 支持 zip 内嵌一层目录的情况（取第一层下的 plugin.json）
             plugin_json_name = None
             for n in names:
-                if n.endswith("/plugin.json"):
+                if n == "plugin.json" or n.endswith("/plugin.json"):
                     plugin_json_name = n
                     break
             if not plugin_json_name:
