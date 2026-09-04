@@ -30,6 +30,7 @@ from plugins.registry import (
     validate_manifest,
     PluginManifestError,
 )
+from plugins.sdk import clear_brain_plugin_registrations
 from routers.auth import get_current_user_dep
 
 logger = logging.getLogger("plugins.api")
@@ -337,8 +338,9 @@ async def disable_plugin(
         raise HTTPException(404, "插件不存在")
     _remove_plugin_routes(request.app, plugin_id)
     ev.clear_plugin(plugin_id)
+    brain_cleaned = clear_brain_plugin_registrations(plugin_id)
     await _persist(reg)
-    return {"ok": True, "status": "disabled"}
+    return {"ok": True, "status": "disabled", "brain_cleaned": brain_cleaned}
 
 
 @router.post("/{plugin_id}/reload")
@@ -355,6 +357,7 @@ async def reload_plugin(
 
     _remove_plugin_routes(request.app, plugin_id)
     ev.clear_plugin(plugin_id)
+    clear_brain_plugin_registrations(plugin_id)
     reg.remove(plugin_id)
 
     plugin_dir = _plugin_dir(plugin_id)
@@ -379,6 +382,7 @@ async def uninstall_plugin(
 
     _remove_plugin_routes(request.app, plugin_id)
     ev.clear_plugin(plugin_id)
+    clear_brain_plugin_registrations(plugin_id)
     reg.remove(plugin_id)
 
     plugin_dir = _plugin_dir(plugin_id)

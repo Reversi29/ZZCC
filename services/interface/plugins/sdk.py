@@ -20,6 +20,7 @@ logger = logging.getLogger("plugins.sdk")
 # ── 全局引用（由 loader 注入） ──
 _current_plugin_id: Optional[str] = None
 _event_bus_ref = None  # EventBus instance
+_brain_plugin_registrations: Dict[str, Dict[str, List[str]]] = {}
 
 # ── 管理员角色白名单（ZZCC services 里默认所有用户都是 "user"） ──
 _ADMIN_ROLES = {"admin", "operator"}
@@ -42,6 +43,48 @@ def _require_plugin_id() -> str:
     if not _current_plugin_id:
         raise RuntimeError("SDK 调用在插件加载上下文中执行，但 plugin_id 未设置")
     return _current_plugin_id
+
+
+def _get_brain_registrations(plugin_id: str) -> Dict[str, List[str]]:
+    return _brain_plugin_registrations.setdefault(plugin_id, {"rules": [], "actions": [], "events": []})
+
+
+def clear_brain_plugin_registrations(plugin_id: str) -> dict:
+    """清理插件注册的 Brain 规则/动作/事件订阅。
+
+    用于插件 disable/uninstall/reload 生命周期。事件清理由 EventBus.clear_plugin 完成。
+    除 SDK 明确记录的注册项外，也会兜底清理同一 plugin_id 前缀下由 API/自定义规则创建的 Brain 注册。
+    """
+    from services.brain import action_executor as brain_action_executor
+    from services.brain import rules as brain_rules
+
+    reg = _brain_plugin_registrations.get(plugin_id, {"rules": [], "actions": [], "events": []})
+    tracked_rules = reg.get("rules", [])
+    tracked_actions = reg.get("actions", [])
+    tracked_events = reg.get("events", [])
+
+    rules_to_remove = [r.id for r in brain_rules.list_rules(enabled_only=False) if r.id.startswith(f"{plugin_id}.")]
+    for rid in tracked_rules:
+        if rid not in rules_to_remove:
+            rules_to_remove.append(rid)
+
+    rules_removed = 0
+    for rid in rules_to_remove:
+        if brain_rules.unregister_rule(rid):
+            rules_removed += 1
+
+    actions_removed = 0
+    _EXEC = getattr(brain_action_executor, "_EXECUTORS", {})
+    actions_to_remove = [aid for aid in list(_EXEC.keys()) if aid.startswith(f"{plugin_id}.")]
+    for aid in tracked_actions:
+        if aid not in actions_to_remove:
+            actions_to_remove.append(aid)
+    for aid in actions_to_remove:
+        if _EXEC.pop(aid, None) is not None:
+            actions_removed += 1
+
+    _brain_plugin_registrations.pop(plugin_id, None)
+    return {"rules": rules_removed, "actions": actions_removed, "events": len(tracked_events)}
 
 
 # ── on_event 装饰器 ──
@@ -182,3 +225,163 @@ def log(msg: str, level: str = "info") -> None:
     """插件专用日志，带 [plugin:id] 前缀。"""
     pid = _current_plugin_id or "unknown"
     getattr(logger, level)(f"[plugin:{pid}] {msg}")
+
+# ── Brain AI 扩展 ──
+def _brain_rule_id(plugin_id: str, rule_id: Optional[str]) -> str:
+    """确保插件规则 id 唯一，避免覆盖内置/其他插件规则。"""
+    rid = rule_id or ""
+    if not rid:
+        raise ValueError("brain_rule 需要 rule_id")
+    if rid.startswith(f"{plugin_id}."):
+        return rid
+    return f"{plugin_id}.{rid}"
+
+
+def brain_rule(
+    rule_id: str,
+    module: Optional[str] = None,
+    action: str = "flag",
+    confidence: float = 0.8,
+    description: str = "",
+) -> Callable:
+    """注册 Brain AI L1 规则。
+
+    handler 签名：async def handler(payload: dict, context: dict) -> bool
+    返回 True 表示规则命中，随后执行 action。
+    """
+    pid = _require_plugin_id()
+    from models.brain import BrainRule
+    from services.brain import rules as brain_rules
+
+    def decorator(func: Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[bool]] | Callable[[Dict[str, Any], Dict[str, Any]], bool]) -> Callable:
+        async def condition_wrapper(payload: Dict[str, Any], context: Dict[str, Any]) -> bool:
+            result = func(payload, context)
+            if hasattr(result, "__await__"):
+                result = await result
+            return bool(result)
+
+        rid = _brain_rule_id(pid, rule_id)
+        rule = BrainRule(
+            id=rid,
+            module=module or pid,
+            condition=condition_wrapper,
+            action=action,
+            confidence=confidence,
+            description=description or f"[{pid}] {rule_id}",
+            enabled=True,
+        )
+        brain_rules.register_rule(rule)
+        _get_brain_registrations(pid)["rules"].append(rid)
+        logger.info("插件 %s 注册 Brain 规则: %s -> %s", pid, rid, action)
+        return func
+
+    return decorator
+
+
+def brain_action(action_type: str) -> Callable:
+    """注册 Brain AI 自定义行动执行器。
+
+    handler 签名：async def handler(action, cognition, db) -> dict
+    action_type 会自动加插件名前缀，例如 plugin.test -> test-plugin.test_action。
+    """
+    pid = _require_plugin_id()
+    from services.brain import action_executor as brain_action_executor
+
+    def decorator(func: Callable[..., Awaitable[dict]]) -> Callable:
+        full_type = action_type if action_type.startswith(f"{pid}.") else f"{pid}.{action_type}"
+
+        async def executor(action, cognition, db) -> dict:
+            try:
+                result = await func(action, cognition, db)
+                if not isinstance(result, dict):
+                    result = {"ok": True, "result": result}
+                result.setdefault("ok", True)
+                result["action"] = full_type
+                result["action_type"] = full_type
+                result["plugin_id"] = pid
+                return result
+            except Exception as e:
+                logger.error("brain_action_failed: plugin=%s action=%s error=%s", pid, full_type, str(e))
+                return {
+                    "ok": False,
+                    "action": full_type,
+                    "action_type": full_type,
+                    "plugin_id": pid,
+                    "error": str(e),
+                }
+
+        brain_action_executor.register_executor(full_type, executor)
+        _get_brain_registrations(pid)["actions"].append(full_type)
+        logger.info("插件 %s 注册 Brain Action: %s", pid, full_type)
+        return func
+
+    return decorator
+
+
+def brain_signal_handler(event_type: str) -> Callable:
+    """订阅插件事件并把事件转发为 Brain signal，由 /brain/observe 规则处理。
+
+    插件里这样用：
+        @sdk.brain_signal_handler("risk.detected")
+        async def on_risk(event: sdk.PluginEvent):
+            return {"type": "risk_detected", "payload": event.payload, "urgency": 70}
+
+    handler 返回 None 时不会创建 Brain signal。
+    """
+    pid = _require_plugin_id()
+
+    def decorator(func: Callable[[PluginEvent], Awaitable[Optional[Dict[str, Any]]]]) -> Callable:
+        async def handler(event: PluginEvent):
+            try:
+                signal_data = func(event)
+                if hasattr(signal_data, "__await__"):
+                    signal_data = await signal_data
+                if not signal_data:
+                    return
+                await publish_brain_signal(pid, event, signal_data)
+            except Exception as e:
+                logger.error("brain_signal_handler_failed: plugin=%s event=%s error=%s", pid, event_type, str(e))
+
+        if _event_bus_ref:
+            _event_bus_ref.subscribe(event_type, pid, handler)
+            _get_brain_registrations(pid)["events"].append(event_type)
+            logger.info("插件 %s 注册 Brain 信号处理器: %s", pid, event_type)
+        return handler
+
+    return decorator
+
+
+async def publish_brain_signal(
+    source: str,
+    event_or_payload: "PluginEvent | Dict[str, Any]",
+    signal_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """插件发布 Brain AI 信号。
+
+    优先写入 brain_signal 表；失败时退回到内存工作记忆。
+    """
+    from models.brain import NeuralSignal
+    from services.brain import memory as brain_memory
+    from services.db import managed_session
+
+    if isinstance(event_or_payload, PluginEvent):
+        payload = signal_data or dict(event_or_payload.payload or {})
+    else:
+        payload = signal_data or dict(event_or_payload or {})
+
+    signal = NeuralSignal(
+        type=str(payload.pop("type", f"plugin.{source}")),
+        payload=dict(payload.pop("payload", payload)),
+        source=f"plugin:{source}",
+        urgency=int(payload.pop("urgency", 50)),
+        context=payload.pop("context", {}) or {"event": payload},
+    )
+    try:
+        async with managed_session() as db:
+            await brain_memory.enqueue_signal(db, signal.to_dict())
+            await db.commit()
+        return {"ok": True, "signal_id": signal.id, "type": signal.type}
+    except Exception as e:
+        brain_memory.working_memory.append(signal.to_dict())
+        logger.warning("brain_signal_db_write_failed: %s", str(e))
+        return {"ok": False, "signal_id": signal.id, "type": signal.type, "warning": str(e)}

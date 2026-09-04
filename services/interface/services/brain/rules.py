@@ -21,6 +21,8 @@ _RULES: Dict[str, BrainRule] = {}
 
 def register_rule(rule: BrainRule) -> BrainRule:
     """注册一条规则。同 id 会被覆盖。"""
+    if isinstance(rule.condition, str):
+        rule.condition = _compile_condition_str(rule.condition)
     with _LOCK:
         _RULES[rule.id] = rule
     return rule
@@ -182,6 +184,24 @@ def load_rules_from_dict(rules_data: List[Dict]) -> int:
         register_rule(rule)
         count += 1
     return count
+
+
+async def _eval_condition(condition: Callable, payload: Dict[str, Any], context: Dict[str, Any]) -> bool:
+    """安全执行规则条件。
+
+    - 同步函数：直接调用
+    - 异步函数：await 结果
+    - callable 对象：调用后处理可能的协程
+    """
+    if condition is None:
+        return False
+    try:
+        result = condition(payload, context)
+        if hasattr(result, "__await__"):
+            result = await result
+        return bool(result)
+    except Exception:
+        return False
 
 
 def _compile_condition_str(expr: str) -> Callable:

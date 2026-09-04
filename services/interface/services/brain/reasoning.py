@@ -54,7 +54,7 @@ class ReasoningEngine:
         self._stats["total"] += 1
 
         # L1: 规则引擎
-        l1 = self._rule_reasoning(signal)
+        l1 = await self._rule_reasoning(signal)
         self._stats["l1_calls"] += 1
         if l1 and l1.confidence >= self.l1_threshold:
             self._stats["l1_hits"] += 1
@@ -89,13 +89,17 @@ class ReasoningEngine:
             reasoning="所有层级推理均无结论",
         )
 
-    def _rule_reasoning(self, signal: NeuralSignal) -> Optional[CognitionResult]:
+    async def _rule_reasoning(self, signal: NeuralSignal) -> Optional[CognitionResult]:
         """L1：遍历所有规则，取置信度最高的匹配。"""
         best_rule = None
         best_score = 0.0
 
         for rule in rules_mod.list_rules(enabled_only=True):
-            if rule.matches(signal.payload, signal.context):
+            try:
+                matched = await rules_mod._eval_condition(rule.condition, signal.payload, signal.context)
+            except Exception:
+                matched = False
+            if matched:
                 if rule.confidence > best_score:
                     best_score = rule.confidence
                     best_rule = rule

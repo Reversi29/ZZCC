@@ -155,30 +155,34 @@ class InventoryItem(PluginBase):
 
 ### 3.5 插件 SDK（plugins/sdk.py）
 
-提供给插件开发者的最小 SDK：
+ZZCC services 版插件 SDK 采用“装饰器 + FastAPI router”的最小可用形态，避免插件重写宿主启动逻辑：
 
 ```python
-from plugins.sdk import Plugin, on_event, plugin_api
+from fastapi import APIRouter
+from plugins import sdk
 
-class MyPlugin(Plugin):
-    plugin_id = "inventory-tracker"
+router = APIRouter()
 
-    async def on_load(self):
-        # 初始化逻辑
-        pass
 
-    async def on_unload(self):
-        # 清理逻辑
-        pass
+@sdk.on_event("purchase_order.created")
+async def check_stock(event: sdk.PluginEvent):
+    for item in event.payload["items"]:
+        stock = await sdk.query_table("Item", filters={"sku": item["sku"]})
+        if stock and stock[0]["quantity"] < item["qty"]:
+            await sdk.publish_event("inventory.low_stock", {"sku": item["sku"]})
 
-    @on_event("purchase_order.created")
-    async def check_stock(self, event):
-        po = event.payload
-        for item in po["items"]:
-            stock = await plugin_api.query_table("Item", filters={"sku": item["sku"]})
-            if stock and stock[0]["quantity"] < item["qty"]:
-                await self.publish_event("inventory.low_stock", {"sku": item["sku"]})
+
+@sdk.brain_rule("low_stock_flag", module="inventory", action="flag", confidence=0.85)
+async def low_stock_flag(payload: dict, context: dict) -> bool:
+    return payload.get("quantity", 0) < payload.get("threshold", 0)
+
+
+@sdk.brain_action("notify_stock")
+async def notify_stock(action, cognition, db):
+    return {"ok": True, "reply": "stock notification created"}
 ```
+
+SDK 还提供 `require_auth` / `require_admin` / `get_plugin_config` / `publish_event` / `publish_brain_signal` / `clear_brain_plugin_registrations`。插件在 disable、reload、uninstall 时会自动清理 Brain 规则、Action executor 和事件订阅记录。
 
 ---
 
