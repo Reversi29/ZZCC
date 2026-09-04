@@ -31,11 +31,21 @@ ALLOWED_IMPORTS = {
     "plugins.sdk",
 }
 
-PLUGINS_DIR = Path("/app/plugins_data")  # Docker 容器内路径
+# 插件数据目录：环境变量 ZZCC_PLUGINS_DIR 可覆盖；默认走 ~/plugins_data（宿主机/容器均可写）
+_PLUGINS_DIR_ENV = os.environ.get("ZZCC_PLUGINS_DIR", "")
+if _PLUGINS_DIR_ENV:
+    PLUGINS_DIR = Path(_PLUGINS_DIR_ENV)
+elif Path("/app").is_dir() and os.access("/app", os.W_OK):
+    PLUGINS_DIR = Path("/app/plugins_data")
+else:
+    PLUGINS_DIR = Path.home() / "plugins_data"
 
 
 def _ensure_plugins_dir() -> Path:
-    PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error("插件目录创建失败 %s: %s，跳过", PLUGINS_DIR, e)
     return PLUGINS_DIR
 
 

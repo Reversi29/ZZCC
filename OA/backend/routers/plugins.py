@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from plugins.event_bus import EventBus
-from plugins.loader import load_plugin, scan_and_load_plugins
+from plugins.loader import load_plugin, scan_and_load_plugins, PLUGINS_DIR
 from plugins.registry import PluginMetadata, PluginRegistry, PluginStatus, validate_manifest, PluginManifestError
 from database import get_db
 from routers.auth import require_admin
@@ -259,7 +259,7 @@ async def install_plugin_file(
         raise HTTPException(400, f"manifest 校验失败: {e}")
 
     pid = manifest["id"]
-    plugin_dir = Path("/app/plugins_data") / pid
+    plugin_dir = PLUGINS_DIR / pid
     if plugin_dir.exists():
         existing = reg.get(pid)
         if existing:
@@ -295,7 +295,7 @@ async def enable_plugin(plugin_id: str, request: Request,
         raise HTTPException(404, "插件不存在")
     # 清理可能的残留路由，然后重新加载
     _remove_plugin_routes(request.app, plugin_id)
-    plugin_dir = Path("/app/plugins_data") / plugin_id
+    plugin_dir = PLUGINS_DIR / plugin_id
     if plugin_dir.exists():
         from plugins.loader import load_plugin
         await load_plugin(request.app, plugin_dir, reg, ev)
@@ -332,7 +332,7 @@ async def reload_plugin(request: Request, plugin_id: str,
     reg.remove(plugin_id)
 
     # 重新加载
-    plugin_dir = Path("/app/plugins_data") / plugin_id
+    plugin_dir = PLUGINS_DIR / plugin_id
     from plugins.loader import load_plugin
     app = request.app
     meta = await load_plugin(app, plugin_dir, reg, ev)
@@ -358,7 +358,7 @@ def uninstall_plugin(plugin_id: str, request: Request,
 
     # 删除文件目录
     import shutil
-    plugin_dir = Path("/app/plugins_data") / plugin_id
+    plugin_dir = PLUGINS_DIR / plugin_id
     if plugin_dir.exists():
         shutil.rmtree(str(plugin_dir), ignore_errors=True)
 

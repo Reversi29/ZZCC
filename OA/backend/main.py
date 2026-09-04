@@ -22,8 +22,13 @@ async def lifespan(app: FastAPI):
     print("✓ 默认审批阈值已初始化")
     print("✓ 默认部门已初始化")
 
-    # ── 插件系统初始化 ──
-    await _init_plugin_system(app)
+    # ── 插件系统初始化（非致命：失败不阻塞主应用） ──
+    try:
+        await _init_plugin_system(app)
+    except Exception as e:
+        import traceback
+        print(f"⚠ 插件系统初始化失败（已跳过，主应用继续运行）: {e}")
+        traceback.print_exc()
 
     yield
 
