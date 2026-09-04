@@ -25,34 +25,6 @@ router = APIRouter(prefix="/api/plugins", tags=["Plugins"])
 logger = logging.getLogger("plugins.api")
 
 
-@router.get("/_routes_diag")
-async def _routes_diag(request: Request):
-    """Diagnose: dump all routes and openapi paths of the LIVE running app."""
-    app = request.app
-    # 检查 app.router.routes（Starlette 实际路由匹配用这个）
-    router_routes = app.router.routes
-    route_paths = []
-    for r in router_routes:
-        rp = getattr(r, "path", "")
-        rm = getattr(r, "methods", "")
-        rtype = type(r).__name__
-        route_paths.append({"type": rtype, "method": rm, "path": rp})
-    plugin_in_router = [x for x in route_paths if "plugin" in x["path"].lower() and "low" in x["path"].lower()]
-    # OpenAPI
-    try:
-        openapi_paths = list(app.openapi().get("paths", {}).keys())
-    except Exception as e:
-        openapi_paths = [f"openapi error: {e}"]
-    plugin_openapi = [p for p in openapi_paths if "low" in p.lower()]
-    return {
-        "app_id": id(app),
-        "router_routes_count": len(router_routes),
-        "plugin_in_router": plugin_in_router,
-        "plugin_in_openapi": plugin_openapi,
-        "router_types": set(x["type"] for x in route_paths),
-        "last_5_routes": route_paths[-5:],
-    }
-
 R = Dict[str, Any]
 
 

@@ -97,26 +97,62 @@ async def load_plugin(app: FastAPI, plugin_dir: Path,
                         prefix = f"/api/plugin/{pid}"
                         # 逐个注册 APIRoute，插入到 Mount 之前（Mount 在列表末尾会吞掉所有请求）
                         added = 0
-                        # 找到 Mount 的索引（通常是 app.mount("/") 的静态文件服务）
                         mount_idx = None
                         for i, r in enumerate(app.routes):
                             if type(r).__name__ == "Mount":
                                 mount_idx = i
                                 break
+                        from fastapi.routing import APIRoute as _AR
+                        # 用 Depends 注入 plugin_id，避免 *args/**kwargs 被 FastAPI 当作 query 参数
+                        pid_ref = pid
+                        def _make_plugin_ctx_depender(p):
+                            def _ctx_depender():
+                                from . import sdk as _sdk_inner
+                                _sdk_inner._current_plugin_id = p
+                                return {}
+                            return _ctx_depender
                         for route in plugin_router.routes:
                             full_path = prefix + route.path
                             methods = set(route.methods) if route.methods else {"GET"}
-                            # 用 insert 而非 append，确保在 Mount 之前
-                            from fastapi.routing import APIRoute as _AR
+                            from fastapi import Depends
                             new_route = _AR(
                                 path=full_path,
                                 endpoint=route.endpoint,
                                 methods=methods,
                                 name=route.name,
+                                dependencies=[Depends(_make_plugin_ctx_depender(pid_ref))],
                             )
                             if mount_idx is not None:
                                 app.router.routes.insert(mount_idx, new_route)
-                                mount_idx += 1  # 后续路由也插入到此之前
+                                mount_idx += 1
+                            else:
+                                app.router.routes.append(new_route)
+                            added += 1
+                        # 注册前端文件服务路由
+                        frontend_dir = plugin_dir / "frontend"
+                        if frontend_dir.is_dir():
+                            from fastapi.responses import FileResponse, JSONResponse
+                            def _serve_frontend(path, _plugin_dir=plugin_dir, _pid=pid):
+                                file_path = _plugin_dir / "frontend" / path
+                                if not file_path.is_file():
+                                    return JSONResponse({"detail": "Not Found"}, status_code=404)
+                                content_type = "text/html"
+                                if path.endswith(".css"): content_type = "text/css"
+                                elif path.endswith(".js"): content_type = "application/javascript"
+                                elif path.endswith(".json"): content_type = "application/json"
+                                elif path.endswith(".png"): content_type = "image/png"
+                                elif path.endswith(".jpg") or path.endswith(".jpeg"): content_type = "image/jpeg"
+                                elif path.endswith(".svg"): content_type = "image/svg+xml"
+                                elif path.endswith(".ico"): content_type = "image/x-icon"
+                                return FileResponse(str(file_path), media_type=content_type)
+                            new_route = _AR(
+                                path=f"/api/plugin/{pid}/frontend/{{path:path}}",
+                                endpoint=_serve_frontend,
+                                methods=["GET"],
+                                name=f"{pid}_frontend_serve",
+                            )
+                            if mount_idx is not None:
+                                app.router.routes.insert(mount_idx, new_route)
                             else:
                                 app.router.routes.append(new_route)
                             added += 1
