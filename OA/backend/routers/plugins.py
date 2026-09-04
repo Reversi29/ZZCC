@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from plugins.event_bus import EventBus
 from plugins.loader import load_plugin, scan_and_load_plugins
@@ -28,13 +28,26 @@ logger = logging.getLogger("plugins.api")
 R = Dict[str, Any]
 
 
+# ── 路由清理工具 ──
+def _remove_plugin_routes(app, plugin_id: str) -> int:
+    """移除所有匹配 /api/plugin/{plugin_id} 前缀的路由。"""
+    prefix = f"/api/plugin/{plugin_id}"
+    removed = 0
+    to_remove = [r for r in app.router.routes if getattr(r, 'path', '').startswith(prefix)]
+    for r in to_remove:
+        app.router.routes.remove(r)
+        removed += 1
+    return removed
+
+
 # ── 请求/响应模型 ──
 class InstallPluginRequest(BaseModel):
     plugin_id: Optional[str] = None  # 从 zip 中提取，如不填则从 plugin.json 读取
 
 
 class UpdateConfigRequest(BaseModel):
-    config: Dict[str, Any]
+    model_config = ConfigDict(extra="allow")
+    config: Optional[Dict[str, Any]] = None
 
 
 class PluginSummary(BaseModel):
@@ -109,6 +122,63 @@ def list_plugins(
         )
         for m in reg.list_all()
     ]
+
+
+
+# ── 事件总线 API ──
+class EventRequest(BaseModel):
+    event: str
+    payload: Dict[str, Any] = {}
+
+
+@router.post("/_events")
+async def publish_event(request: EventRequest,
+                        user: dict = Depends(require_admin)) -> Dict[str, Any]:
+    """发布插件事件并记录到数据库。"""
+    ev = get_event_bus()
+    result = await ev.publish(request.event, request.payload, source_plugin=None)
+    # 写入事件日志
+    from database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        db.execute(text(
+            "INSERT INTO plugin_event_log (plugin_id, event_name, payload) VALUES (:pid, :en, :pl)"
+        ), {"pid": "_system", "en": request.event, "pl": json.dumps(request.payload)})
+        db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
+    return {"ok": True, "result": result}
+
+
+@router.get("/_events")
+def list_events(request: Request,
+                user: dict = Depends(require_admin)) -> Dict[str, Any]:
+    """查询事件日志。"""
+    from database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        result = db.execute(text(
+            "SELECT event_name, payload, plugin_id, created_at "
+            "FROM plugin_event_log ORDER BY created_at DESC LIMIT 100"
+        ))
+        rows = result.fetchall()
+        events = []
+        for r in rows:
+            events.append({
+                "event_name": r[0],
+                "payload": json.loads(r[1]) if isinstance(r[1], str) else r[1],
+                "source_plugin": r[2] if r[2] != "_system" else None,
+                "created_at": str(r[3]) if r[3] else None,
+            })
+        return {"ok": True, "events": events}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        db.close()
 
 
 @router.get("/{plugin_id}")
@@ -216,24 +286,31 @@ async def install_plugin_file(
 
 
 @router.post("/{plugin_id}/enable")
-def enable_plugin(plugin_id: str,
-                  user: dict = Depends(require_admin)) -> Dict[str, Any]:
-    """启用插件。"""
+async def enable_plugin(plugin_id: str, request: Request,
+                        user: dict = Depends(require_admin)) -> Dict[str, Any]:
+    """启用插件：恢复路由 + 清理事件 + 更新状态。"""
     reg = get_registry()
+    ev = get_event_bus()
     if not reg.update_status(plugin_id, PluginStatus.ENABLED):
         raise HTTPException(404, "插件不存在")
+    # 清理可能的残留路由，然后重新加载
+    _remove_plugin_routes(request.app, plugin_id)
+    plugin_dir = Path("/app/plugins_data") / plugin_id
+    if plugin_dir.exists():
+        from plugins.loader import load_plugin
+        await load_plugin(request.app, plugin_dir, reg, ev)
     return {"ok": True, "status": "enabled"}
 
 
 @router.post("/{plugin_id}/disable")
-def disable_plugin(plugin_id: str,
+def disable_plugin(plugin_id: str, request: Request,
                    user: dict = Depends(require_admin)) -> Dict[str, Any]:
-    """禁用插件。"""
+    """禁用插件：移除路由 + 清理事件 + 更新状态。"""
     reg = get_registry()
     ev = get_event_bus()
     if not reg.update_status(plugin_id, PluginStatus.DISABLED):
         raise HTTPException(404, "插件不存在")
-    # 清理事件订阅
+    _remove_plugin_routes(request.app, plugin_id)
     ev.clear_plugin(plugin_id)
     return {"ok": True, "status": "disabled"}
 
@@ -249,7 +326,8 @@ async def reload_plugin(request: Request, plugin_id: str,
     if not meta:
         raise HTTPException(404, "插件不存在")
 
-    # 卸载
+    # 卸载：清除路由 + 事件 + 注册表
+    _remove_plugin_routes(request.app, plugin_id)
     ev.clear_plugin(plugin_id)
     reg.remove(plugin_id)
 
@@ -264,16 +342,17 @@ async def reload_plugin(request: Request, plugin_id: str,
 
 
 @router.delete("/{plugin_id}")
-def uninstall_plugin(plugin_id: str,
+def uninstall_plugin(plugin_id: str, request: Request,
                      user: dict = Depends(require_admin)) -> Dict[str, Any]:
-    """卸载插件（从注册表移除 + 删除文件）。"""
+    """卸载插件：移除路由 + 清理事件 + 从注册表移除 + 删除文件。"""
     reg = get_registry()
     ev = get_event_bus()
 
     if not reg.get(plugin_id):
         raise HTTPException(404, "插件不存在")
 
-    # 清理
+    # 清理路由 + 事件 + 注册表
+    _remove_plugin_routes(request.app, plugin_id)
     ev.clear_plugin(plugin_id)
     reg.remove(plugin_id)
 
@@ -301,57 +380,10 @@ def get_plugin_config(plugin_id: str,
 def update_plugin_config(plugin_id: str,
                          request: UpdateConfigRequest,
                          user: dict = Depends(require_admin)) -> Dict[str, Any]:
-    """更新插件配置。"""
+    """更新插件配置。兼容 {"config":{...}} 和扁平 {"key":val,...} 两种格式。"""
     reg = get_registry()
     if not reg.get(plugin_id):
         raise HTTPException(404, "插件不存在")
-    reg.update_config(plugin_id, request.config)
-    return {"ok": True, "config": request.config}
-
-
-@router.get("/_diag/routes")
-def diag_routes(request: Request) -> Dict[str, Any]:
-    """诊断：检查 live 进程中 app.routes 是否包含插件路由。"""
-    app = request.app
-    top_level = []
-    plugin_routes = []
-    for r in app.routes:
-        p = getattr(r, "path", "")
-        top_level.append(f"{type(r).__name__}:{p}")
-        if "plugin" in str(p).lower():
-            plugin_routes.append(f"{type(r).__name__}:{p}")
-        for attr in ("routes", "original_router"):
-            sub = getattr(r, attr, None)
-            if sub is not None and not callable(sub):
-                for sr in getattr(sub, "routes", []):
-                    sp = getattr(sr, "path", "")
-                    if "plugin" in str(sp).lower():
-                        plugin_routes.append(f"{type(r).__name__}->{type(sr).__name__}:{sp}")
-
-    # 实验：动态添加一个测试路由，看能否访问
-    try:
-        app.add_api_route("/_diag/test_route", lambda: {"ok": True, "msg": "dynamic route works"}, methods=["GET"])
-        dynamic_added = True
-    except Exception as e:
-        dynamic_added = f"FAILED: {e}"
-
-    # 检查插件路由对象详情
-    plugin_details = []
-    for r in app.routes:
-        p = getattr(r, "path", "")
-        if "plugin" in str(p).lower():
-            plugin_details.append({
-                "type": type(r).__name__,
-                "path": p,
-                "methods": list(r.methods) if hasattr(r, "methods") else None,
-                "name": getattr(r, "name", None),
-                "has_endpoint": hasattr(r, "endpoint"),
-            })
-
-    return {
-        "total_routes": len(app.routes),
-        "plugin_routes": plugin_routes,
-        "plugin_details": plugin_details,
-        "dynamic_added": dynamic_added,
-        "top_level_preview": top_level[:30],
-    }
+    cfg = request.config if request.config is not None else request.model_dump(exclude={"config"})
+    reg.update_config(plugin_id, cfg)
+    return {"ok": True, "config": cfg}

@@ -39,6 +39,26 @@ def _ensure_plugins_dir() -> Path:
     return PLUGINS_DIR
 
 
+def _load_config_from_db(plugin_id: str) -> Optional[Dict[str, Any]]:
+    """从 DB 加载插件配置（兼容卸载后重装场景）。"""
+    try:
+        from database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT config FROM plugin_registry WHERE id = :pid"),
+                {"pid": plugin_id},
+            ).fetchone()
+            if row and row[0]:
+                return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return None
+
+
 async def load_plugin(app: FastAPI, plugin_dir: Path,
                       registry: PluginRegistry,
                       event_bus: EventBus) -> Optional[PluginMetadata]:
@@ -194,7 +214,7 @@ async def load_plugin(app: FastAPI, plugin_dir: Path,
         description=manifest.get("description", ""),
         manifest=manifest,
         status=PluginStatus.ENABLED,
-        config=manifest.get("config", {}),
+        config=_load_config_from_db(pid) or (registry.get(pid).config if registry.get(pid) else manifest.get("config", {})),
         frontend_module=frontend_module,
     )
     registry.register(metadata)

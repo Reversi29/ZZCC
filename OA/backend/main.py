@@ -1,5 +1,5 @@
 """main.py — FastAPI 应用入口（SQLAlchemy 持久化）"""
-import sys, os
+import sys, os, json
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from config import get_settings
@@ -21,7 +21,75 @@ async def lifespan(app: FastAPI):
     _seed_default_departments()
     print("✓ 默认审批阈值已初始化")
     print("✓ 默认部门已初始化")
+
+    # ── 插件系统初始化 ──
+    await _init_plugin_system(app)
+
     yield
+
+
+async def _init_plugin_system(app: FastAPI):
+    """初始化插件系统：建表 + 扫描 + 加载"""
+    from database import SessionLocal
+    from sqlalchemy import text
+    from plugins.registry import registry as _registry, PluginMetadata, PluginStatus
+    from plugins import event_bus as _event_bus
+    from plugins.loader import scan_and_load_plugins
+
+    # 1. 建表
+    db = SessionLocal()
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS plugin_registry (
+                id VARCHAR(64) PRIMARY KEY,
+                name VARCHAR(128) NOT NULL,
+                version VARCHAR(32) NOT NULL,
+                author VARCHAR(64) DEFAULT '',
+                description TEXT,
+                manifest JSON,
+                status VARCHAR(16) DEFAULT 'installed',
+                config JSON,
+                installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS plugin_event_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                plugin_id VARCHAR(64) NOT NULL,
+                event_name VARCHAR(128) NOT NULL,
+                payload JSON,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_plugin (plugin_id),
+                INDEX idx_event (event_name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        db.commit()
+    except Exception as e:
+        print(f"⚠ 插件表创建失败: {e}")
+    finally:
+        db.close()
+
+    # 2. 从 DB 加载已有注册信息
+    db_rows = _registry.load_from_db()
+    from plugins.registry import PluginMetadata, PluginStatus
+    for row in db_rows:
+        try:
+            manifest = json.loads(row.get("manifest") or "{}")
+            config = json.loads(row.get("config") or "{}")
+            meta = PluginMetadata(
+                id=row["id"], name=row["name"], version=row["version"],
+                author=row.get("author", ""), description=row.get("description", ""),
+                manifest=manifest, status=PluginStatus(row.get("status", "installed")),
+                config=config,
+            )
+            _registry.register(meta)
+        except Exception as e:
+            print(f"⚠ 插件注册行解析失败 {row.get('id')}: {e}")
+
+    # 4. 扫描并加载新插件（lifespan 已是 async，直接 await）
+    loaded = await scan_and_load_plugins(app, _registry, _event_bus)
+    print(f"✓ 插件系统初始化: {len(loaded)} 个插件加载")
 
 
 def _seed_default_departments():
@@ -211,6 +279,7 @@ def _register():
         "routers.search",
         "routers.dashboard",
         "routers.module_toggle",
+        "routers.plugins",
         "routers.audit_log",
         "routers.performance",
         "routers.recruitment",
