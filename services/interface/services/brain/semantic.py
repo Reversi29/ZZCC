@@ -140,6 +140,17 @@ class SemanticMemory:
         g.create_tag(client, sess, self.space, SIGNAL_TAG, SIGNAL_COLS)
         g.create_tag(client, sess, self.space, DECISION_TAG, DECISION_COLS)
         g.create_edge_type(client, sess, self.space, RELATION_EDGE, RELATION_COLS)
+        # LOOKUP 需要索引；索引写性能较低，但语义记忆查询依赖它。
+        index_stmts = [
+            f"CREATE TAG INDEX IF NOT EXISTS `{self.space}_idx_brainsignal_module` ON {SIGNAL_TAG}(`module`(128));",
+            f"CREATE TAG INDEX IF NOT EXISTS `{self.space}_idx_brainsignal_type` ON {SIGNAL_TAG}(`signal_type`(128));",
+            f"CREATE TAG INDEX IF NOT EXISTS `{self.space}_idx_braindecision_decision` ON {DECISION_TAG}(`decision`(128));",
+        ]
+        for stmt in index_stmts:
+            try:
+                client._run(sess, f"USE `{self.space}`; {stmt}")
+            except Exception as exc:
+                logger.debug("brain_semantic_create_index_failed: %s stmt=%s", exc, stmt)
         self._schema_ready = True
 
     async def ensure_schema(self) -> Dict[str, Any]:
@@ -217,10 +228,12 @@ class SemanticMemory:
             except Exception as exc:
                 logger.debug("brain_semantic_fetch_vertex_failed: %s", exc)
             for nql in [
-                f'MATCH (n:{SIGNAL_TAG}) WHERE n.module = "{module}" OR n.signal_type = "{signal_type}" '
-                "RETURN n LIMIT 20;",
-                f'MATCH (n:{DECISION_TAG}) WHERE n.decision = "{decision}" '
-                "RETURN n LIMIT 20;" if decision else None,
+                f'LOOKUP ON {SIGNAL_TAG} WHERE {SIGNAL_TAG}.`module` == "{module}" '
+                "YIELD id(vertex) AS vid;",
+                f'LOOKUP ON {SIGNAL_TAG} WHERE {SIGNAL_TAG}.`signal_type` == "{signal_type}" '
+                "YIELD id(vertex) AS vid;" if signal_type else None,
+                f'LOOKUP ON {DECISION_TAG} WHERE {DECISION_TAG}.`decision` == "{decision}" '
+                "YIELD id(vertex) AS vid;" if decision else None,
                 f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD $$.{DECISION_TAG} AS vertex;',
                 f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD EDGE AS edge;',
             ]:
