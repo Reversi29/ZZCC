@@ -43,8 +43,8 @@ R = Dict[str, Any]
 
 # ── 工具 ──
 def _remove_plugin_routes(app, plugin_id: str) -> int:
-    """移除所有匹配 /api/plugin/{plugin_id} 前缀的路由。"""
-    prefix = f"/api/plugin/{plugin_id}"
+    """移除所有匹配 /api/v1/plugin/{plugin_id} 前缀的路由。"""
+    prefix = f"/api/v1/plugin/{plugin_id}"
     removed = 0
     to_remove = [r for r in app.router.routes if getattr(r, "path", "").startswith(prefix)]
     for r in to_remove:
@@ -125,7 +125,7 @@ def get_frontend_modules(
     for meta in reg.list_enabled():
         if meta.frontend_module:
             m = dict(meta.frontend_module)
-            m["entry_url"] = f"/api/plugin/{meta.id}/frontend/index.html"
+            m["entry_url"] = f"/api/v1/plugin/{meta.id}/frontend/index.html"
             modules.append(m)
     return PluginModulesResponse(modules=modules)
 

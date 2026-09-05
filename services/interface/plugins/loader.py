@@ -118,7 +118,7 @@ async def load_plugin(app: FastAPI, plugin_dir: Path,
                     spec.loader.exec_module(mod)
                     plugin_router = getattr(mod, attr_name, None)
                     if plugin_router:
-                        prefix = f"/api/plugin/{pid}"
+                        prefix = f"/api/v1/plugin/{pid}"
                         added = 0
                         mount_idx = None
                         for i, r in enumerate(app.routes):
@@ -161,7 +161,7 @@ async def load_plugin(app: FastAPI, plugin_dir: Path,
                                 )
 
                             new_route = _AR(
-                                path=f"/api/plugin/{pid}/frontend/{{path:path}}",
+                                path=f"/api/v1/plugin/{pid}/frontend/{{path:path}}",
                                 endpoint=_serve_frontend,
                                 methods=["GET"],
                                 name=f"{pid}_frontend_serve",
