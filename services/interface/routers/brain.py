@@ -11,6 +11,10 @@
 - DELETE /brain/memory    删除记忆
 - POST /brain/learn       反馈学习（标记决策正确/错误）
 - POST /brain/process-queue  处理信号队列（后台任务触发或手动）
+- GET  /brain/core/status   常驻类脑中枢状态
+- POST /brain/core/start    启动常驻 tick 循环
+- POST /brain/core/stop     停止常驻 tick 循环
+- POST /brain/core/tick     手动触发一次中枢 tick
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ from models.brain import Action, CognitionResult, NeuralSignal
 from routers.auth import get_current_user_dep
 from services.brain import (
     action_executor as ae,
+    brain_core,
     memory as mem,
     reasoning as rsn,
     rules as rls,
@@ -123,12 +128,14 @@ async def ask(
     else:
         raise HTTPException(400, "必须提供 question 或 signal")
 
-    # 2. 工作记忆
+    # 2. 工作记忆 + 长期/情景/技能记忆检索
     session_id = request.session_id or f"ask_{user.get('id', 'anon')}_{signal.id}"
     working_memory = mem.working_memory.get_context(session_id)
 
     # 3. 推理
+    memory_context: Dict[str, Any] = {}
     async with managed_session() as db:
+        memory_context = await mem.retrieve_for_signal(db, signal.to_dict())
         cognition = await rsn.engine.reason(signal, working_memory, db)
 
         # 4. 写入决策日志
@@ -158,6 +165,8 @@ async def ask(
 
         # 6. 更新工作记忆
         mem.working_memory.push(session_id, signal.to_dict(), cognition.to_dict())
+        await mem.remember_signal_and_cognition(db, signal.to_dict(), cognition.to_dict(), action_results)
+        await db.commit()
 
     return {
         "ok": True,
@@ -165,6 +174,7 @@ async def ask(
         "cognition": cognition.to_dict(),
         "action_results": action_results,
         "session_id": session_id,
+        "memory_context": memory_context,
     }
 
 
@@ -365,6 +375,40 @@ async def learn(
         updated = await mem.record_outcome(db, request.signal_id, request.correct, request.feedback)
         await db.commit()
     return {"ok": True, "updated": updated}
+
+
+@router.get("/core/status")
+async def brain_core_status(
+    user: dict = Depends(get_current_user_dep),
+):
+    """常驻类脑内核状态。"""
+    return brain_core.status()
+
+
+@router.post("/core/start")
+async def brain_core_start(
+    user: dict = Depends(get_current_user_dep),
+):
+    """启动常驻 tick 循环。"""
+    return await brain_core.start()
+
+
+@router.post("/core/stop")
+async def brain_core_stop(
+    user: dict = Depends(get_current_user_dep),
+):
+    """停止常驻 tick 循环。"""
+    return await brain_core.stop()
+
+
+@router.post("/core/tick")
+async def brain_core_tick(
+    limit: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user_dep),
+):
+    """手动触发一次常驻内核处理。"""
+    brain_core.batch_limit = limit
+    return await brain_core.tick()
 
 
 # ═══════════════════════════════════════════════════════════

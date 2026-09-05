@@ -140,11 +140,20 @@ async def lifespan(app: FastAPI):
             await init_brain_tables(db)
             await db.commit()
         rule_count = init_builtin_rules()
-        _log.info("brain_system_ready", rules=rule_count)
+        from services.brain import brain_core
+        await brain_core.start()
+        _log.info("brain_system_ready", rules=rule_count, brain_core_running=brain_core.running)
     except Exception as exc:
         _log.error("brain_system_init_failed", error=str(exc))
 
     yield
+
+    try:
+        from services.brain import brain_core
+        await brain_core.stop()
+        _log.info("brain_core_stopped")
+    except Exception as exc:
+        _log.error("brain_core_stop_failed", error=str(exc))
 
     client.close()
     _log.info("nebula_pool_closed")

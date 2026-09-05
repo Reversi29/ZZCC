@@ -317,6 +317,108 @@ async def mark_processed(db, signal_id: str) -> bool:
     return result.rowcount > 0
 
 
+# ── 记忆检索（推理前注入上下文）──
+async def retrieve_for_signal(
+    db,
+    signal: dict,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """为当前信号检索相关长期记忆与历史决策。
+
+    这是“记忆 → 推理”的前置入口。当前用轻量关键词匹配，
+    后续可替换为 embedding / NebulaGraph 图谱检索。
+    """
+    module = _infer_module(signal)
+    keywords = _signal_keywords(signal)
+    memory_rows = await memory_list(db, type_=None, module=None, limit=max(limit * 3, 30))
+    relevant_memory = [
+        row for row in memory_rows
+        if _matches_keywords(row, keywords)
+    ][:limit]
+
+    try:
+        history = await get_decisions(db, limit=limit)
+    except Exception:
+        history = []
+    relevant_history = history[:limit]
+
+    return {
+        "module": module,
+        "keywords": keywords,
+        "memory": relevant_memory,
+        "history": relevant_history,
+        "counts": {
+            "memory": len(relevant_memory),
+            "history": len(relevant_history),
+        },
+    }
+
+
+async def remember_signal_and_cognition(
+    db,
+    signal: dict,
+    cognition: dict,
+    action_results: Optional[List[dict]] = None,
+) -> Dict[str, Any]:
+    """把一次信号→认知→行动闭环写成长期记忆。
+
+    当前只写 PostgreSQL 情景/技能记忆；后续可同步到 NebulaGraph 语义记忆。
+    """
+    import json
+
+    module = _infer_module(signal)
+    decision = cognition.get("decision", "no_action")
+    success_count = sum(1 for r in (action_results or []) if r.get("ok"))
+    total_actions = len(action_results or [])
+    outcome = "unknown"
+    if cognition.get("reasoning_level") == 1 and total_actions == 0:
+        outcome = "no_action"
+    elif success_count == total_actions and total_actions > 0:
+        outcome = "success"
+    elif success_count < total_actions and total_actions > 0:
+        outcome = "partial"
+
+    memory_key = f"{signal.get('id', 'signal')}:{decision}"
+    value = {
+        "signal_type": signal.get("type", ""),
+        "decision": decision,
+        "reasoning_level": cognition.get("reasoning_level", 1),
+        "reasoning": cognition.get("reasoning", ""),
+        "actions": [a.to_dict() if hasattr(a, "to_dict") else a for a in cognition.get("actions", [])],
+        "action_results": action_results or [],
+        "outcome": outcome,
+        "signal_payload": signal.get("payload", {}),
+    }
+    await memory_set(db, {
+        "type": "episodic",
+        "module": module,
+        "key": memory_key,
+        "value": value,
+        "confidence": float(cognition.get("confidence", 0.5)),
+    })
+
+    # 技能记忆：记录该决策动作模式，供后续强化。
+    skill_value = {
+        "skill_id": decision,
+        "decision": decision,
+        "reasoning_level": cognition.get("reasoning_level", 1),
+        "actions": [a.to_dict() if hasattr(a, "to_dict") else a for a in cognition.get("actions", [])],
+        "success_rate": success_count / total_actions if total_actions else 1.0,
+        "outcome": outcome,
+    }
+    await memory_set(db, {
+        "type": "skill",
+        "module": module,
+        "key": f"skill:{decision}",
+        "value": skill_value,
+        "confidence": float(cognition.get("confidence", 0.5)),
+        "hit_count": 1 if outcome != "partial" else 0,
+        "miss_count": 1 if outcome == "partial" else 0,
+    })
+
+    return {"module": module, "memory_key": memory_key, "outcome": outcome}
+
+
 # ── 统计表 DDL ──
 BRAIN_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS brain_memory (
@@ -379,6 +481,41 @@ def _iso(v) -> str:
     if isinstance(v, datetime):
         return v.isoformat(timespec="milliseconds")
     return str(v)
+
+
+
+def _infer_module(signal: dict) -> str:
+    payload = signal.get("payload") or {}
+    context = signal.get("context") or {}
+    for obj in (payload, context):
+        for key in ("module", "business", "category", "doctype"):
+            value = obj.get(key)
+            if value:
+                return str(value)
+    return str(signal.get("type", "general"))
+
+
+def _signal_keywords(signal: dict) -> List[str]:
+    payload = signal.get("payload") or {}
+    context = signal.get("context") or {}
+    values = []
+    for obj in (signal, payload, context):
+        for key in ("type", "module", "doctype", "category", "decision", "reason", "id"):
+            value = obj.get(key)
+            if value:
+                values.append(str(value))
+    for value in payload.values():
+        if isinstance(value, str):
+            values.append(value)
+    return list(dict.fromkeys(values))[:20]
+
+
+def _matches_keywords(row: dict, keywords: List[str]) -> bool:
+    import json
+    if not keywords:
+        return True
+    blob = json.dumps(row.get("value", row) if isinstance(row.get("value"), dict) else row, ensure_ascii=False).lower()
+    return any(str(k).lower() in blob for k in keywords)
 
 
 # ── 全局单例 ──
