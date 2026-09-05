@@ -223,18 +223,33 @@ class SemanticMemory:
         with client.session() as sess:
             self._ensure_schema_sync(sess)
             vertices: List[dict] = []
+            edges: List[dict] = []
             try:
                 vertices.extend(g.fetch_vertex(client, sess, self.space, vid))
             except Exception as exc:
                 logger.debug("brain_semantic_fetch_vertex_failed: %s", exc)
             for nql in [
                 f'LOOKUP ON {SIGNAL_TAG} WHERE {SIGNAL_TAG}.`module` == "{module}" '
-                "YIELD id(vertex) AS vid;",
+                "YIELD id(vertex) AS vid, "
+                "BrainSignal.signal_type AS signal_type, BrainSignal.`module` AS module, "
+                "BrainSignal.source AS source, BrainSignal.urgency AS urgency, "
+                "BrainSignal.keyword AS keyword, BrainSignal.confidence AS confidence, "
+                "BrainSignal.created_at AS created_at, BrainSignal.updated_at AS updated_at, "
+                "BrainSignal.payload AS payload;",
                 f'LOOKUP ON {SIGNAL_TAG} WHERE {SIGNAL_TAG}.`signal_type` == "{signal_type}" '
-                "YIELD id(vertex) AS vid;" if signal_type else None,
+                "YIELD id(vertex) AS vid, "
+                "BrainSignal.signal_type AS signal_type, BrainSignal.`module` AS module, "
+                "BrainSignal.source AS source, BrainSignal.urgency AS urgency, "
+                "BrainSignal.keyword AS keyword, BrainSignal.confidence AS confidence, "
+                "BrainSignal.created_at AS created_at, BrainSignal.updated_at AS updated_at, "
+                "BrainSignal.payload AS payload;" if signal_type else None,
                 f'LOOKUP ON {DECISION_TAG} WHERE {DECISION_TAG}.`decision` == "{decision}" '
-                "YIELD id(vertex) AS vid;" if decision else None,
-                f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD $$.{DECISION_TAG} AS vertex;',
+                "YIELD id(vertex) AS vid, "
+                "BrainDecision.decision AS decision, BrainDecision.reasoning_level AS reasoning_level, "
+                "BrainDecision.confidence AS confidence, BrainDecision.outcome AS outcome, "
+                "BrainDecision.reasoning AS reasoning, BrainDecision.created_at AS created_at, "
+                "BrainDecision.updated_at AS updated_at, BrainDecision.cognition AS cognition;" if decision else None,
+                f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD $$ AS decision_vertex;',
                 f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD EDGE AS edge;',
             ]:
                 if not nql:
@@ -245,12 +260,13 @@ class SemanticMemory:
                     for row in rows:
                         if "edge" in row:
                             row.setdefault("kind", "edge")
+                            edges.append(row)
                         else:
                             row.setdefault("kind", "vertex")
-                        vertices.append(row)
+                            vertices.append(row)
                 except Exception as exc:
                     logging.getLogger("brain.semantic").debug("brain_semantic_lookup_failed: %s", exc)
-            return {"vertices": _dedupe(vertices)[:limit], "edges": []}
+            return {"vertices": _dedupe(vertices)[:limit], "edges": _dedupe(edges)[:limit]}
 
     def _remember_sync(self, signal_vid: str, decision_vid: str, signal: Dict[str, Any], cognition: Dict[str, Any], outcome: str) -> Dict[str, Any]:
         client = self._client_obj()
