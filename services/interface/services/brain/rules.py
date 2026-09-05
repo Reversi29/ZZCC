@@ -61,6 +61,24 @@ def set_enabled(rule_id: str, enabled: bool) -> bool:
 # ═══════════════════════════════════════════════════════════
 # 内置默认规则（ZZCC services 场景）
 # ═══════════════════════════════════════════════════════════
+
+def _signal_amount(payload: Dict[str, Any], context: Dict[str, Any]) -> float:
+    for src in (payload, context):
+        if isinstance(src, dict) and src.get("amount") is not None:
+            try:
+                return float(src.get("amount"))
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+def _signal_doctype(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
+    for src in (payload, context):
+        if isinstance(src, dict) and src.get("doctype"):
+            return str(src.get("doctype"))
+    return ""
+
+
 def _builtin_rules() -> List[BrainRule]:
     """ZZCC services 内置规则——业务无关的通用兜底规则。"""
     return [
@@ -114,8 +132,8 @@ def _builtin_rules() -> List[BrainRule]:
             id="expense.small_auto_approve",
             module="expense",
             condition=lambda p, c: (
-                0 < (p.get("amount", 0) or 0) <= 1000
-                and p.get("doctype") in ("ExpenseClaim", "expense")
+                0 < (_signal_amount(p, c) or 0) <= 1000
+                and _signal_doctype(p, c) in ("ExpenseClaim", "expense")
             ),
             action="auto_approve",
             confidence=0.9,
@@ -124,7 +142,7 @@ def _builtin_rules() -> List[BrainRule]:
         BrainRule(
             id="expense.large_escalate",
             module="expense",
-            condition=lambda p, c: (p.get("amount", 0) or 0) > 50000,
+            condition=lambda p, c: (_signal_amount(p, c) or 0) > 50000,
             action="escalate",
             confidence=0.92,
             description="报销金额>5万升级审批",
@@ -132,7 +150,7 @@ def _builtin_rules() -> List[BrainRule]:
         BrainRule(
             id="procurement.large_escalate",
             module="procurement",
-            condition=lambda p, c: (p.get("amount", 0) or 0) > 500000,
+            condition=lambda p, c: (_signal_amount(p, c) or 0) > 500000,
             action="escalate",
             confidence=0.95,
             description="采购金额>50万升级审批",

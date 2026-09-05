@@ -49,12 +49,14 @@ class ReasoningEngine:
         signal: NeuralSignal,
         working_memory: List[dict],
         db,
+        memory_context: Optional[Dict[str, Any]] = None,
     ) -> CognitionResult:
         """主入口：按 L1 → L2 → L3 递进推理。"""
         self._stats["total"] += 1
+        memory_context = memory_context or {}
 
         # L1: 规则引擎
-        l1 = await self._rule_reasoning(signal)
+        l1 = await self._rule_reasoning(signal, memory_context)
         self._stats["l1_calls"] += 1
         if l1 and l1.confidence >= self.l1_threshold:
             self._stats["l1_hits"] += 1
@@ -63,7 +65,7 @@ class ReasoningEngine:
             return l1
 
         # L2: 统计推理
-        l2 = await self._statistical_reasoning(signal, working_memory, db)
+        l2 = await self._statistical_reasoning(signal, working_memory, db, memory_context)
         self._stats["l2_calls"] += 1
         if l2 and l2.confidence >= self.l2_threshold:
             self._stats["l2_hits"] += 1
@@ -72,7 +74,7 @@ class ReasoningEngine:
             return l2
 
         # L3: LLM 推理
-        l3 = await self._llm_reasoning(signal, working_memory)
+        l3 = await self._llm_reasoning(signal, working_memory, memory_context)
         self._stats["l3_calls"] += 1
         if l3:
             self._stats["l3_hits"] += 1
@@ -89,10 +91,15 @@ class ReasoningEngine:
             reasoning="所有层级推理均无结论",
         )
 
-    async def _rule_reasoning(self, signal: NeuralSignal) -> Optional[CognitionResult]:
+    def _memory_summary(self, memory_context: Dict[str, Any]) -> str:
+        counts = memory_context.get("counts", {}) if memory_context else {}
+        return f"memory={counts.get('memory', 0)}, history={counts.get('history', 0)}, semantic_v={counts.get('semantic_vertices', 0)}, semantic_e={counts.get('semantic_edges', 0)}"
+
+    async def _rule_reasoning(self, signal: NeuralSignal, memory_context: Optional[Dict[str, Any]] = None) -> Optional[CognitionResult]:
         """L1：遍历所有规则，取置信度最高的匹配。"""
         best_rule = None
         best_score = 0.0
+        memory_context = memory_context or {}
 
         for rule in rules_mod.list_rules(enabled_only=True):
             try:
@@ -111,8 +118,9 @@ class ReasoningEngine:
             reasoning_level=1,
             confidence=best_score,
             decision=best_rule.action,
-            reasoning=f"匹配规则 {best_rule.id}: {best_rule.description}",
+            reasoning=f"匹配规则 {best_rule.id}: {best_rule.description}；记忆命中={self._memory_summary(memory_context)}",
             actions=[Action(type=best_rule.action, reason=best_rule.description)],
+            memory_updates={"memory_context_counts": memory_context.get("counts", {})},
         )
 
     async def _statistical_reasoning(
@@ -120,6 +128,7 @@ class ReasoningEngine:
         signal: NeuralSignal,
         working_memory: List[dict],
         db,
+        memory_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[CognitionResult]:
         """L2：基于历史数据的统计推理。
 
@@ -127,11 +136,17 @@ class ReasoningEngine:
         - Z-score 异常检测：数值字段的异常识别
         - 组合出增强置信度的推理结果
         """
+        memory_context = memory_context or {}
         history = []
         try:
-            history = await mem.get_decisions(db, limit=50, signal_type=signal.type)
-        except Exception as e:
-            logger.warning("l2_history_query_failed: %s", str(e))
+            history = memory_context.get("history") or []
+        except Exception:
+            history = []
+        if not history:
+            try:
+                history = await mem.get_decisions(db, limit=50, signal_type=signal.type)
+            except Exception as e:
+                logger.warning("l2_history_query_failed: %s", str(e))
 
         if not history:
             return None
@@ -187,13 +202,14 @@ class ReasoningEngine:
             decision=decision,
             reasoning=reasoning,
             actions=actions,
-            memory_updates={"historical_pattern": {"decision": dominant_decision, "rate": dominant_rate}},
+            memory_updates={"historical_pattern": {"decision": dominant_decision, "rate": dominant_rate}, "memory_context_counts": memory_context.get("counts", {})},
         )
 
     async def _llm_reasoning(
         self,
         signal: NeuralSignal,
         working_memory: List[dict],
+        memory_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[CognitionResult]:
         """L3：LLM 推理。需要 OPENAI_API_KEY。
 
@@ -203,7 +219,7 @@ class ReasoningEngine:
             return None
 
         # 构建 prompt
-        prompt = self._build_llm_prompt(signal, working_memory)
+        prompt = self._build_llm_prompt(signal, working_memory, memory_context or {})
 
         try:
             response = await self._call_llm(prompt)
@@ -215,10 +231,19 @@ class ReasoningEngine:
             logger.error("l3_llm_failed: %s", str(e))
             return None
 
-    def _build_llm_prompt(self, signal: NeuralSignal, working_memory: List[dict]) -> str:
+    def _build_llm_prompt(self, signal: NeuralSignal, working_memory: List[dict], memory_context: Optional[Dict[str, Any]] = None) -> str:
         """构造 LLM prompt。"""
         signal_dict = signal.to_dict()
         recent = working_memory[-5:] if working_memory else []
+        memory_context = memory_context or {}
+        memory_summary = {
+            "counts": memory_context.get("counts", {}),
+            "history": memory_context.get("history", [])[-3:],
+            "semantic_counts": {
+                "vertices": memory_context.get("semantic", {}).get("vertices", []),
+                "edges": memory_context.get("semantic", {}).get("edges", []),
+            },
+        }
 
         return f"""你是 ZZCC 类脑 AI 推理引擎。分析以下感知信号，给出决策建议。
 
@@ -227,6 +252,9 @@ class ReasoningEngine:
 
 # 最近上下文（工作记忆）
 {json.dumps(recent, ensure_ascii=False, indent=2) if recent else "(无)"}
+
+# 长期/情景/技能/语义记忆上下文
+{json.dumps(memory_summary, ensure_ascii=False, indent=2)}
 
 # 输出要求
 严格返回 JSON 格式（不要 markdown 代码块包裹）：

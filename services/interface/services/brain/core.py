@@ -26,6 +26,7 @@ from services.brain import action_executor as ae
 from services.brain import memory as mem
 from services.brain import reasoning as rsn
 from services.brain import rules as rls
+from services.brain.broker import MemoryBroker
 
 logger = logging.getLogger("brain.core")
 
@@ -86,6 +87,7 @@ class BrainCore:
         self.batch_limit = max(1, batch_limit)
         self.execute_actions = execute_actions
         self.thalamus = Thalamus()
+        self.broker = MemoryBroker()
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         self._lock = asyncio.Lock()
@@ -123,7 +125,9 @@ class BrainCore:
             "running": self.running,
             "config": self.config(),
             "stats": self.stats(),
-            "working_memory": mem.working_memory.stats(),
+            "working_memory": self.broker.stats()["working_memory"],
+            "memory": self.broker.stats(),
+            "semantic": self.broker.semantic.status() if self.broker.semantic else {"enabled": False},
             "reasoning": rsn.engine.stats(),
             "rules_loaded": len(rls.list_rules()),
             "actions": ae.list_executors(),
@@ -193,16 +197,16 @@ class BrainCore:
                         await mem.mark_processed(db, signal.id)
                         continue
 
-                    memory_context = await mem.retrieve_for_signal(db, signal.to_dict())
-                    working_memory = mem.working_memory.get_context(f"queue_{signal.id}")
-                    cognition = await rsn.engine.reason(signal, working_memory, db)
+                    memory_context = await self.broker.retrieve_for_signal(db, signal.to_dict())
+                    working_memory = self.broker.get_working(f"queue_{signal.id}")
+                    cognition = await rsn.engine.reason(signal, working_memory, db, memory_context=memory_context)
                     action_results = []
                     if self.execute_actions and cognition.actions:
                         action_results = await ae.executor.execute_all(cognition, db)
                         total_actions += len(action_results)
 
                     await mem.log_decision(db, cognition.to_dict())
-                    await mem.remember_signal_and_cognition(db, signal.to_dict(), cognition.to_dict(), action_results)
+                    await self.broker.remember_signal_and_cognition(db, signal.to_dict(), cognition.to_dict(), action_results)
                     await db.execute(
                         text("UPDATE brain_decision_log SET action_results = :results WHERE signal_id = :sid"),
                         {
@@ -210,7 +214,7 @@ class BrainCore:
                         "sid": cognition.signal_id,
                     })
                     await mem.mark_processed(db, signal.id)
-                    mem.working_memory.push(f"queue_{signal.id}", signal.to_dict(), cognition.to_dict())
+                    self.broker.push_working(f"queue_{signal.id}", signal.to_dict(), cognition.to_dict())
                     results.append({
                         "signal_id": signal.id,
                         "decision": cognition.decision,

@@ -34,7 +34,9 @@ from services.brain import (
     memory as mem,
     reasoning as rsn,
     rules as rls,
+    semantic as sem,
 )
+from services.brain.broker import broker
 
 logger = logging.getLogger("brain.api")
 
@@ -135,8 +137,8 @@ async def ask(
     # 3. 推理
     memory_context: Dict[str, Any] = {}
     async with managed_session() as db:
-        memory_context = await mem.retrieve_for_signal(db, signal.to_dict())
-        cognition = await rsn.engine.reason(signal, working_memory, db)
+        memory_context = await broker.retrieve_for_signal(db, signal.to_dict())
+        cognition = await rsn.engine.reason(signal, working_memory, db, memory_context=memory_context)
 
         # 4. 写入决策日志
         log_payload = {
@@ -165,7 +167,7 @@ async def ask(
 
         # 6. 更新工作记忆
         mem.working_memory.push(session_id, signal.to_dict(), cognition.to_dict())
-        await mem.remember_signal_and_cognition(db, signal.to_dict(), cognition.to_dict(), action_results)
+        await broker.remember_signal_and_cognition(db, signal.to_dict(), cognition.to_dict(), action_results)
         await db.commit()
 
     return {
@@ -375,6 +377,22 @@ async def learn(
         updated = await mem.record_outcome(db, request.signal_id, request.correct, request.feedback)
         await db.commit()
     return {"ok": True, "updated": updated}
+
+
+@router.get("/semantic/status")
+async def semantic_status(
+    user: dict = Depends(get_current_user_dep),
+):
+    """语义记忆（NebulaGraph）状态。"""
+    return sem.semantic_memory.status()
+
+
+@router.post("/semantic/ensure-schema")
+async def semantic_ensure_schema(
+    user: dict = Depends(get_current_user_dep),
+):
+    """创建/校验语义记忆 space、tag、edge。"""
+    return await sem.semantic_memory.ensure_schema()
 
 
 @router.get("/core/status")

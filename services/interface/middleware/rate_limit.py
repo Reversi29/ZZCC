@@ -52,11 +52,11 @@ class SlowRequestLoggerMiddleware:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > self.threshold_ms:
                 _log.warning(
-                    "slow_request",
-                    method=scope.get("method"),
-                    path=scope.get("path"),
-                    status=message.get("status", 0),
-                    duration_ms=round(elapsed_ms, 1),
+                    "slow_request method=%s path=%s status=%s duration_ms=%s",
+                    scope.get("method"),
+                    scope.get("path"),
+                    message.get("status", 0),
+                    round(elapsed_ms, 1),
                 )
             await send(message)
 
