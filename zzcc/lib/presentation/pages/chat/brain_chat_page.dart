@@ -2,7 +2,9 @@
 //
 // Brain AI chat page — sends user messages to /brain/ask and renders
 // cognition results as chat bubbles. Conversation history is kept in-memory.
+// Requires chat authentication (Authorization: Bearer <token>).
 
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
@@ -10,6 +12,8 @@ import 'package:dio/dio.dart';
 import '../../../core/services/config_service.dart';
 import '../../../core/di/service_locator.dart';
 import '../../../data/models/chat_message.dart';
+import '../../../data/models/chat_user.dart';
+import '../../../data/repositories/chat_repository.dart';
 import '../../widgets/chat/message_bubble.dart';
 
 /// A single turn in the brain conversation.
@@ -46,25 +50,48 @@ class _BrainChatPageState extends State<BrainChatPage> {
   bool _isThinking = false;
   String? _error;
 
+  ChatRepository? _chatRepo;
+  StreamSubscription? _authSub;
+
   late final Dio _dio;
 
   @override
   void initState() {
     super.initState();
     final config = getIt<ConfigService>();
+    _chatRepo = getIt<ChatRepository>();
+
+    // Use chat auth token — /brain/* requires Authorization: Bearer
     _dio = Dio(BaseOptions(
       baseUrl: config.nebulaApiBaseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 60),
-      headers: {
-        'X-API-Key': config.nebulaApiKey,
-        'Content-Type': 'application/json',
-      },
+      headers: {'Content-Type': 'application/json'},
     ));
+
+    // Listen for auth changes so token stays fresh
+    _authSub = _chatRepo!.authStateStream.listen((_) => _refreshHeaders());
+    _refreshHeaders();
+  }
+
+  /// Sync Dio headers with current chat auth token.
+  void _refreshHeaders() {
+    final token = _chatRepo?.currentUser?.accessToken;
+    if (token != null && token.isNotEmpty) {
+      _dio.options.headers['Authorization'] = 'Bearer $token';
+    } else {
+      _dio.options.headers.remove('Authorization');
+    }
+  }
+
+  bool get _isAuthed {
+    final token = _chatRepo?.currentUser?.accessToken;
+    return token != null && token.isNotEmpty;
   }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _focusNode.dispose();
@@ -87,6 +114,11 @@ class _BrainChatPageState extends State<BrainChatPage> {
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty || _isThinking) return;
+
+    if (!_isAuthed) {
+      _showLoginPrompt();
+      return;
+    }
 
     _inputCtrl.clear();
     _focusNode.requestFocus();
@@ -135,9 +167,17 @@ class _BrainChatPageState extends State<BrainChatPage> {
       });
       _scrollToBottom();
     } on DioException catch (e) {
+      final resp = e.response;
+      final detail = resp != null && resp.data is Map
+          ? (resp.data['detail'] ?? '')
+          : '';
+      final msg = detail.isNotEmpty ? detail.toString() : (e.message ?? e.type.name);
       setState(() {
         _isThinking = false;
-        _error = 'Brain 请求失败: ${e.message ?? e.type.name}';
+        _error = msg;
+        if (resp?.statusCode == 401) {
+          _showLoginPrompt();
+        }
       });
     } catch (e) {
       setState(() {
@@ -145,6 +185,22 @@ class _BrainChatPageState extends State<BrainChatPage> {
         _error = '错误: $e';
       });
     }
+  }
+
+  void _showLoginPrompt() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.lock_outline),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('需要先登录才能使用 Brain AI')),
+          ],
+        ),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   @override
@@ -163,6 +219,25 @@ class _BrainChatPageState extends State<BrainChatPage> {
           ],
         ),
         actions: [
+          // Auth status indicator
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            decoration: BoxDecoration(
+              color: _isAuthed
+                  ? Colors.green.withValues(alpha: 0.15)
+                  : Colors.orange.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Text(
+              _isAuthed ? '已认证' : '未登录',
+              style: TextStyle(
+                fontSize: 11,
+                color: _isAuthed ? Colors.green : Colors.orange,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showInfo(context),
@@ -171,6 +246,25 @@ class _BrainChatPageState extends State<BrainChatPage> {
       ),
       body: Column(
         children: [
+          if (_error != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: Colors.red.withValues(alpha: 0.1),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12))),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 14),
+                    onPressed: () => setState(() => _error = null),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 20),
+                  ),
+                ],
+              ),
+            ),
           Expanded(child: _buildConversation()),
           _buildInput(),
         ],
@@ -179,6 +273,31 @@ class _BrainChatPageState extends State<BrainChatPage> {
   }
 
   Widget _buildConversation() {
+    if (!_isAuthed && _turns.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock_outline, size: 56, color: Colors.orange[300]),
+            const SizedBox(height: 16),
+            Text('请先登录', style: TextStyle(fontSize: 18, color: Colors.orange[700])),
+            const SizedBox(height: 8),
+            Text(
+              'Brain AI 需要账号认证才能使用',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => _chatRepo?.logout(), // triggers login flow
+              icon: const Icon(Icons.login),
+              label: const Text('去登录'),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (_turns.isEmpty && !_isThinking) {
       return Center(
         child: Column(
@@ -195,6 +314,16 @@ class _BrainChatPageState extends State<BrainChatPage> {
               '输入问题或描述场景，Brain 会进行推理并返回决策',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: Colors.grey[400]),
+            ),
+            const SizedBox(height: 16),
+            // Quick suggestion chips
+            Wrap(
+              spacing: 8,
+              children: [
+                _suggestionChip('今天有什么需要决策的？'),
+                _suggestionChip('分析一下当前系统状态'),
+                _suggestionChip('有什么可以优化的？'),
+              ],
             ),
           ],
         ),
@@ -231,6 +360,18 @@ class _BrainChatPageState extends State<BrainChatPage> {
           ],
         );
       },
+    );
+  }
+
+  Widget _suggestionChip(String text) {
+    return ActionChip(
+      label: Text(text, style: const TextStyle(fontSize: 12)),
+      onPressed: () {
+        _inputCtrl.text = text;
+        _focusNode.requestFocus();
+        _send();
+      },
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
     );
   }
 
@@ -292,8 +433,9 @@ class _BrainChatPageState extends State<BrainChatPage> {
               child: TextField(
                 controller: _inputCtrl,
                 focusNode: _focusNode,
+                enabled: _isAuthed,
                 decoration: InputDecoration(
-                  hintText: '向 Brain AI 提问...',
+                  hintText: _isAuthed ? '向 Brain AI 提问...' : '请先登录',
                   filled: true,
                   fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
                   border: OutlineInputBorder(
@@ -312,7 +454,7 @@ class _BrainChatPageState extends State<BrainChatPage> {
             ),
             const SizedBox(width: 8),
             IconButton.filled(
-              onPressed: _isThinking ? null : _send,
+              onPressed: (_isThinking || !_isAuthed) ? null : _send,
               icon: _isThinking
                   ? const SizedBox(
                       width: 20,
@@ -339,7 +481,8 @@ class _BrainChatPageState extends State<BrainChatPage> {
           'Brain AI 是 ZZCC 类脑系统的推理接口。\n\n'
           '它通过 L1 规则 → L2 记忆推理 → L3 语义推理三层引擎，\n'
           '对输入信号进行分析并返回决策和置信度。\n\n'
-          '对话不会存储到聊天服务器，仅在当前会话中保持。',
+          '对话不会存储到聊天服务器，仅在当前会话中保持。\n'
+          '需要账号认证后才能使用。',
         ),
         actions: [
           TextButton(
