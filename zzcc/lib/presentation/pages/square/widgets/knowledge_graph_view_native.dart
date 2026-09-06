@@ -763,12 +763,18 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Brain Semantic quick-select
+        if (_spaces.any((s) => s.name == 'brain_semantic'))
+          _buildQuickSpaceButton(
+            label: '🧠 Brain',
+            spaceName: 'brain_semantic',
+            isActive: _selectedSpace?.name == 'brain_semantic',
+          ),
         IconButton(
           icon: const Icon(Icons.refresh, color: Color(0xFF8b949e), size: 20),
           onPressed: _isFetching ? null : _reloadGraph,
           tooltip: '刷新图谱',
-        ),
-        IconButton(
+        ),        IconButton(
           icon: Icon(
             _is3D ? Icons.view_in_ar : Icons.view_agenda,
             color: const Color(0xFF8b949e),
@@ -791,6 +797,42 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
             ),
           ),
       ],
+    );
+  }
+
+  /// Quick-select button for a specific space (e.g. brain_semantic).
+  Widget _buildQuickSpaceButton({
+    required String label,
+    required String spaceName,
+    required bool isActive,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        final space = _spaces.firstWhere((s) => s.name == spaceName);
+        if (_selectedSpace?.name != spaceName) {
+          setState(() => _selectedSpace = space);
+          _loadGraph();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF1a3a5c) : const Color(0xFF161b22),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: isActive ? const Color(0xFF00d4ff) : const Color(0xFF30363d),
+            width: isActive ? 1.5 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isActive ? const Color(0xFF00d4ff) : const Color(0xFF8b949e),
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
     );
   }
 }

@@ -11,6 +11,7 @@ import 'package:zzcc/core/di/service_locator.dart';
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:zzcc/data/models/chat_room.dart';
 import 'package:zzcc/data/repositories/chat_repository.dart';
+import 'package:zzcc/presentation/pages/chat/brain_chat_page.dart';
 import 'package:zzcc/presentation/pages/chat/chat_page.dart';
 
 class MessageScreen extends ConsumerStatefulWidget {
@@ -373,13 +374,23 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
         const Divider(height: 1),
         Expanded(
           child: filtered.isEmpty
-              ? const Center(
-                  child: Text('无匹配房间', style: TextStyle(color: Colors.grey)),
+              ? ListView(
+                  children: [
+                    _buildBrainEntry(),
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 48),
+                        child: Text('无匹配房间',
+                            style: TextStyle(color: Colors.grey)),
+                      ),
+                    ),
+                  ],
                 )
               : ListView.builder(
-                  itemCount: filtered.length,
+                  itemCount: filtered.length + 1,
                   itemBuilder: (context, index) {
-                    final room = filtered[index];
+                    if (index == 0) return _buildBrainEntry();
+                    final room = filtered[index - 1];
                     final isSelected = _selectedRoom?.roomId == room.roomId;
                     return ListTile(
                       selected: isSelected,
@@ -422,6 +433,44 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
     );
   }
 
+  // Built-in Brain AI entry — shown in both chat and contacts tabs.
+  Widget _buildBrainEntry() {
+    return Column(
+      children: [
+        ListTile(
+          leading: CircleAvatar(
+            backgroundColor: const Color(0xFF00d4ff),
+            child: const Icon(Icons.psychology, color: Colors.white, size: 20),
+          ),
+          title: const Text('Brain AI',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: const Text('类脑推理 · 问问任何事',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12)),
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.cyan.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text('AI',
+                style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.cyan)),
+          ),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const BrainChatPage()),
+            );
+          },
+        ),
+        const Divider(height: 1),
+      ],
+    );
+  }
+
   Widget _buildContactsTab() {
     if (!_chatRepo.isAuthenticated) {
       return Center(
@@ -451,43 +500,47 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
                 r.roomId.toLowerCase().contains(_searchQuery.toLowerCase()))
             .toList();
 
-    if (filtered.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.person_outline, size: 48, color: Colors.grey),
-            const SizedBox(height: 12),
-            const Text('暂无联系人', style: TextStyle(color: Colors.grey)),
-            const SizedBox(height: 8),
-            const Text('发起私聊即可添加联系人',
-                style: TextStyle(fontSize: 12, color: Colors.grey)),
-          ],
-        ),
-      );
-    }
+    // Brain AI is always available, even when no chat rooms exist.
+    final hasRooms = filtered.isNotEmpty;
 
-    return ListView.builder(
-      itemCount: filtered.length,
-      itemBuilder: (context, index) {
-        final room = filtered[index];
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundColor: Theme.of(context).primaryColor,
-            child: Text(
-              (room.name ?? '?').substring(0, 1).toUpperCase(),
-              style: const TextStyle(color: Colors.white),
+    return ListView(
+      children: [
+        // ── Built-in: Brain AI ─────────────────────────────────
+        _buildBrainEntry(),
+
+        // ── Regular contacts ──────────────────────────────────
+        if (!hasRooms)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 48),
+            child: Column(
+              children: [
+                Icon(Icons.person_outline, size: 48, color: Colors.grey[400]),
+                const SizedBox(height: 12),
+                Text('暂无联系人', style: TextStyle(color: Colors.grey[500])),
+                const SizedBox(height: 8),
+                Text('发起私聊即可添加联系人',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[400])),
+              ],
             ),
-          ),
-          title: Text(room.name ?? room.roomId,
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(room.lastMessage ?? '',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12)),
-          onTap: () => _selectRoom(room),
-        );
-      },
+          )
+        else
+          ...filtered.map((room) => ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Theme.of(context).primaryColor,
+                  child: Text(
+                    (room.name ?? '?').substring(0, 1).toUpperCase(),
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+                title: Text(room.name ?? room.roomId,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(room.lastMessage ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12)),
+                onTap: () => _selectRoom(room),
+              )),
+      ],
     );
   }
 
