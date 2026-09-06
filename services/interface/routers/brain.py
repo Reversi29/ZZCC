@@ -375,8 +375,42 @@ async def learn(
 
     async with managed_session() as db:
         updated = await mem.record_outcome(db, request.signal_id, request.correct, request.feedback)
+        skill = await mem.summarize_skill_from_feedback(
+            db,
+            request.signal_id,
+            request.correct,
+            request.feedback,
+        )
         await db.commit()
-    return {"ok": True, "updated": updated}
+        semantic_result = {"ok": True, "skipped": True, "reason": "no decision log row"}
+        if skill.get("ok") and broker.semantic is not None:
+            try:
+                decisions = await mem.get_decisions(db, limit=1, signal_type=skill.get("signal_type"), decision=skill.get("decision"))
+                decision_row = decisions[0] if decisions else None
+                if decision_row:
+                    signal_for_semantic = {
+                        "id": decision_row.get("signal_id"),
+                        "type": decision_row.get("signal_type"),
+                        "module": skill.get("module"),
+                        "payload": {"decision": skill.get("decision"), "feedback": request.feedback or ""},
+                        "source": "learn_feedback",
+                        "urgency": 50,
+                        "created_at": decision_row.get("created_at"),
+                    }
+                    cognition_for_semantic = {
+                        "decision": skill.get("decision"),
+                        "reasoning_level": skill.get("reasoning_level"),
+                        "confidence": skill.get("success_rate", 0.5),
+                        "reasoning": skill.get("summary", ""),
+                    }
+                    semantic_result = await broker.semantic.remember(
+                        signal_for_semantic,
+                        cognition_for_semantic,
+                        action_results=[{"ok": request.correct, "action": "learn_feedback"}],
+                    )
+            except Exception as exc:
+                semantic_result = {"ok": False, "error": str(exc)}
+    return {"ok": True, "updated": updated, "skill": skill, "semantic": semantic_result}
 
 
 @router.get("/semantic/status")

@@ -262,6 +262,89 @@ async def record_outcome(
     return result.rowcount
 
 
+async def summarize_skill_from_feedback(
+    db,
+    signal_id: str,
+    correct: bool,
+    feedback: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """根据反馈更新技能记忆，形成最小归纳闭环。
+
+    不修改 L1 规则表；只沉淀到 brain_memory(type='skill')，
+    供后续推理检索或人工/LLM 规则提炼使用。
+    """
+    result = await db.execute(
+        text("""
+            SELECT signal_id, signal_type, decision, confidence, reasoning_level,
+                   reasoning, actions, action_results, outcome, feedback, created_at
+            FROM brain_decision_log
+            WHERE signal_id = :signal_id
+            ORDER BY created_at DESC
+            LIMIT 1
+        """),
+        {"signal_id": signal_id},
+    )
+    row = result.fetchone()
+    if not row:
+        return {"ok": False, "reason": "decision_not_found", "signal_id": signal_id}
+
+    module = _infer_module({"type": row[1], "payload": {}})
+    decision = str(row[2] or "no_action")
+    reasoning_level = int(row[4] or 1)
+    reasoning = str(row[5] or "")
+
+    history = await get_decisions(db, limit=limit, signal_type=row[1], decision=decision)
+    total = len(history)
+    correct_count = sum(1 for h in history if h.get("outcome") == "correct")
+    incorrect_count = sum(1 for h in history if h.get("outcome") == "incorrect")
+    pending_count = total - correct_count - incorrect_count
+    judged = correct_count + incorrect_count
+    success_rate = correct_count / judged if judged else (1.0 if correct else 0.0)
+    confidence_delta = 0.03 if correct else -0.03
+    lesson = feedback or (
+        f"{decision} 在 signal_type={row[1]} 上被标记为正确，可提升同类信号置信度。"
+        if correct
+        else f"{decision} 在 signal_type={row[1]} 上被标记为错误，需降低同类信号置信度或补充信息。"
+    )
+    summary = {
+        "skill_id": decision,
+        "decision": decision,
+        "signal_type": row[1],
+        "reasoning_level": reasoning_level,
+        "last_reasoning": reasoning[:1024],
+        "last_signal_id": row[0],
+        "last_outcome": "correct" if correct else "incorrect",
+        "last_feedback": feedback or "",
+        "samples": total,
+        "correct_count": correct_count,
+        "incorrect_count": incorrect_count,
+        "pending_count": pending_count,
+        "success_rate": success_rate,
+        "confidence_delta": confidence_delta,
+        "summary": lesson,
+    }
+    entry = await memory_get(db, "skill", module, f"skill:{decision}") or {
+        "confidence": 0.5,
+        "hit_count": 0,
+        "miss_count": 0,
+    }
+    new_confidence = max(0.0, min(1.0, float(entry.get("confidence") or 0.5) + confidence_delta))
+    skill_value = dict(entry.get("value") or {})
+    skill_value.update(summary)
+
+    await memory_set(db, {
+        "type": "skill",
+        "module": module,
+        "key": f"skill:{decision}",
+        "value": skill_value,
+        "confidence": new_confidence,
+        "hit_count": 1 if correct else 0,
+        "miss_count": 1 if not correct else 0,
+    })
+    return {"ok": True, "module": module, "skill_key": f"skill:{decision}", **summary}
+
+
 # ── 信号队列 ──
 async def enqueue_signal(db, signal: dict) -> str:
     """把感知信号写入队列，供异步处理。"""
