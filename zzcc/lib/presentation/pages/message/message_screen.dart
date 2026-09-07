@@ -290,20 +290,26 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
       );
     }
     if (!_chatRepo.isAuthenticated) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
-            const SizedBox(height: 12),
-            const Text('请先登录', style: TextStyle(color: Colors.grey)),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
-              child: const Text('登录 / 注册'),
+      return ListView(
+        children: [
+          // Brain AI is always available, even when not logged in.
+          _buildBrainEntry(),
+          const SizedBox(height: 48),
+          Center(
+            child: Column(
+              children: [
+                const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+                const SizedBox(height: 12),
+                const Text('请先登录以使用聊天功能', style: TextStyle(color: Colors.grey)),
+                const SizedBox(height: 8),
+                FilledButton(
+                  onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+                  child: const Text('登录 / 注册'),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       );
     }
     if (_roomsLoading) {
@@ -473,20 +479,26 @@ class _MessageScreenState extends ConsumerState<MessageScreen>
 
   Widget _buildContactsTab() {
     if (!_chatRepo.isAuthenticated) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
-            const SizedBox(height: 12),
-            const Text('请先登录', style: TextStyle(color: Colors.grey)),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
-              child: const Text('登录 / 注册'),
+      return ListView(
+        children: [
+          // Brain AI is always available, even when not logged in.
+          _buildBrainEntry(),
+          const SizedBox(height: 48),
+          Center(
+            child: Column(
+              children: [
+                const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+                const SizedBox(height: 12),
+                const Text('请先登录以查看联系人', style: TextStyle(color: Colors.grey)),
+                const SizedBox(height: 8),
+                FilledButton(
+                  onPressed: () => context.go('${RouteNames.root}${RouteNames.login}'),
+                  child: const Text('登录 / 注册'),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       );
     }
     if (_roomsLoading) return const Center(child: CircularProgressIndicator());
