@@ -44,6 +44,26 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     confirmPasswordController = TextEditingController();
     configService = getIt<ConfigService>();
     loggerService = LoggerService();
+    // 支持从 RouteSettings arguments 自动填充（由 login 页跳转传入）
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map<String, dynamic>) {
+      final name = args['name'] as String?;
+      final pwd = args['password'] as String?;
+      if (name != null && name.isNotEmpty) {
+        nameController.text = name;
+      }
+      if (pwd != null && pwd.length >= 8) {
+        passwordController.text = pwd;
+        confirmPasswordController.text = pwd;
+        _passwordsMatch = true;
+      }
+      // 自动注册
+      if (name != null && name.isNotEmpty && pwd != null && pwd.length >= 8) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _handleRegister();
+        });
+      }
+    }
   }
   
   @override

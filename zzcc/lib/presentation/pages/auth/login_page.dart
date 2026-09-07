@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:zzcc/core/services/config_service.dart';
@@ -27,13 +28,54 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   bool _obscurePassword = true;
   List<Map<String, dynamic>> _accounts = [];
   
+  bool _autoFilled = false;
+
   @override
-  void initState() {
-    super.initState();
-    accountController = TextEditingController();
-    passwordController = TextEditingController();
-    configService = getIt<ConfigService>();
-    _loadAccounts();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (kIsWeb && !_autoFilled) {
+      _autoFilled = true;
+      _tryAutoFillFromRoute();
+    }
+  }
+
+  /// 从 GoRouter 查询参数自动填充并登录
+  /// 用法: http://host/#/login?uid=xxx&password=xxx
+  /// 或: http://host/#/login?action=register&name=xxx&password=xxx
+  void _tryAutoFillFromRoute() {
+    try {
+      final state = GoRouterState.of(context);
+      final params = state.uri.queryParameters;
+      final uid = params['uid'];
+      final pwd = params['password'];
+      if (uid != null && uid.isNotEmpty) {
+        accountController.text = uid;
+      }
+      if (pwd != null && pwd.isNotEmpty) {
+        passwordController.text = pwd;
+      }
+      final action = params['action'];
+      final regName = params['name'];
+      // 如果是注册动作，跳转注册页并传递参数
+      if (action == 'register' && regName != null && regName.isNotEmpty && pwd != null && pwd.length >= 8) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RegisterPage(),
+              settings: RouteSettings(arguments: {'name': regName, 'password': pwd}),
+            ),
+          );
+        });
+        return;
+      }
+      // 否则正常登录
+      if (uid != null && uid.isNotEmpty && pwd != null && pwd.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _handleLogin();
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadAccounts() async {

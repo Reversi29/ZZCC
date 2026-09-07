@@ -8,9 +8,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 import json
+import os
 import structlog
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette import status
 
 from config import get_settings
@@ -224,14 +226,36 @@ def create_app() -> FastAPI:
     app.include_router(plugin_marketplace_router.router, prefix=v1)
     app.include_router(brain_router.router, prefix=v1)
 
-    # Root
-    @app.get("/")
-    async def root():
-        return {
-            "service": settings.app_name,
-            "version": settings.api.api_version,
-            "docs": "/docs",
-        }
+    # --- Flutter Web 静态文件 ---
+    _static_dir = os.environ.get("ZZCC_WEB_DIR", "/app/static")
+    _index_html = os.path.join(_static_dir, "index.html")
+
+    if os.path.isfile(_index_html):
+        # 挂载静态资源（JS/CSS/字体等）
+        app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+        @app.get("/")
+        async def root():
+            return FileResponse(_index_html)
+
+        # SPA fallback：非 API 路由回退到 index.html
+        @app.get("/{full_path:path}")
+        async def spa_fallback(full_path: str):
+            # API 路由不走这里（已注册的 router 优先匹配）
+            if full_path.startswith(("api/", "docs", "openapi.json", "health")):
+                raise HTTPException(status_code=404)
+            candidate = os.path.join(_static_dir, full_path)
+            if os.path.isfile(candidate):
+                return FileResponse(candidate)
+            return FileResponse(_index_html)
+    else:
+        @app.get("/")
+        async def root():
+            return {
+                "service": settings.app_name,
+                "version": settings.api.api_version,
+                "docs": "/docs",
+            }
 
     # Full health check — graceful: db/redis failures are non-fatal
     @app.get("/health")
