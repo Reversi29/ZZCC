@@ -99,15 +99,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
   }
 
-  Future<void> _loadAccounts() async {
-    final storageService = getIt<StorageService>();
-    try {
-      await storageService.init(configService.appDataPath);
-      final accounts = await storageService.listAllAccounts();
-      if (mounted) setState(() => _accounts = accounts);
-    } catch (_) {}
-  }
-  
+
   @override
   void dispose() {
     accountController.dispose();
