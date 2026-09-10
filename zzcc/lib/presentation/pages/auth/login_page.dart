@@ -9,9 +9,11 @@ import 'package:zzcc/core/utils/color_utils.dart';
 import 'package:zzcc/core/utils/encrypt_utils.dart';
 import 'package:zzcc/data/repositories/chat_repository.dart';
 import 'package:zzcc/presentation/pages/auth/widgets/register_page.dart';
+import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:go_router/go_router.dart';
+import 'package:zzcc/core/utils/url_hash.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -29,23 +31,35 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   List<Map<String, dynamic>> _accounts = [];
   
   bool _autoFilled = false;
+  Map<String, String> _urlParams = {};
+
+  @override
+  void initState() {
+    super.initState();
+    accountController = TextEditingController();
+    passwordController = TextEditingController();
+    configService = getIt<ConfigService>();
+    // 从 window.__autoRegisterParams 读取（index.html 在 Flutter 加载前已捕获）
+    _urlParams = getAutoRegisterParams();
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (kIsWeb && !_autoFilled) {
+    if (kIsWeb && !_autoFilled && _urlParams.isNotEmpty) {
       _autoFilled = true;
-      _tryAutoFillFromRoute();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _tryAutoFillFromRoute();
+      });
     }
   }
 
-  /// 从 GoRouter 查询参数自动填充并登录
+  /// 从 URL 查询参数自动填充并登录/注册
   /// 用法: http://host/#/login?uid=xxx&password=xxx
   /// 或: http://host/#/login?action=register&name=xxx&password=xxx
   void _tryAutoFillFromRoute() {
     try {
-      final state = GoRouterState.of(context);
-      final params = state.uri.queryParameters;
+      final params = _urlParams;
       final uid = params['uid'];
       final pwd = params['password'];
       if (uid != null && uid.isNotEmpty) {
@@ -57,25 +71,32 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       final action = params['action'];
       final regName = params['name'];
       // 如果是注册动作，跳转注册页并传递参数
-      if (action == 'register' && regName != null && regName.isNotEmpty && pwd != null && pwd.length >= 8) {
+      if (action == 'register' &&
+          regName != null &&
+          regName.isNotEmpty &&
+          pwd != null &&
+          pwd.length >= 8) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => RegisterPage(),
-              settings: RouteSettings(arguments: {'name': regName, 'password': pwd}),
-            ),
-          );
+          if (mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => RegisterPage(),
+                settings: RouteSettings(arguments: {'name': regName, 'password': pwd}),
+              ),
+            );
+          }
         });
         return;
       }
       // 否则正常登录
       if (uid != null && uid.isNotEmpty && pwd != null && pwd.isNotEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _handleLogin();
+          if (mounted) _handleLogin();
         });
       }
-    } catch (_) {}
+    } catch (e) {
+    }
   }
 
   Future<void> _loadAccounts() async {
@@ -419,9 +440,43 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
       final storedCiphertext = storageService.getUserRegistry(uid);
       if (storedCiphertext == null) {
+        // URL 自动登录场景：本地无此账号时不直接失败，先走服务器登录，
+        // 成功后引导写入本地记录，使下次可直接登录。
+        final chatRepo = getIt<ChatRepository>();
+        final serverUser = await chatRepo.login(
+          username: uid,
+          password: password,
+          displayName: _urlParams['name'] ?? uid,
+        );
+        final ciphertext = EncryptUtils.encryptUID(uid, password) ?? uid;
+        storageService.registerUser(uid, ciphertext);
+        final bootStrapPath = path.join(configService.appDataPath, ciphertext);
+        try {
+          final userDir = Directory(bootStrapPath);
+          if (!await userDir.exists()) {
+            await userDir.create(recursive: true);
+          }
+        } catch (_) { /* Web: no filesystem, Hive uses IndexedDB */ }
+        try {
+          await storageService.saveUserInfo(ciphertext, {
+            'name': serverUser?.displayName ?? uid,
+            'uid': uid,
+            'password': password,
+            'registerTime': DateTime.now().toIso8601String(),
+            'lastLoginTime': DateTime.now().toIso8601String(),
+          });
+        } catch (_) {}
+        ref.read(userProvider.notifier).loginUser(
+          name: serverUser?.displayName ?? uid,
+          uid: uid,
+          userDataPath: bootStrapPath,
+        );
+        storageService.setCurrentUser(uid);
+        await configService.updateKeepLoggedIn(true);
         if (mounted) {
+          context.go('${RouteNames.root}${RouteNames.home}');
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('该用户不存在')),
+            const SnackBar(content: Text('登录成功')),
           );
         }
         return;

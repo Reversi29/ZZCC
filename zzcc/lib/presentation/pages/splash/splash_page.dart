@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zzcc/presentation/providers/app_loaded_provider.dart';
@@ -43,15 +44,26 @@ class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProvid
 
   // 新增异步初始化方法
   Future<void> _initAnimationSettings() async {
-    // 直接从StorageService获取状态（最可靠的方式）
-    final enableAnimation = await getIt<StorageService>().getSplashAnimationStatus();
+    // Web 端直接跳过动画，立即过渡到主应用
+    if (kIsWeb) {
+      _fadeController.value = 1.0;
+      _gifFinished = true;
+      _appInitialized = true;
+      ref.read(appLoadedProvider.notifier).state = true;
+      return;
+    }
+
+    bool enableAnimation = true;
+    try {
+      enableAnimation = await getIt<StorageService>().getSplashAnimationStatus();
+    } catch (e) {
+      enableAnimation = false;
+    }
 
     if (!enableAnimation) {
-      // 不启用动画时，立即完成动画
       _fadeController.value = 1.0;
     }
 
-    // 根据是否启用动画调整初始化时间
     int delay = enableAnimation ? 3000 : 1000;
     
     Future.delayed(Duration(milliseconds: delay), () {
@@ -64,7 +76,6 @@ class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProvid
     });
     
     if (enableAnimation) {
-      // 设置GIF动画播放时间
       _gifTimer = Timer(const Duration(seconds: 4), () {
         if (mounted) {
           setState(() {
@@ -74,14 +85,12 @@ class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProvid
         }
       });
       
-      // 淡出动画
       Timer(const Duration(milliseconds: 3500), () {
         if (mounted) {
           _fadeController.forward();
         }
       });
     } else {
-      // 不启用动画时直接完成
       _gifFinished = true;
     }
   }
@@ -112,6 +121,7 @@ class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProvid
             fit: BoxFit.cover,
             width: double.infinity,
             height: double.infinity,
+            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
           ),
         ),
       ),

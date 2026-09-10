@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -41,6 +42,55 @@ from services.brain.broker import broker
 logger = logging.getLogger("brain.api")
 
 router = APIRouter(prefix="/brain", tags=["Brain AI"])
+
+_CONFIG_FILE = os.environ.get(
+    "BRAIN_CONFIG_FILE",
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "brain_config.json"),
+)
+
+
+def _load_brain_config() -> Dict[str, Any]:
+    cfg: Dict[str, Any] = {
+        "provider": "openai-compatible",
+        "api_base": os.environ.get("OPENAI_BASE_URL")
+        or os.environ.get("QCLAW_LLM_BASE_URL")
+        or "https://api.openai.com/v1",
+        "api_key": os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("QCLAW_LLM_API_KEY", ""),
+        "model": os.environ.get("OPENAI_MODEL")
+        or os.environ.get("QCLAW_LLM_MODEL")
+        or "qwen/qwen3.8-flash",
+        "temperature": float(
+            os.environ.get("OPENAI_TEMPERATURE")
+            or os.environ.get("QCLAW_LLM_TEMPERATURE")
+            or 0.3,
+        ),
+    }
+    try:
+        if os.path.exists(_CONFIG_FILE):
+            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if k in cfg and v is not None:
+                        cfg[k] = v
+    except Exception:
+        pass
+    return cfg
+
+
+def _save_brain_config(cfg: Dict[str, Any]) -> None:
+    try:
+        tmp = _CONFIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _CONFIG_FILE)
+    except Exception:
+        pass
+
+
+
+brain_config: Dict[str, Any] = _load_brain_config()
 
 R = Dict[str, Any]
 
@@ -91,6 +141,55 @@ class RuleCreateRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════
 # 核心端点
 # ═══════════════════════════════════════════════════════════
+
+class BrainConfigUpdate(BaseModel):
+    provider: Optional[str] = Field(None, description="云端模型提供商")
+    api_base: Optional[str] = Field(None, description="OpenAI 兼容 Base URL")
+    api_key: Optional[str] = Field(None, description="API Key")
+    model: Optional[str] = Field(None, description="模型名")
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+
+
+@router.get("/config")
+async def get_brain_config(
+    user: dict = Depends(get_current_user_dep),
+):
+    cfg = dict(brain_config)
+    key = cfg.pop("api_key", "")
+    return {
+        "ok": True,
+        "config": cfg,
+        "has_api_key": bool(key),
+    }
+
+
+@router.post("/config")
+async def update_brain_config(
+    request: BrainConfigUpdate,
+    user: dict = Depends(get_current_user_dep),
+):
+    updates = request.model_dump(exclude_none=True)
+    brain_config.update(updates)
+    _save_brain_config(brain_config)
+    rsn.engine.update_llm_config(
+        api_key=brain_config.get("api_key") or None,
+        model=brain_config.get("model") or "qwen/qwen3.8-flash",
+        api_base=brain_config.get("api_base") or None,
+        temperature=brain_config.get("temperature"),
+    )
+    # 不回显 api_key 明文，仅告知是否已配置
+    masked = {k: v for k, v in brain_config.items() if k != "api_key"}
+    masked["has_api_key"] = bool(brain_config.get("api_key"))
+    return {"ok": True, "config": masked, "stats": rsn.engine.stats()}
+
+
+@router.post("/config/test")
+async def test_brain_config(
+    user: dict = Depends(get_current_user_dep),
+):
+    result = await rsn.engine.test_llm_connection()
+    return {"ok": bool(result.get("ok")), **result}
+
 
 @router.post("/ask")
 async def ask(

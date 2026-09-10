@@ -48,7 +48,7 @@ class EncryptUtils {
     final key = _passwordKey();
     final iv = encrypt.IV(Uint8List.fromList(Uint8List(16))); // 固定 IV
     final encrypter = encrypt.Encrypter(encrypt.AES(key));
-    final encrypted = encrypter.encrypt(plain);
+    final encrypted = encrypter.encrypt(plain, iv: iv);
     final combined = Uint8List.fromList(iv.bytes + encrypted.bytes);
     return _customBaseEncode(combined);
   }

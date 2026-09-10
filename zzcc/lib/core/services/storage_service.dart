@@ -132,6 +132,7 @@ class StorageService {
     return await Hive.openBox('user_data', path: dirPath);
   }
 
+
   // 新增：保存用户信息到对应用户的盒子
   Future<void> saveUserInfo(String ciphertext, Map<String, dynamic> info) async {
     final userBox = await _openUserBox(ciphertext);
@@ -289,6 +290,10 @@ class StorageService {
       'useSystemTheme': settings.useSystemTheme,
       'preferredFont': settings.preferredFont,
       'notificationsEnabled': settings.notificationsEnabled,
+      'brainApiBase': settings.brainApiBase,
+      'brainApiKey': settings.brainApiKey,
+      'brainModel': settings.brainModel,
+      'brainTemperature': settings.brainTemperature,
     });
     
     await settingsBox.close();
@@ -328,6 +333,10 @@ class StorageService {
         useSystemTheme: settingsData['useSystemTheme'] as bool? ?? true,
         preferredFont: settingsData['preferredFont'] as String?,
         notificationsEnabled: settingsData['notificationsEnabled'] as bool? ?? true,
+        brainApiBase: settingsData['brainApiBase'] as String? ?? 'http://127.0.0.1:8001/api/v1/',
+        brainApiKey: settingsData['brainApiKey'] as String? ?? '',
+        brainModel: settingsData['brainModel'] as String? ?? 'qwen/qwen3.8-flash',
+        brainTemperature: (settingsData['brainTemperature'] as num? ?? 0.3).toDouble(),
       );
     } catch (e) {
       getIt<LoggerService>().error('获取用户设置失败: $e');

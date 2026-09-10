@@ -33,6 +33,47 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    (function() {
+      var hash = window.location.hash || '';
+      if (hash.length > 1) {
+        // Parse hash: #/path?query
+        var hashPath = hash.substring(1); // /path?query
+        var queryIdx = hashPath.indexOf('?');
+        var hashRoute = queryIdx >= 0 ? hashPath.substring(0, queryIdx) : hashPath;
+        var hashQuery = queryIdx >= 0 ? hashPath.substring(queryIdx) : '';
+        // Convert #/login?query to /login?query so GoRouter (PathUrlStrategy) matches
+        if (hashRoute !== '/') {
+          var newPath = hashRoute + hashQuery;
+          history.replaceState(null, '', newPath);
+        }
+      }
+      // Capture params for LoginPage (reads window.__autoRegisterParams)
+      var queryStr = window.location.search || '';
+      var hashQueryStr = (window.location.hash || '').split('?')[1] || '';
+      var fullQuery = queryStr || hashQueryStr;
+      var params = {};
+      if (fullQuery) {
+        fullQuery.replace(/^\?/, '').split('&').forEach(function(pair) {
+          var eq = pair.indexOf('=');
+          if (eq > 0) {
+            params[decodeURIComponent(pair.substring(0, eq))] = decodeURIComponent(pair.substring(eq + 1));
+          }
+        });
+      }
+      window.__autoRegisterParams = params;
+      // JSON string form: dart:js JsObject has no keys() method, so the Dart side
+      // decodes this string instead of iterating the proxied object.
+      window.__autoRegisterParamsJson = JSON.stringify(params);
+      // Path captured here rather than traversing window.location from Dart.
+      window.__autoRegisterInitialPath = window.location.pathname + window.location.search;
+      console.log('CAPTURED params=', JSON.stringify(params), 'url=', window.location.href);
+    })();
+  </script>
+  <div id="debug-params" style="position:fixed;top:0;left:0;background:red;color:white;z-index:99999;padding:4px;font-size:12px;font-family:monospace;max-width:400px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"></div>
+  <script>
+    document.getElementById('debug-params').textContent = 'JS OK | hash=' + (window.location.hash||'') + ' | params=' + JSON.stringify(window.__autoRegisterParams||{});
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

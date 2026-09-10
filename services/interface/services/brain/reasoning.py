@@ -36,6 +36,20 @@ class ReasoningEngine:
         self.l2_threshold = l2_threshold
         self.llm_api_key = llm_api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("QCLAW_LLM_API_KEY", "")
         self.llm_model = llm_model or os.environ.get("OPENAI_MODEL") or os.environ.get("QCLAW_LLM_MODEL") or "qwen/qwen3.8-flash"
+        # LLM 端点/温度：默认从环境变量取，可被 update_llm_config 覆盖
+        self.llm_api_base = (
+            os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("QCLAW_LLM_BASE_URL")
+            or "https://api.openai.com/v1"
+        ).rstrip("/")
+        try:
+            self.llm_temperature = float(
+                os.environ.get("OPENAI_TEMPERATURE")
+                or os.environ.get("QCLAW_LLM_TEMPERATURE")
+                or 0.3
+            )
+        except (TypeError, ValueError):
+            self.llm_temperature = 0.3
         # 简单调用计数
         self._stats = {
             "l1_calls": 0, "l1_hits": 0,
@@ -43,6 +57,53 @@ class ReasoningEngine:
             "l3_calls": 0, "l3_hits": 0,
             "total": 0,
         }
+
+    def update_llm_config(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        api_base: Optional[str] = None,
+        temperature: Optional[float] = None,
+    ) -> dict:
+        """动态更新 L3 LLM 配置（不重启进程，立即对后续推理生效）。
+
+        传 None 的字段保持不变；api_key 传空串表示清除。
+        """
+        if api_key is not None:
+            self.llm_api_key = api_key
+        if model is not None:
+            self.llm_model = model
+        if api_base is not None:
+            self.llm_api_base = api_base.rstrip("/")
+        if temperature is not None:
+            try:
+                self.llm_temperature = float(temperature)
+            except (TypeError, ValueError):
+                self.llm_temperature = 0.3
+        logger.info(
+            "llm_config_updated model=%s base=%s temp=%s key_set=%s",
+            self.llm_model,
+            self.llm_api_base,
+            self.llm_temperature,
+            bool(self.llm_api_key),
+        )
+        return {
+            "ok": True,
+            "model": self.llm_model,
+            "api_base": self.llm_api_base,
+            "temperature": self.llm_temperature,
+            "has_api_key": bool(self.llm_api_key),
+        }
+
+    async def test_llm_connection(self) -> dict:
+        """测试 L3 LLM 连通性：发一次最小请求，成功返回内容片段。"""
+        if not self.llm_api_key:
+            return {"ok": False, "error": "api_key 未配置"}
+        try:
+            content = await self._call_llm("ping", timeout=15.0)
+            return {"ok": True, "model": self.llm_model, "reply": content[:200]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     async def reason(
         self,
@@ -268,12 +329,15 @@ class ReasoningEngine:
 
 请分析后直接返回 JSON。"""
 
-    async def _call_llm(self, prompt: str) -> str:
-        """调用 OpenAI 兼容 API（支持 OpenAI/Claude proxy/Ollama/OpenRouter 等）。"""
+    async def _call_llm(self, prompt: str, timeout: float = 30.0) -> str:
+        """调用 OpenAI 兼容 API（支持 OpenAI/Claude proxy/Ollama/OpenRouter 等）。
+
+        端点、模型、温度均取自实例字段，可通过 update_llm_config() 动态覆盖。
+        """
         import httpx
 
-        base_url = (os.environ.get("OPENAI_BASE_URL") or os.environ.get("QCLAW_LLM_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        base_url = self.llm_api_base.rstrip("/")
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
                 headers={
@@ -283,7 +347,7 @@ class ReasoningEngine:
                 json={
                     "model": self.llm_model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
+                    "temperature": self.llm_temperature,
                 },
             )
             resp.raise_for_status()

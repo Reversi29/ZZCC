@@ -128,7 +128,7 @@ class _BrainChatPageState extends State<BrainChatPage> {
     });
 
     try {
-      final resp = await _dio.post('/brain/ask', data: jsonEncode({
+      final resp = await _dio.post('brain/ask', data: jsonEncode({
         'question': text,
         'execute_actions': false,
       }));

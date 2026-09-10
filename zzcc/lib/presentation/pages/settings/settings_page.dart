@@ -11,16 +11,20 @@ import 'package:zzcc/presentation/providers/app_settings_provider.dart';
 import 'package:zzcc/core/services/config_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:zzcc/core/di/service_locator.dart';
+import 'package:zzcc/data/repositories/user_settings_repository.dart';
 import 'package:zzcc/l10n/generated/app_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zzcc/presentation/providers/locale_provider.dart';
 import 'package:zzcc/presentation/providers/user_provider.dart';
+import 'package:zzcc/data/models/user_settings_model.dart';
 import 'package:svg_flag/svg_flag.dart';
 import 'package:zzcc/presentation/providers/font_provider.dart';
 import 'package:zzcc/presentation/providers/splash_provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:zzcc/core/services/storage_service.dart';
+import 'package:path/path.dart' as path;
 import 'package:zzcc/core/routes/route_names.dart';
+import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
@@ -337,6 +341,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                 // ===== 时间与地区设置（位于「语言」之上）=====
                 _buildTimeRegionSection(context, appSettings, ref),
+                const SizedBox(height: 20),
+
+                const _BrainSettingsCard(),
                 const SizedBox(height: 20),
 
                 // 语言设置行
@@ -687,6 +694,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     }
   }
 
+
+
   String _getLanguageName(Locale locale, BuildContext context) {
     final appLocalizations = AppLocalizations.of(context)!;
     final languageCode = locale.languageCode;
@@ -1024,3 +1033,205 @@ class _TimePreviewState extends State<_TimePreview> {
   }
 }
     
+
+class _BrainSettingsCard extends ConsumerStatefulWidget {
+  const _BrainSettingsCard();
+
+  @override
+  ConsumerState<_BrainSettingsCard> createState() => _BrainSettingsCardState();
+}
+
+class _BrainSettingsCardState extends ConsumerState<_BrainSettingsCard> {
+  UserSettingsModel _settings = UserSettingsModel();
+  String? _ciphertext;
+  bool _loading = true;
+  bool _isTesting = false;
+  String? _testResult;
+
+  late final TextEditingController _apiBaseCtrl;
+  late final TextEditingController _apiKeyCtrl;
+  late final TextEditingController _modelCtrl;
+  late final TextEditingController _temperatureCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _apiBaseCtrl = TextEditingController(text: _settings.brainApiBase);
+    _apiKeyCtrl = TextEditingController(text: _settings.brainApiKey);
+    _modelCtrl = TextEditingController(text: _settings.brainModel);
+    _temperatureCtrl =
+        TextEditingController(text: _settings.brainTemperature.toStringAsFixed(2));
+    _load();
+  }
+
+  Future<void> _load() async {
+    final user = ref.read(userProvider);
+    final ct = user.userDataPath == null ? null : path.basename(user.userDataPath!);
+    if (ct == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    _ciphertext = ct;
+    try {
+      final data = await getIt<UserSettingsRepository>().getSettings(ct);
+      if (data != null && mounted) {
+        _settings = data;
+        _apiBaseCtrl.text = data.brainApiBase;
+        _apiKeyCtrl.text = data.brainApiKey;
+        _modelCtrl.text = data.brainModel;
+        _temperatureCtrl.text = data.brainTemperature.toStringAsFixed(2);
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _save({String? apiBase, String? apiKey, String? model, double? temperature}) async {
+    final ct = _ciphertext;
+    if (ct == null) return;
+    final next = _settings.copyWith(
+      brainApiBase: apiBase,
+      brainApiKey: apiKey,
+      brainModel: model,
+      brainTemperature: temperature,
+    );
+    _settings = next;
+    try {
+      await getIt<UserSettingsRepository>().saveSettings(ct, next);
+    } catch (_) {}
+  }
+
+  Future<void> _testConnection() async {
+    if (!mounted) return;
+    setState(() {
+      _isTesting = true;
+      _testResult = null;
+    });
+    try {
+      final dio = Dio(BaseOptions(
+        baseUrl: _apiBaseCtrl.text.trim(),
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 15),
+      ));
+      await dio.post(
+        '/chat/completions',
+        data: {
+          'model': _modelCtrl.text.trim(),
+          'messages': [
+            {'role': 'user', 'content': 'ping'},
+          ],
+          'temperature':
+              double.tryParse(_temperatureCtrl.text) ?? _settings.brainTemperature,
+        },
+        options: Options(headers: {'Authorization': 'Bearer ${_apiKeyCtrl.text.trim()}'}),
+      );
+      if (mounted) setState(() => _testResult = '连接成功');
+    } catch (e) {
+      if (mounted) setState(() => _testResult = '连接失败: $e');
+    } finally {
+      if (mounted) setState(() => _isTesting = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _apiBaseCtrl.dispose();
+    _apiKeyCtrl.dispose();
+    _modelCtrl.dispose();
+    _temperatureCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    if (_ciphertext == null) {
+      return Card(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        elevation: 1,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: const Padding(
+          padding: EdgeInsets.all(12),
+          child: Text('Brain AI 云端模型：请先登录用户'),
+        ),
+      );
+    }
+    if (_loading) {
+      return Card(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        elevation: 1,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: const Padding(
+          padding: EdgeInsets.all(12),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
+    return Card(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Brain AI 云端模型',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _apiBaseCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'API Base', border: OutlineInputBorder()),
+              onChanged: (v) => _save(apiBase: v),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _apiKeyCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'API Key', border: OutlineInputBorder()),
+              obscureText: true,
+              onChanged: (v) => _save(apiKey: v),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _modelCtrl,
+              decoration: const InputDecoration(
+                  labelText: '模型', border: OutlineInputBorder()),
+              onChanged: (v) => _save(model: v),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _temperatureCtrl,
+                    decoration: const InputDecoration(
+                        labelText: 'Temperature', border: OutlineInputBorder()),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (v) => _save(temperature: double.tryParse(v)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                FilledButton(
+                  onPressed: _isTesting ? null : _testConnection,
+                  child: _isTesting
+                      ? const SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('测试连接'),
+                ),
+              ],
+            ),
+            if (_testResult != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(_testResult!,
+                    style: const TextStyle(fontSize: 12, color: Colors.white70)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}

@@ -6,9 +6,26 @@ import 'package:zzcc/presentation/pages/main_screen.dart';
 import 'package:zzcc/presentation/pages/auth/login_page.dart';
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:zzcc/presentation/providers/sidebar_provider.dart';
+import 'package:zzcc/core/utils/url_hash.dart';
+import 'package:flutter/foundation.dart';
+
+String _computeInitialLocation() {
+  String result = '${RouteNames.root}${RouteNames.home}';
+  if (kIsWeb) {
+    try {
+      final params = getAutoRegisterParams();
+      if (params.isNotEmpty) {
+        final p = getInitialPath();
+        result = p;
+      }
+    } catch (e, st) {
+    }
+  }
+  return result;
+}
 
 final appRouter = GoRouter(
-  initialLocation: '${RouteNames.root}${RouteNames.home}',
+  initialLocation: _computeInitialLocation(),
   routes: [
     GoRoute(
       path: '${RouteNames.root}${RouteNames.login}',
