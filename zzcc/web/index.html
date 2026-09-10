@@ -70,10 +70,6 @@
       console.log('CAPTURED params=', JSON.stringify(params), 'url=', window.location.href);
     })();
   </script>
-  <div id="debug-params" style="position:fixed;top:0;left:0;background:red;color:white;z-index:99999;padding:4px;font-size:12px;font-family:monospace;max-width:400px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"></div>
-  <script>
-    document.getElementById('debug-params').textContent = 'JS OK | hash=' + (window.location.hash||'') + ' | params=' + JSON.stringify(window.__autoRegisterParams||{});
-  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
