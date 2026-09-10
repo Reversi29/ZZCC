@@ -104,7 +104,7 @@ def log_audit(*, actor: str, action: str, resource: str, detail: dict | None = N
         try:
             await _db_log_audit(actor=actor, action=action, resource=resource, detail=detail)
         except Exception as exc:
-            _log.warning("audit_log_failed", actor=actor, error=str(exc))
+            _log.warning("audit_log_failed actor=%s error=%s", actor, str(exc))
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(_w())
@@ -240,7 +240,7 @@ async def send_reset_code(body: PasswordResetCodeRequest):
     code = f"{secrets.randbelow(900000) + 100000}"
     key = body.email or body.phone
     _verification_codes[key] = (code, datetime.now(timezone.utc))
-    _log.info("reset_code_sent", target=key, code=code)
+    _log.info("reset_code_sent target=%s code=%s", key, code)
     return {"sent": True, "target": key, "code": code}
 
 
@@ -303,5 +303,5 @@ async def send_verification_code(body: VerificationCodeSend):
     code = f"{secrets.randbelow(900000) + 100000}"
     key = f"bind:{body.email or body.phone}"
     _verification_codes[key] = (code, datetime.now(timezone.utc))
-    _log.info("bind_code_sent", target=key, code=code)
+    _log.info("bind_code_sent target=%s code=%s", key, code)
     return {"sent": True, "target": body.email or body.phone, "code": code}

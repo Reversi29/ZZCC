@@ -86,7 +86,7 @@ async def cache_set(
         await client.aclose()
         return True
     except Exception as exc:
-        _log.warning("cache_set_fail", key=key, error=str(exc))
+        _log.warning("cache_set_fail key=%s error=%s", key, str(exc))
         return False
 
 

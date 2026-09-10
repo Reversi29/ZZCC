@@ -29,7 +29,7 @@ def run_with_retry(client: NebulaClient, sess, stmt: str) -> Any:
         except NebulaError as exc:
             if "SpaceNotFound" in str(exc) and attempt < _MAX_RETRIES - 1:
                 attempt += 1
-                _log.warning("space_not_found_retry", attempt=attempt, max=_MAX_RETRIES, stmt=stmt[:80])
+                _log.warning("space_not_found_retry attempt=%s, max=%s, stmt=%s", attempt, _MAX_RETRIES, stmt[:80])
                 time.sleep(_RETRY_WAIT)
                 continue
             raise
@@ -37,7 +37,7 @@ def run_with_retry(client: NebulaClient, sess, stmt: str) -> Any:
 
 def create_space(client: NebulaClient, sess, name: str, partition_num: int = 3, replica_factor: int = 1, vid_type: str = "FIXED_STRING(64)") -> None:
     client.create_space(sess, name=name, vid_type=vid_type, partition_num=partition_num, replica_factor=replica_factor)
-    _log.info("space_created", space=name)
+    _log.info("space_created space=%s", name)
 
 
 def wait_space(client: NebulaClient, sess, space: str, timeout: int = 120) -> None:
@@ -45,7 +45,7 @@ def wait_space(client: NebulaClient, sess, space: str, timeout: int = 120) -> No
     while time.time() < deadline:
         try:
             client._run(sess, f"USE `{space}`; YIELD 1;")
-            _log.info("space_ready", space=space)
+            _log.info("space_ready space=%s", space)
             return
         except NebulaError:
             time.sleep(1)
@@ -54,7 +54,7 @@ def wait_space(client: NebulaClient, sess, space: str, timeout: int = 120) -> No
 
 def drop_space(client: NebulaClient, sess, name: str) -> None:
     client.drop_space(sess, name)
-    _log.info("space_dropped", space=name)
+    _log.info("space_dropped space=%s", name)
 
 
 def list_spaces(client: NebulaClient, sess) -> List[Dict[str, Any]]:
@@ -64,12 +64,12 @@ def list_spaces(client: NebulaClient, sess) -> List[Dict[str, Any]]:
 
 def create_tag(client: NebulaClient, sess, space: str, tag: str, columns: List[Tuple[str, str]]) -> None:
     client.ensure_tag(sess, space=space, tag=tag, columns=columns)
-    _log.info("tag_created", space=space, tag=tag)
+    _log.info("tag_created space=%s, tag=%s", space, tag)
 
 
 def drop_tag(client: NebulaClient, sess, space: str, tag: str) -> None:
     client.drop_tag(sess, space=space, tag=tag)
-    _log.info("tag_dropped", space=space, tag=tag)
+    _log.info("tag_dropped space=%s, tag=%s", space, tag)
 
 
 def list_tags(client: NebulaClient, sess, space: str) -> List[Dict[str, Any]]:
@@ -79,12 +79,12 @@ def list_tags(client: NebulaClient, sess, space: str) -> List[Dict[str, Any]]:
 
 def create_edge_type(client: NebulaClient, sess, space: str, edge: str, columns: List[Tuple[str, str]]) -> None:
     client.ensure_edge(sess, space=space, edge=edge, columns=columns)
-    _log.info("edge_created", space=space, edge=edge)
+    _log.info("edge_created space=%s, edge=%s", space, edge)
 
 
 def drop_edge_type(client: NebulaClient, sess, space: str, edge: str) -> None:
     client.drop_edge_type(sess, space=space, edge=edge)
-    _log.info("edge_dropped", space=space, edge=edge)
+    _log.info("edge_dropped space=%s, edge=%s", space, edge)
 
 
 def list_edge_types(client: NebulaClient, sess, space: str) -> List[Dict[str, Any]]:
@@ -94,12 +94,12 @@ def list_edge_types(client: NebulaClient, sess, space: str) -> List[Dict[str, An
 
 def insert_vertex(client: NebulaClient, sess, space: str, vid: str, tag: str, props: Dict[str, Any]) -> None:
     client.insert_vertex(sess, space=space, vid=vid, tag=tag, props=props)
-    _log.info("vertex_inserted", space=space, vid=vid, tag=tag)
+    _log.info("vertex_inserted space=%s, vid=%s, tag=%s", space, vid, tag)
 
 
 def delete_vertex(client: NebulaClient, sess, space: str, vid: str, with_edges: bool = True) -> None:
     client.delete_vertex(sess, space=space, vid=vid, with_edges=with_edges)
-    _log.info("vertex_deleted", space=space, vid=vid, with_edges=with_edges)
+    _log.info("vertex_deleted space=%s, vid=%s, with_edges=%s", space, vid, with_edges)
 
 
 def fetch_vertex(client: NebulaClient, sess, space: str, vid: str, tag: str | None = None) -> List[Dict[str, Any]]:
@@ -109,12 +109,12 @@ def fetch_vertex(client: NebulaClient, sess, space: str, vid: str, tag: str | No
 
 def insert_edge(client: NebulaClient, sess, space: str, src: str, dst: str, edge: str, props: Dict[str, Any]) -> None:
     client.insert_edge(sess, space=space, src=src, dst=dst, edge=edge, props=props)
-    _log.info("edge_inserted", space=space, edge=edge, src=src, dst=dst)
+    _log.info("edge_inserted space=%s, edge=%s, src=%s, dst=%s", space, edge, src, dst)
 
 
 def delete_edge(client: NebulaClient, sess, space: str, src: str, dst: str, edge: str) -> None:
     client.delete_edge(sess, space=space, src=src, dst=dst, edge=edge)
-    _log.info("edge_deleted", space=space, edge=edge, src=src, dst=dst)
+    _log.info("edge_deleted space=%s, edge=%s, src=%s, dst=%s", space, edge, src, dst)
 
 
 def fetch_edge(client: NebulaClient, sess, space: str, src: str, dst: str, edge: str) -> List[Dict[str, Any]]:
@@ -276,10 +276,10 @@ def _unwrap_value(v) -> Any:
 
 def alter_tag(client: NebulaClient, sess, space: str, tag: str, columns: List[Tuple[str, str]]) -> None:
     client.alter_tag_add(sess, space=space, tag=tag, columns=columns)
-    _log.info("tag_altered", space=space, tag=tag)
+    _log.info("tag_altered space=%s, tag=%s", space, tag)
 
 
 def alter_edge_type(client: NebulaClient, sess, space: str, edge: str, columns: List[Tuple[str, str]]) -> None:
     client.alter_edge_add(sess, space=space, edge=edge, columns=columns)
-    _log.info("edge_altered", space=space, edge=edge)
+    _log.info("edge_altered space=%s, edge=%s", space, edge)
 

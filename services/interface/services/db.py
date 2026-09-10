@@ -105,5 +105,5 @@ async def log_audit(
             await sess.commit()
         return True
     except Exception as exc:
-        _log.error("audit_log_failed", actor=actor, action=action, resource=resource, error=str(exc))
+        _log.error("audit_log_failed actor=%s action=%s resource=%s error=%s", actor, action, resource, str(exc))
         return False
