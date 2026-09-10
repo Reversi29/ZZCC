@@ -14,8 +14,10 @@ String _computeInitialLocation() {
   if (kIsWeb) {
     try {
       final params = getAutoRegisterParams();
+      final p = getInitialPath();
       if (params.isNotEmpty) {
-        final p = getInitialPath();
+        result = p;
+      } else if (p != '/' && p.isNotEmpty) {
         result = p;
       }
     } catch (e, st) {
