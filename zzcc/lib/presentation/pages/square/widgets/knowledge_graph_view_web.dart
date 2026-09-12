@@ -63,7 +63,11 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
-        ..srcdoc = kGraphHtml;
+        ..srcdoc = kGraphHtml
+          .replaceAll('https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js',
+              '${html.window.location.origin}/static/echarts/echarts.min.js')
+          .replaceAll('https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js',
+              '${html.window.location.origin}/static/echarts/echarts-gl.min.js');
       iframe.onLoad.listen((_) {
         debugPrint('[KGView-Web] iframe onLoad');
         setState(() => _isLoading = false);
