@@ -490,11 +490,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
       // 3. 优先尝试服务器登录（403 时自动 sync-account）
       final chatRepo = getIt<ChatRepository>();
-      await chatRepo.login(
+      final serverUser = await chatRepo.login(
         username: uid,
         password: password,
         displayName: displayName,
       );
+
+      // 3.1 服务器不可达 — 离线模式，用 register() 创建本地账号（needsSync=true）
+      if (serverUser == null) {
+        await chatRepo.register(
+          uid: uid,
+          password: password,
+          displayName: displayName,
+        );
+      }
 
       // 4. 登录成功，更新 UI 状态并存储密码（下次 auto-login 可用于 sync）
       final userDataPath = path.join(configService.appDataPath, storedCiphertext);
