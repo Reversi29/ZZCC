@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:zzcc/core/services/config_service.dart';
 import 'package:zzcc/core/services/storage_service.dart';
@@ -432,7 +433,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             TextButton(
               onPressed: () {
                 Navigator.of(ctx).pop();
-                Navigator.of(ctx).pop();
+                context.go('/home');
               },
               child: const Text('确定'),
             ),
