@@ -1,2 +1,4 @@
 .env
 .env.bak.*
+# 部署期下载的 ECharts CDN 静态资源
+static/
