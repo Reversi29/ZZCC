@@ -12,6 +12,7 @@ class UserSettingsModel {
   final String brainApiKey;
   final String brainModel;
   final double brainTemperature;
+  final String brainProtocol;
 
   UserSettingsModel({
     this.customTheme,
@@ -22,6 +23,7 @@ class UserSettingsModel {
     this.brainApiKey = '',
     this.brainModel = 'qwen/qwen3.8-flash',
     this.brainTemperature = 0.3,
+    this.brainProtocol = 'openai',
   });
 
   UserSettingsModel copyWith({
@@ -33,6 +35,7 @@ class UserSettingsModel {
     String? brainApiKey,
     String? brainModel,
     double? brainTemperature,
+    String? brainProtocol,
   }) {
     return UserSettingsModel(
       customTheme: customTheme ?? this.customTheme,
@@ -43,6 +46,7 @@ class UserSettingsModel {
       brainApiKey: brainApiKey ?? this.brainApiKey,
       brainModel: brainModel ?? this.brainModel,
       brainTemperature: brainTemperature ?? this.brainTemperature,
+      brainProtocol: brainProtocol ?? this.brainProtocol,
     );
   }
 }

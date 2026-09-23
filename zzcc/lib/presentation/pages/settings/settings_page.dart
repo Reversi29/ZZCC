@@ -22,6 +22,7 @@ import 'package:zzcc/presentation/providers/font_provider.dart';
 import 'package:zzcc/presentation/providers/splash_provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:zzcc/core/services/storage_service.dart';
+import 'package:zzcc/data/repositories/chat_repository.dart';
 import 'package:path/path.dart' as path;
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:dio/dio.dart';
@@ -1047,6 +1048,19 @@ class _BrainSettingsCardState extends ConsumerState<_BrainSettingsCard> {
   bool _loading = true;
   bool _isTesting = false;
   String? _testResult;
+  String _protocol = 'openai';
+
+  static const List<Map<String, String>> _protocols = [
+    {'value': 'openai', 'label': 'OpenAI 兼容 (OpenAI / DeepSeek / Qwen / Ollama...)'},
+    {'value': 'anthropic', 'label': 'Anthropic (Claude)'},
+    {'value': 'gemini', 'label': 'Google Gemini'},
+  ];
+
+  static const Map<String, String> _protocolDefaults = {
+    'openai': 'https://api.openai.com/v1',
+    'anthropic': 'https://api.anthropic.com/v1',
+    'gemini': 'https://generativelanguage.googleapis.com',
+  };
 
   late final TextEditingController _apiBaseCtrl;
   late final TextEditingController _apiKeyCtrl;
@@ -1056,48 +1070,101 @@ class _BrainSettingsCardState extends ConsumerState<_BrainSettingsCard> {
   @override
   void initState() {
     super.initState();
-    _apiBaseCtrl = TextEditingController(text: _settings.brainApiBase);
-    _apiKeyCtrl = TextEditingController(text: _settings.brainApiKey);
-    _modelCtrl = TextEditingController(text: _settings.brainModel);
-    _temperatureCtrl =
-        TextEditingController(text: _settings.brainTemperature.toStringAsFixed(2));
+    _apiBaseCtrl = TextEditingController();
+    _apiKeyCtrl = TextEditingController();
+    _modelCtrl = TextEditingController();
+    _temperatureCtrl = TextEditingController();
     _load();
   }
 
   Future<void> _load() async {
     final user = ref.read(userProvider);
     final ct = user.userDataPath == null ? null : path.basename(user.userDataPath!);
-    if (ct == null) {
-      if (mounted) setState(() => _loading = false);
-      return;
-    }
     _ciphertext = ct;
+    // 尝试从本地 Hive 加载（仅当已登录）
+    if (ct != null) {
+      try {
+        final data = await getIt<UserSettingsRepository>().getSettings(ct);
+        if (data != null && mounted) {
+          _settings = data;
+          _apiBaseCtrl.text = data.brainApiBase;
+          _apiKeyCtrl.text = data.brainApiKey;
+          _modelCtrl.text = data.brainModel;
+          _temperatureCtrl.text = data.brainTemperature.toStringAsFixed(2);
+        }
+      } catch (_) {}
+    }
+    // 无论登录与否，都从后端拉取最新配置
     try {
-      final data = await getIt<UserSettingsRepository>().getSettings(ct);
-      if (data != null && mounted) {
-        _settings = data;
-        _apiBaseCtrl.text = data.brainApiBase;
-        _apiKeyCtrl.text = data.brainApiKey;
-        _modelCtrl.text = data.brainModel;
-        _temperatureCtrl.text = data.brainTemperature.toStringAsFixed(2);
+      final dio = Dio(BaseOptions(
+        baseUrl: getIt<ConfigService>().nebulaApiBaseUrl,
+        connectTimeout: const Duration(seconds: 10),
+      ));
+      final resp = await dio.get<Map<String, dynamic>>('brain/config');
+      final cfg = resp.data?['config'] as Map<String, dynamic>?;
+      if (cfg != null && mounted) {
+        final proto = (cfg['protocol'] as String?) ?? 'openai';
+        _protocol = proto;
+        final apiBase = (cfg['api_base'] as String?)?.isEmpty == true ? _settings.brainApiBase : cfg['api_base'] as String;
+        final model = (cfg['model'] as String?)?.isEmpty == true ? _settings.brainModel : cfg['model'] as String;
+        final temp = (cfg['temperature'] as num?)?.toDouble() ?? _settings.brainTemperature;
+        _apiBaseCtrl.text = apiBase;
+        _modelCtrl.text = model;
+        _temperatureCtrl.text = temp.toStringAsFixed(2);
       }
+      dio.close();
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
 
-  Future<void> _save({String? apiBase, String? apiKey, String? model, double? temperature}) async {
+  Future<void> _save({String? apiBase, String? apiKey, String? model, double? temperature, String? protocol}) async {
     final ct = _ciphertext;
-    if (ct == null) return;
+    if (protocol != null) _protocol = protocol;
     final next = _settings.copyWith(
       brainApiBase: apiBase,
       brainApiKey: apiKey,
       brainModel: model,
       brainTemperature: temperature,
+      brainProtocol: protocol,
     );
     _settings = next;
+    // 保存到本地 Hive（仅当已登录）
+    if (ct != null) {
+      try {
+        await getIt<UserSettingsRepository>().saveSettings(ct, next);
+      } catch (_) {}
+    }
+    // 同步到后端 brain_config.json，使推理引擎使用最新配置
     try {
-      await getIt<UserSettingsRepository>().saveSettings(ct, next);
+      final dio = Dio(BaseOptions(
+        baseUrl: getIt<ConfigService>().nebulaApiBaseUrl,
+        connectTimeout: const Duration(seconds: 10),
+      ));
+      await dio.post(
+        'brain/config',
+        data: {
+          'protocol': _protocol,
+          'api_base': _apiBaseCtrl.text.trim(),
+          'api_key': _apiKeyCtrl.text.trim(),
+          'model': _modelCtrl.text.trim(),
+          'temperature': double.tryParse(_temperatureCtrl.text),
+        },
+      );
+      dio.close();
     } catch (_) {}
+  }
+
+  void _onProtocolChanged(String value) {
+    setState(() {
+      _protocol = value;
+      // 切换协议时自动填充默认 Base URL（仅在用户未填或填的是另一个协议默认值时覆盖）
+      final cur = _apiBaseCtrl.text.trim();
+      final defaults = _protocolDefaults.entries.map((e) => e.value).toList();
+      if (cur.isEmpty || defaults.any((d) => cur == d || cur == d.replaceAll(RegExp(r'/$'), ''))) {
+        _apiBaseCtrl.text = _protocolDefaults[value]!;
+      }
+      _save(protocol: value);
+    });
   }
 
   Future<void> _testConnection() async {
@@ -1108,23 +1175,36 @@ class _BrainSettingsCardState extends ConsumerState<_BrainSettingsCard> {
     });
     try {
       final dio = Dio(BaseOptions(
-        baseUrl: _apiBaseCtrl.text.trim(),
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 15),
+        baseUrl: getIt<ConfigService>().nebulaApiBaseUrl,
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 30),
       ));
+      // 同步配置到后端（不需要 auth），确保 test 用最新配置
       await dio.post(
-        '/chat/completions',
+        'brain/config',
         data: {
+          'protocol': _protocol,
+          'api_base': _apiBaseCtrl.text.trim(),
+          'api_key': _apiKeyCtrl.text.trim(),
           'model': _modelCtrl.text.trim(),
-          'messages': [
-            {'role': 'user', 'content': 'ping'},
-          ],
-          'temperature':
-              double.tryParse(_temperatureCtrl.text) ?? _settings.brainTemperature,
+          'temperature': double.tryParse(_temperatureCtrl.text),
         },
-        options: Options(headers: {'Authorization': 'Bearer ${_apiKeyCtrl.text.trim()}'}),
       );
-      if (mounted) setState(() => _testResult = '连接成功');
+      // 通过后端代理测试连接，避免浏览器 CORS 限制
+      final resp = await dio.post<Map<String, dynamic>>(
+        'brain/config/test',
+      );
+      final ok = resp.data?['ok'] == true;
+      if (mounted) {
+        if (ok) {
+          final reply = resp.data?['reply'] ?? '';
+          setState(() => _testResult = '连接成功${reply.isNotEmpty ? ' ✓' : ''}');
+        } else {
+          final err = resp.data?['error'] ?? '未知错误';
+          setState(() => _testResult = '连接失败: $err');
+        }
+      }
+      dio.close();
     } catch (e) {
       if (mounted) setState(() => _testResult = '连接失败: $e');
     } finally {
@@ -1144,17 +1224,6 @@ class _BrainSettingsCardState extends ConsumerState<_BrainSettingsCard> {
   @override
   Widget build(BuildContext context) {
 
-    if (_ciphertext == null) {
-      return Card(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        elevation: 1,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: const Padding(
-          padding: EdgeInsets.all(12),
-          child: Text('Brain AI 云端模型：请先登录用户'),
-        ),
-      );
-    }
     if (_loading) {
       return Card(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -1178,6 +1247,17 @@ class _BrainSettingsCardState extends ConsumerState<_BrainSettingsCard> {
           children: [
             const Text('Brain AI 云端模型',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: _protocol,
+              onChanged: (v) => _onProtocolChanged(v ?? 'openai'),
+              decoration: const InputDecoration(
+                  labelText: 'API 协议', border: OutlineInputBorder()),
+              items: _protocols.map((p) => DropdownMenuItem(
+                    value: p['value']!,
+                    child: Text(p['label']!, style: const TextStyle(fontSize: 13)),
+                  )).toList(),
+            ),
             const SizedBox(height: 10),
             TextField(
               controller: _apiBaseCtrl,

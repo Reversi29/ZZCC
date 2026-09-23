@@ -2,9 +2,8 @@
 //
 // Brain AI chat page — sends user messages to /brain/ask and renders
 // cognition results as chat bubbles. Conversation history is kept in-memory.
-// Requires chat authentication (Authorization: Bearer <token>).
+// Brain AI is a global system service, no login required.
 
-import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
@@ -12,8 +11,6 @@ import 'package:dio/dio.dart';
 import '../../../core/services/config_service.dart';
 import '../../../core/di/service_locator.dart';
 import '../../../data/models/chat_message.dart';
-import '../../../data/models/chat_user.dart';
-import '../../../data/repositories/chat_repository.dart';
 import '../../widgets/chat/message_bubble.dart';
 
 /// A single turn in the brain conversation.
@@ -50,48 +47,26 @@ class _BrainChatPageState extends State<BrainChatPage> {
   bool _isThinking = false;
   String? _error;
 
-  ChatRepository? _chatRepo;
-  StreamSubscription? _authSub;
-
   late final Dio _dio;
 
   @override
   void initState() {
     super.initState();
     final config = getIt<ConfigService>();
-    _chatRepo = getIt<ChatRepository>();
 
-    // Use chat auth token — /brain/* requires Authorization: Bearer
+    // Brain AI 是全局系统服务，不需要 chat auth token
     _dio = Dio(BaseOptions(
       baseUrl: config.nebulaApiBaseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 60),
       headers: {'Content-Type': 'application/json'},
     ));
-
-    // Listen for auth changes so token stays fresh
-    _authSub = _chatRepo!.authStateStream.listen((_) => _refreshHeaders());
-    _refreshHeaders();
   }
 
-  /// Sync Dio headers with current chat auth token.
-  void _refreshHeaders() {
-    final token = _chatRepo?.currentUser?.accessToken;
-    if (token != null && token.isNotEmpty) {
-      _dio.options.headers['Authorization'] = 'Bearer $token';
-    } else {
-      _dio.options.headers.remove('Authorization');
-    }
-  }
-
-  bool get _isAuthed {
-    final token = _chatRepo?.currentUser?.accessToken;
-    return token != null && token.isNotEmpty;
-  }
+  bool get _isAuthed => true;  // Brain AI 无需登录
 
   @override
   void dispose() {
-    _authSub?.cancel();
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _focusNode.dispose();
@@ -114,11 +89,6 @@ class _BrainChatPageState extends State<BrainChatPage> {
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty || _isThinking) return;
-
-    if (!_isAuthed) {
-      _showLoginPrompt();
-      return;
-    }
 
     _inputCtrl.clear();
     _focusNode.requestFocus();
@@ -175,9 +145,6 @@ class _BrainChatPageState extends State<BrainChatPage> {
       setState(() {
         _isThinking = false;
         _error = msg;
-        if (resp?.statusCode == 401) {
-          _showLoginPrompt();
-        }
       });
     } catch (e) {
       setState(() {
@@ -188,19 +155,7 @@ class _BrainChatPageState extends State<BrainChatPage> {
   }
 
   void _showLoginPrompt() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.lock_outline),
-            const SizedBox(width: 8),
-            const Expanded(child: Text('需要先登录才能使用 Brain AI')),
-          ],
-        ),
-        backgroundColor: Colors.orange,
-      ),
-    );
+    // Brain AI 无需登录，保留方法以兼容旧调用
   }
 
   @override
@@ -219,21 +174,19 @@ class _BrainChatPageState extends State<BrainChatPage> {
           ],
         ),
         actions: [
-          // Auth status indicator
+          // Brain AI 就绪状态指示
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             decoration: BoxDecoration(
-              color: _isAuthed
-                  ? Colors.green.withValues(alpha: 0.15)
-                  : Colors.orange.withValues(alpha: 0.15),
+              color: Colors.green.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(8),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Text(
-              _isAuthed ? '已认证' : '未登录',
+              '就绪',
               style: TextStyle(
                 fontSize: 11,
-                color: _isAuthed ? Colors.green : Colors.orange,
+                color: Colors.green,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -273,31 +226,6 @@ class _BrainChatPageState extends State<BrainChatPage> {
   }
 
   Widget _buildConversation() {
-    if (!_isAuthed && _turns.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.lock_outline, size: 56, color: Colors.orange[300]),
-            const SizedBox(height: 16),
-            Text('请先登录', style: TextStyle(fontSize: 18, color: Colors.orange[700])),
-            const SizedBox(height: 8),
-            Text(
-              'Brain AI 需要账号认证才能使用',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: Colors.grey[500]),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () => _chatRepo?.logout(), // triggers login flow
-              icon: const Icon(Icons.login),
-              label: const Text('去登录'),
-            ),
-          ],
-        ),
-      );
-    }
-
     if (_turns.isEmpty && !_isThinking) {
       return Center(
         child: Column(
