@@ -36,6 +36,14 @@ class ReasoningEngine:
         self.l2_threshold = l2_threshold
         self.llm_api_key = llm_api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("QCLAW_LLM_API_KEY", "")
         self.llm_model = llm_model or os.environ.get("OPENAI_MODEL") or os.environ.get("QCLAW_LLM_MODEL") or "qwen/qwen3.8-flash"
+        # API 协议类型：openai | anthropic | gemini，决定 endpoint 路径和请求/响应结构
+        self.llm_protocol = (
+            os.environ.get("QCLAW_LLM_PROTOCOL")
+            or os.environ.get("OPENAI_PROTOCOL")
+            or "openai"
+        ).lower().strip()
+        if self.llm_protocol not in ("openai", "anthropic", "gemini"):
+            self.llm_protocol = "openai"
         # LLM 端点/温度：默认从环境变量取，可被 update_llm_config 覆盖
         self.llm_api_base = (
             os.environ.get("OPENAI_BASE_URL")
@@ -64,6 +72,7 @@ class ReasoningEngine:
         model: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: Optional[float] = None,
+        protocol: Optional[str] = None,
     ) -> dict:
         """动态更新 L3 LLM 配置（不重启进程，立即对后续推理生效）。
 
@@ -75,17 +84,22 @@ class ReasoningEngine:
             self.llm_model = model
         if api_base is not None:
             self.llm_api_base = api_base.rstrip("/")
+        if protocol is not None:
+            p = protocol.lower().strip()
+            if p in ("openai", "anthropic", "gemini"):
+                self.llm_protocol = p
         if temperature is not None:
             try:
                 self.llm_temperature = float(temperature)
             except (TypeError, ValueError):
                 self.llm_temperature = 0.3
         logger.info(
-            "llm_config_updated model=%s base=%s temp=%s key_set=%s",
+            "llm_config_updated model=%s base=%s temp=%s key_set=%s protocol=%s",
             self.llm_model,
             self.llm_api_base,
             self.llm_temperature,
             bool(self.llm_api_key),
+            self.llm_protocol,
         )
         return {
             "ok": True,
@@ -93,6 +107,7 @@ class ReasoningEngine:
             "api_base": self.llm_api_base,
             "temperature": self.llm_temperature,
             "has_api_key": bool(self.llm_api_key),
+            "protocol": self.llm_protocol,
         }
 
     async def test_llm_connection(self) -> dict:
@@ -330,16 +345,35 @@ class ReasoningEngine:
 请分析后直接返回 JSON。"""
 
     async def _call_llm(self, prompt: str, timeout: float = 30.0) -> str:
-        """调用 OpenAI 兼容 API（支持 OpenAI/Claude proxy/Ollama/OpenRouter 等）。
+        """调用 LLM（支持 openai / anthropic / gemini 三种协议）。
 
-        端点、模型、温度均取自实例字段，可通过 update_llm_config() 动态覆盖。
+        端点、模型、温度、协议均取自实例字段，可通过 update_llm_config() 动态覆盖。
+        api_base 可以是：
+          - 完整端点（如 https://api.openai.com/v1/chat/completions）
+          - 前缀（如 https://api.openai.com/v1），系统按协议自动补全
         """
         import httpx
 
         base_url = self.llm_api_base.rstrip("/")
+        proto = getattr(self, "llm_protocol", "openai") or "openai"
+
+        if proto == "anthropic":
+            return await self._call_anthropic(prompt, base_url, timeout)
+        if proto == "gemini":
+            return await self._call_gemini(prompt, base_url, timeout)
+        return await self._call_openai(prompt, base_url, timeout)
+
+    async def _call_openai(self, prompt: str, base_url: str, timeout: float) -> str:
+        """OpenAI 兼容协议（OpenAI / OpenRouter / Ollama / DeepSeek / Qwen 等）。"""
+        import httpx
+
+        # 自动补全：若用户已填 /chat/completions 则不重复
+        url = base_url
+        if not url.endswith("/chat/completions"):
+            url = f"{url}/chat/completions"
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
-                f"{base_url}/chat/completions",
+                url,
                 headers={
                     "Authorization": f"Bearer {self.llm_api_key}",
                     "Content-Type": "application/json",
@@ -353,6 +387,72 @@ class ReasoningEngine:
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
+
+    async def _call_anthropic(self, prompt: str, base_url: str, timeout: float) -> str:
+        """Anthropic Messages API（Claude 原生，默认 https://api.anthropic.com/v1）。"""
+        import httpx
+
+        # 默认端点：/v1/messages；若 base_url 已以 /messages 结尾则不再追加
+        if base_url.endswith("/messages"):
+            url = base_url
+        else:
+            url = f"{base_url}/messages"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "x-api-key": self.llm_api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.llm_model,
+                    "max_tokens": 1024,
+                    "temperature": self.llm_temperature,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            parts = data.get("content", [])
+            if parts and isinstance(parts, list) and isinstance(parts[0], dict):
+                return parts[0].get("text", "")
+            return ""
+
+    async def _call_gemini(self, prompt: str, base_url: str, timeout: float) -> str:
+        """Google Gemini generateContent API。
+
+        默认 base_url: https://generativelanguage.googleapis.com
+        系统自动拼成 /v1beta/models/{model}:generateContent
+        """
+        import httpx
+
+        # 自动拼完整端点
+        if base_url.endswith(":generateContent"):
+            url = base_url
+        elif base_url.endswith("/v1beta") or base_url.endswith("/v1"):
+            url = f"{base_url}/models/{self.llm_model}:generateContent"
+        else:
+            url = f"{base_url}/v1beta/models/{self.llm_model}:generateContent"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "x-goog-api-key": self.llm_api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": self.llm_temperature},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for cand in data.get("candidates", []):
+                for p in cand.get("content", {}).get("parts", []):
+                    if isinstance(p, dict) and "text" in p:
+                        return p["text"]
+            return ""
 
     def _parse_llm_response(self, response: str, signal: NeuralSignal) -> Optional[CognitionResult]:
         """解析 LLM 返回的 JSON。"""

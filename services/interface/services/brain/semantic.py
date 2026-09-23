@@ -249,8 +249,11 @@ class SemanticMemory:
                 "BrainDecision.confidence AS confidence, BrainDecision.outcome AS outcome, "
                 "BrainDecision.reasoning AS reasoning, BrainDecision.created_at AS created_at, "
                 "BrainDecision.updated_at AS updated_at, BrainDecision.cognition AS cognition;" if decision else None,
-                f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD $$ AS decision_vertex;',
-                f'GO FROM "{vid}" OVER {RELATION_EDGE} YIELD EDGE AS edge;',
+                f'GO FROM "{vid}" OVER {RELATION_EDGE} '
+                'YIELD RELATES_TO.relation_type AS relation_type, '
+                'RELATES_TO.signal_id AS signal_id, '
+                'RELATES_TO.confidence AS confidence, '
+                'RELATES_TO.summary AS summary;',
             ]:
                 if not nql:
                     continue

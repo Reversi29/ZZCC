@@ -23,12 +23,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from models.brain import Action, CognitionResult, NeuralSignal
-from routers.auth import get_current_user_dep
+# (Brain AI 端点不需要用户鉴权，是全局系统服务)
 from services.brain import (
     action_executor as ae,
     brain_core,
@@ -52,6 +52,9 @@ _CONFIG_FILE = os.environ.get(
 def _load_brain_config() -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
         "provider": "openai-compatible",
+        "protocol": os.environ.get("QCLAW_LLM_PROTOCOL")
+        or os.environ.get("OPENAI_PROTOCOL")
+        or "openai",
         "api_base": os.environ.get("OPENAI_BASE_URL")
         or os.environ.get("QCLAW_LLM_BASE_URL")
         or "https://api.openai.com/v1",
@@ -76,6 +79,15 @@ def _load_brain_config() -> Dict[str, Any]:
                         cfg[k] = v
     except Exception:
         pass
+    # 兼容旧字段：若 protocol 未设但有 provider，用 provider 推断
+    if not cfg.get("protocol") and cfg.get("provider"):
+        p = str(cfg["provider"]).lower()
+        if "anthropic" in p or "claude" in p:
+            cfg["protocol"] = "anthropic"
+        elif "gemini" in p or "google" in p:
+            cfg["protocol"] = "gemini"
+        else:
+            cfg["protocol"] = "openai"
     return cfg
 
 
@@ -91,6 +103,15 @@ def _save_brain_config(cfg: Dict[str, Any]) -> None:
 
 
 brain_config: Dict[str, Any] = _load_brain_config()
+
+# 启动时将持久化配置同步到推理引擎实例
+rsn.engine.update_llm_config(
+    api_key=brain_config.get("api_key") or None,
+    model=brain_config.get("model") or "qwen/qwen3.8-flash",
+    api_base=brain_config.get("api_base") or None,
+    temperature=brain_config.get("temperature"),
+    protocol=brain_config.get("protocol"),
+)
 
 R = Dict[str, Any]
 
@@ -143,17 +164,18 @@ class RuleCreateRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════
 
 class BrainConfigUpdate(BaseModel):
-    provider: Optional[str] = Field(None, description="云端模型提供商")
-    api_base: Optional[str] = Field(None, description="OpenAI 兼容 Base URL")
+    provider: Optional[str] = Field(None, description="云端模型提供商（兼容旧字段）")
+    protocol: Optional[str] = Field(
+        None, description="API 协议类型：openai | anthropic | gemini"
+    )
+    api_base: Optional[str] = Field(None, description="API Base URL")
     api_key: Optional[str] = Field(None, description="API Key")
     model: Optional[str] = Field(None, description="模型名")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
 
 
 @router.get("/config")
-async def get_brain_config(
-    user: dict = Depends(get_current_user_dep),
-):
+async def get_brain_config():
     cfg = dict(brain_config)
     key = cfg.pop("api_key", "")
     return {
@@ -166,7 +188,6 @@ async def get_brain_config(
 @router.post("/config")
 async def update_brain_config(
     request: BrainConfigUpdate,
-    user: dict = Depends(get_current_user_dep),
 ):
     updates = request.model_dump(exclude_none=True)
     brain_config.update(updates)
@@ -176,6 +197,7 @@ async def update_brain_config(
         model=brain_config.get("model") or "qwen/qwen3.8-flash",
         api_base=brain_config.get("api_base") or None,
         temperature=brain_config.get("temperature"),
+        protocol=brain_config.get("protocol"),
     )
     # 不回显 api_key 明文，仅告知是否已配置
     masked = {k: v for k, v in brain_config.items() if k != "api_key"}
@@ -184,9 +206,7 @@ async def update_brain_config(
 
 
 @router.post("/config/test")
-async def test_brain_config(
-    user: dict = Depends(get_current_user_dep),
-):
+async def test_brain_config():
     result = await rsn.engine.test_llm_connection()
     return {"ok": bool(result.get("ok")), **result}
 
@@ -194,9 +214,10 @@ async def test_brain_config(
 @router.post("/ask")
 async def ask(
     request: AskRequest,
-    user: dict = Depends(get_current_user_dep),
 ):
     """主动咨询：同步推理并返回结果。
+
+    Brain AI 是全局系统服务，不需要用户登录即可使用。
 
     流程：
     1. 构造 NeuralSignal（从 request.signal 或 question 推断）
@@ -230,7 +251,7 @@ async def ask(
         raise HTTPException(400, "必须提供 question 或 signal")
 
     # 2. 工作记忆 + 长期/情景/技能记忆检索
-    session_id = request.session_id or f"ask_{user.get('id', 'anon')}_{signal.id}"
+    session_id = request.session_id or f"ask_anon_{signal.id}"
     working_memory = mem.working_memory.get_context(session_id)
 
     # 3. 推理
@@ -282,7 +303,6 @@ async def ask(
 @router.post("/observe")
 async def observe(
     request: ObserveRequest,
-    user: dict = Depends(get_current_user_dep),
 ):
     """被动感知：接收信号。auto_process=True 时同步推理，否则写队列。"""
     from services.db import managed_session
@@ -317,7 +337,6 @@ async def observe(
 @router.post("/process-queue")
 async def process_queue(
     limit: int = Query(20, ge=1, le=100),
-    user: dict = Depends(get_current_user_dep),
 ):
     """处理信号队列。手动触发或后台 cron。"""
     from services.db import managed_session
@@ -362,7 +381,6 @@ async def process_queue(
 
 @router.get("/status")
 async def status(
-    user: dict = Depends(get_current_user_dep),
 ):
     """系统状态。"""
     from services.db import managed_session
@@ -392,7 +410,6 @@ async def status(
 
 @router.get("/stats")
 async def stats(
-    user: dict = Depends(get_current_user_dep),
 ):
     """推理统计。"""
     return {"ok": True, "stats": rsn.engine.stats()}
@@ -403,7 +420,6 @@ async def decisions(
     limit: int = Query(50, ge=1, le=500),
     signal_type: Optional[str] = Query(None),
     decision: Optional[str] = Query(None),
-    user: dict = Depends(get_current_user_dep),
 ):
     """决策日志。"""
     from services.db import managed_session
@@ -418,7 +434,6 @@ async def get_memory(
     type: Optional[str] = Query(None),
     module: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
-    user: dict = Depends(get_current_user_dep),
 ):
     """查询长期记忆。"""
     from services.db import managed_session
@@ -431,7 +446,6 @@ async def get_memory(
 @router.post("/memory")
 async def write_memory(
     request: MemoryWriteRequest,
-    user: dict = Depends(get_current_user_dep),
 ):
     """写入/更新长期记忆。"""
     from services.db import managed_session
@@ -453,7 +467,6 @@ async def delete_memory(
     type: str = Query(...),
     module: str = Query(...),
     key: str = Query(...),
-    user: dict = Depends(get_current_user_dep),
 ):
     """删除记忆条目。"""
     from services.db import managed_session
@@ -467,7 +480,6 @@ async def delete_memory(
 @router.post("/learn")
 async def learn(
     request: LearnRequest,
-    user: dict = Depends(get_current_user_dep),
 ):
     """反馈学习：标记决策正确/错误。"""
     from services.db import managed_session
@@ -514,7 +526,6 @@ async def learn(
 
 @router.get("/semantic/status")
 async def semantic_status(
-    user: dict = Depends(get_current_user_dep),
 ):
     """语义记忆（NebulaGraph）状态。"""
     return sem.semantic_memory.status()
@@ -522,7 +533,6 @@ async def semantic_status(
 
 @router.post("/semantic/ensure-schema")
 async def semantic_ensure_schema(
-    user: dict = Depends(get_current_user_dep),
 ):
     """创建/校验语义记忆 space、tag、edge。"""
     return await sem.semantic_memory.ensure_schema()
@@ -530,7 +540,6 @@ async def semantic_ensure_schema(
 
 @router.get("/core/status")
 async def brain_core_status(
-    user: dict = Depends(get_current_user_dep),
 ):
     """常驻类脑内核状态。"""
     return brain_core.status()
@@ -538,7 +547,6 @@ async def brain_core_status(
 
 @router.post("/core/start")
 async def brain_core_start(
-    user: dict = Depends(get_current_user_dep),
 ):
     """启动常驻 tick 循环。"""
     return await brain_core.start()
@@ -546,7 +554,6 @@ async def brain_core_start(
 
 @router.post("/core/stop")
 async def brain_core_stop(
-    user: dict = Depends(get_current_user_dep),
 ):
     """停止常驻 tick 循环。"""
     return await brain_core.stop()
@@ -555,7 +562,6 @@ async def brain_core_stop(
 @router.post("/core/tick")
 async def brain_core_tick(
     limit: int = Query(20, ge=1, le=100),
-    user: dict = Depends(get_current_user_dep),
 ):
     """手动触发一次常驻内核处理。"""
     brain_core.batch_limit = limit
@@ -569,7 +575,6 @@ async def brain_core_tick(
 @router.get("/rules")
 async def list_rules(
     module: Optional[str] = Query(None),
-    user: dict = Depends(get_current_user_dep),
 ):
     """列出所有规则。"""
     rules = rls.list_rules(module=module)
@@ -593,7 +598,6 @@ async def list_rules(
 @router.post("/rules")
 async def create_rule(
     request: RuleCreateRequest,
-    user: dict = Depends(get_current_user_dep),
 ):
     """创建规则（条件表达式字符串形式）。"""
     from models.brain import BrainRule
@@ -623,7 +627,6 @@ async def create_rule(
 async def toggle_rule(
     rule_id: str,
     enabled: bool = Query(...),
-    user: dict = Depends(get_current_user_dep),
 ):
     """启用/禁用规则。"""
     ok = rls.set_enabled(rule_id, enabled)
