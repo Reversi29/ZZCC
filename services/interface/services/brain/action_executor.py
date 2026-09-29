@@ -65,6 +65,33 @@ async def _exec_no_action(action: Action, cognition: CognitionResult, db) -> dic
     }
 
 
+async def _exec_chat_reply(action: Action, cognition: CognitionResult, db) -> dict:
+    """闲聊回复：仅记录文本，不执行业务操作。
+
+    LLM 将回复文本放在 action.reason（prompt 约定）。
+    """
+    reply_text = action.reason or action.params.get("reply_text", "")
+    return {
+        "ok": True,
+        "action": "chat_reply",
+        "reply_text": reply_text,
+        "reasoning": cognition.reasoning,
+        "executed_at": _executed_at(),
+    }
+
+
+async def _exec_reply(action: Action, cognition: CognitionResult, db) -> dict:
+    """知识查询回复：返回文本答案。"""
+    reply_text = action.reason or action.params.get("reply_text", "")
+    return {
+        "ok": True,
+        "action": "reply",
+        "reply_text": reply_text,
+        "reasoning": cognition.reasoning,
+        "executed_at": _executed_at(),
+    }
+
+
 async def _exec_approve(action: Action, cognition: CognitionResult, db) -> dict:
     """批准/自动通过。仅记录决策，实际业务变更需外部集成。"""
     return {
@@ -178,6 +205,8 @@ register_executor("reject", _exec_reject)
 register_executor("escalate", _exec_escalate)
 register_executor("send_notification", _exec_send_notification)
 register_executor("trigger_flow", _exec_trigger_flow)
+register_executor("chat_reply", _exec_chat_reply)
+register_executor("reply", _exec_reply)
 
 
 # ═══════════════════════════════════════════════════════════

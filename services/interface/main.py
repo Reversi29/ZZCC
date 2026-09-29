@@ -6,6 +6,7 @@ Entry point. Application wiring lives here; business logic in routers/services.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging as _logging
 
 import json
 import os
@@ -21,6 +22,9 @@ from middleware.rate_limit import setup_middleware
 from modules.nebula_client import NebulaClient, set_client
 
 _log = structlog.get_logger()
+
+# uvicorn 启动时会把 root logger 设为 WARNING，导致 brain 的 INFO 日志被丢弃。
+# 需在 lifespan 里（uvicorn 启动后）重新设置。
 
 
 async def _init_plugin_system(app: FastAPI) -> None:
@@ -102,6 +106,17 @@ async def _init_plugin_system(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+
+    # uvicorn 在启动后将 root logger 重置为 WARNING，这里需重新拉低 brain 相关 logger 到 INFO，
+    # 否则 pre_web_search / web_search_provider 等关键日志全部看不到。
+    _brain_handler = _logging.StreamHandler()
+    _brain_handler.setFormatter(_logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    for _name in ("brain", "brain.reasoning", "brain.web_search", "brain.semantic", "brain.coordinator"):
+        _lg = _logging.getLogger(_name)
+        _lg.setLevel(_logging.INFO)
+        _lg.propagate = False
+        if not any(isinstance(h, _logging.StreamHandler) for h in _lg.handlers):
+            _lg.addHandler(_brain_handler)
 
     _log.info("nebula_connect", host=settings.nebula.host, port=settings.nebula.port)
 

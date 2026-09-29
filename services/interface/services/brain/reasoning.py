@@ -15,8 +15,22 @@ from typing import Any, Dict, List, Optional
 from models.brain import Action, CognitionResult, NeuralSignal
 from services.brain import memory as mem
 from services.brain import rules as rules_mod
+from services.brain.coordinator import RegionCoordinator, RegionResult, coordinator as global_coordinator
+from services.brain.compute_budget import ComputeBudget, Intent
+from services.brain.semantic import SemanticMemory
+from services.brain.broker import broker as broker_mod
 
 logger = logging.getLogger("brain.reasoning")
+
+# 意图提示词：注入 LLM prompt，让 LLM 知道当前信号类型
+_INTENT_HINTS = {
+    "business": "# 场景：业务请求（审批/报销/采购）。请分析信号内容，判断是否合理，给出审批决策。",
+    "alert": '# 场景：告警/异常。信号表示系统错误或风险事件。请评估严重程度，决定是否升级人工处理。',
+    "query": '# 场景：知识查询。用户提出问题，请基于上下文回答。decision 用 "no_action"，action type 用 "reply"，reason 填写回答内容。',
+    "chitchat": '# 场景：闲聊/问候。用户在进行非业务对话。请友好回复。decision 用 "chat"，action type 用 "chat_reply"，reason 填写你的回复文本。',
+    "system": "# 场景：系统内部事件。请评估是否需要处理，通常 no_action 即可。",
+    "noise": "# 场景：噪声信号。通常 no_action 即可。",
+}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -65,6 +79,11 @@ class ReasoningEngine:
             "l3_calls": 0, "l3_hits": 0,
             "total": 0,
         }
+        # 新架构：脑区协调器 + 算力预算
+        self.coordinator = RegionCoordinator()
+        self.compute_budget = ComputeBudget()
+        self.semantic_memory = SemanticMemory()
+        self._register_regions()
 
     def update_llm_config(
         self,
@@ -127,45 +146,215 @@ class ReasoningEngine:
         db,
         memory_context: Optional[Dict[str, Any]] = None,
     ) -> CognitionResult:
-        """主入口：按 L1 → L2 → L3 递进推理。"""
+        """主入口：新架构——并行脑区 + 融合。
+
+        流程：
+        1. 丘脑分类信号意图（business/alert/query/chitchat/system/noise）
+        2. 算力预算按意图分配（决定哪些脑区激活）
+        3. 预取：query 意图时先调 web_search（供 LLM prompt 增强）
+        4. 各脑区并行执行（rule/statistical/llm/semantic/episodic/web_search）
+        5. 融合：加权投票 + 冲突仲裁 + 共识增强
+        """
         self._stats["total"] += 1
         memory_context = memory_context or {}
 
-        # L1: 规则引擎
-        l1 = await self._rule_reasoning(signal, memory_context)
+        # 1. 分类
+        intent = self._classify_signal(signal)
+        # 2. 预算分配
+        plan = self.compute_budget.allocate(intent, urgency=signal.urgency)
+        # 3. 预取：query 意图时先调 web_search，结果放入 context 供 LLM 使用
+        #    其他意图 web_search_region 会直接跳过，但 coordinator 仍会把 region 注册进去
+        pre_web_search = None
+        if intent == Intent.QUERY and plan.get("web_search") and plan["web_search"].allowed:
+            try:
+                import services.brain.web_search as ws
+                payload = signal.payload or {}
+                query = (payload.get("question") or payload.get("text") or payload.get("message") or "").strip()
+                if query and len(query) >= 2:
+                    print(f"[brain] pre_web_search START query={query[:60]!r}", flush=True)
+                    pre_web_search = await ws.search(query=query, max_results=5)
+                    if pre_web_search.ok:
+                        print(f"[brain] pre_web_search OK results={len(pre_web_search.results)} provider={pre_web_search.provider} elapsed={pre_web_search.elapsed_ms}ms", flush=True)
+                        for r in pre_web_search.results[:3]:
+                            print(f"  - {r.title[:70]} | {r.url[:70]}", flush=True)
+                    else:
+                        print(f"[brain] pre_web_search FAILED error={pre_web_search.error}", flush=True)
+            except Exception as e:
+                print(f"[brain] pre_web_search EXCEPTION {type(e).__name__}: {e}", flush=True)
+                logger.warning("pre_web_search failed: %s", str(e))
+        # 4. 并行执行 + 融合
+        context = {
+            "working_memory": working_memory,
+            "memory_context": memory_context,
+            "db": db,
+            "intent": intent.value,
+            "pre_web_search": pre_web_search.to_text(max_results=5) if pre_web_search and pre_web_search.ok else None,
+        }
+        result = await self.coordinator.run(signal, context, plan=plan)
+
+        # 统计
         self._stats["l1_calls"] += 1
-        if l1 and l1.confidence >= self.l1_threshold:
-            self._stats["l1_hits"] += 1
-            l1.signal_id = signal.id
-            l1.reasoning_level = 1
-            return l1
-
-        # L2: 统计推理
-        l2 = await self._statistical_reasoning(signal, working_memory, db, memory_context)
         self._stats["l2_calls"] += 1
-        if l2 and l2.confidence >= self.l2_threshold:
-            self._stats["l2_hits"] += 1
-            l2.signal_id = signal.id
-            l2.reasoning_level = 2
-            return l2
-
-        # L3: LLM 推理
-        l3 = await self._llm_reasoning(signal, working_memory, memory_context)
         self._stats["l3_calls"] += 1
-        if l3:
+        # 命中判定（任一脑区产出了 result）
+        if result.confidence > 0:
+            self._stats["l1_hits"] += 1
+            self._stats["l2_hits"] += 1
             self._stats["l3_hits"] += 1
-            l3.signal_id = signal.id
-            l3.reasoning_level = 3
-            return l3
 
-        # 兜底
-        return CognitionResult(
-            signal_id=signal.id,
-            reasoning_level=1,
-            confidence=0.0,
-            decision="no_action",
-            reasoning="所有层级推理均无结论",
+        # 记录预算使用
+        self.compute_budget.record("rule", time_ms=0, tokens=0)
+        self.compute_budget.record("llm", time_ms=0, tokens=0)
+        report = self.compute_budget.report(intent, urgency=signal.urgency)
+        result.memory_updates["_budget_report"] = report.to_dict()
+
+        return result
+
+    def _classify_signal(self, signal: NeuralSignal) -> Intent:
+        """基于信号内容分类意图。
+
+        优先级：type 字段 > payload 关键词 > 默认 business
+        """
+        sig_type = (signal.type or "").lower()
+        payload = signal.payload or {}
+        text = " ".join([
+            str(payload.get("question", "")),
+            str(payload.get("text", "")),
+            str(payload.get("message", "")),
+        ]).strip().lower()
+
+        # 按 signal.type 分类
+        if sig_type in ("alert", "alarm", "anomaly", "threshold_breach", "error", "failed"):
+            return Intent.ALERT
+        if sig_type in ("noise", "heartbeat", "ping"):
+            return Intent.NOISE
+        if sig_type in ("system", "healthcheck", "internal"):
+            return Intent.SYSTEM
+        if sig_type in ("query", "knowledge", "search", "lookup"):
+            return Intent.QUERY
+
+        # 按文本关键词分类
+        if not text or len(text) < 2:
+            return Intent.NOISE
+
+        # 告警关键词
+        alert_kw = ("告警", "告警", "异常", "失败", "错误", "超时", "error", "failed", "timeout", "crash")
+        if any(k in text for k in alert_kw):
+            return Intent.ALERT
+
+        # 闲聊关键词（短且无业务意图）
+        chat_kw = ("你好", "hello", "hi", "哈喽", "早上好", "下午好", "晚上好", "早安", "晚安", "在吗", "谢谢", "好的")
+        if any(text.startswith(k) or text == k for k in chat_kw):
+            return Intent.CHITCHAT
+
+        # 查询关键词（中英文）
+        query_kw = (
+            "是什么", "什么", "怎么", "如何", "为什么", "什么是", "是谁", "哪", "哪里", "哪个", "何时", "何时", "多少钱",
+            "why", "what", "how", "who", "where", "when", "which", "whose", "whose", "what is", "what's", "what do",
+            "who is", "who won", "who are", "where is", "where are", "when is", "when was", "when did",
+            "tell me", "search", "find", "look up",
         )
+        if any(text.startswith(k) or text.lower().startswith(k) for k in query_kw):
+            return Intent.QUERY
+
+        # 业务关键词
+        biz_kw = ("审批", "报销", "采购", "申请", "合同", "预算", "invoice", "purchase", "approval", "申请", "报销")
+        if any(k in text for k in biz_kw):
+            return Intent.BUSINESS
+
+        # 短文本默认闲聊，长文本默认业务
+        if len(text) <= 10 and not any(c.isalnum() for c in text if c not in " "):
+            return Intent.CHITCHAT
+
+        return Intent.BUSINESS
+
+    def _register_regions(self) -> None:
+        """注册各脑区到协调器。"""
+        # Rule 脑区（L1 规则）
+        async def rule_region(signal, context, budget):
+            self._stats["l1_calls"] += 1
+            result = await self._rule_reasoning(signal, context.get("memory_context"))
+            if result and result.confidence >= self.l1_threshold:
+                result.signal_id = signal.id
+                result.reasoning_level = 1
+                return result
+            return RegionResult(region="rule", ok=True, result=None,
+                                context={"rules_checked": len(rules_mod.list_rules(enabled_only=True))})
+
+        # Statistical 脑区（L2 统计）
+        async def statistical_region(signal, context, budget):
+            self._stats["l2_calls"] += 1
+            result = await self._statistical_reasoning(
+                signal, context.get("working_memory", []),
+                context.get("db"), context.get("memory_context"),
+            )
+            if result and result.confidence >= self.l2_threshold:
+                result.signal_id = signal.id
+                result.reasoning_level = 2
+                return result
+            return RegionResult(region="statistical", ok=True, result=None)
+
+        # LLM 脑区（L3）
+        async def llm_region(signal, context, budget):
+            self._stats["l3_calls"] += 1
+            intent_val = context.get("intent", "business")
+            # CHITCHAT/NOISE 时裁剪 memory_context，避免历史决策数据污染 LLM 判断
+            mc = context.get("memory_context", {})
+            if intent_val in ("chitchat", "noise"):
+                mc = {k: v for k, v in mc.items()
+                      if k not in ("history", "decisions", "skills", "memory")}
+                if "counts" in mc:
+                    mc["counts"] = {k: v for k, v in mc["counts"].items()
+                                    if k not in ("history", "memory", "decisions")}
+            # QUERY 意图时注入预取 web_search 结果作为 prompt 增强
+            web_search_text = context.get("pre_web_search")
+            result = await self._llm_reasoning(
+                signal, context.get("working_memory", []), mc,
+                intent=intent_val,
+                web_search_text=web_search_text,
+            )
+            if result:
+                result.signal_id = signal.id
+                result.reasoning_level = 3
+                return result
+            return RegionResult(region="llm", ok=True, result=None)
+
+        # Semantic 脑区（语义记忆检索，enrichment）
+        async def semantic_region(signal, context, budget):
+            try:
+                result = await self.semantic_memory.retrieve(signal.to_dict())
+                return RegionResult(
+                    region="semantic", ok=True, result=None,
+                    context={"semantic": result},
+                    elapsed_ms=0,
+                )
+            except Exception as e:
+                return RegionResult(region="semantic", ok=False, error=str(e))
+
+        # Web search 脑区：仅作为 pre-enrichment 在 reason() 里预先调用，不注册为并行脑区
+        # （否则会与预取重复，浪费时间/成本）
+
+        # Episodic 脑区（情景记忆检索，enrichment）
+        async def episodic_region(signal, context, budget):
+            try:
+                db = context.get("db")
+                if db is None:
+                    return RegionResult(region="episodic", ok=False, error="no db")
+                entries = await mem.retrieve_for_signal(db, signal.to_dict())
+                return RegionResult(
+                    region="episodic", ok=True, result=None,
+                    context={"episodic": entries},
+                    elapsed_ms=0,
+                )
+            except Exception as e:
+                return RegionResult(region="episodic", ok=False, error=str(e))
+
+        self.coordinator.register("rule", rule_region, weight=0.80)
+        self.coordinator.register("statistical", statistical_region, weight=0.60)
+        self.coordinator.register("llm", llm_region, weight=0.50)
+        self.coordinator.register("semantic", semantic_region, weight=0.20)
+        self.coordinator.register("episodic", episodic_region, weight=0.20)
+        # web_search 不注册为并行脑区——已在 reason() 中作为 pre-enrichment 预先调用
 
     def _memory_summary(self, memory_context: Dict[str, Any]) -> str:
         counts = memory_context.get("counts", {}) if memory_context else {}
@@ -286,16 +475,21 @@ class ReasoningEngine:
         signal: NeuralSignal,
         working_memory: List[dict],
         memory_context: Optional[Dict[str, Any]] = None,
+        intent: str = "business",
+        web_search_text: Optional[str] = None,
     ) -> Optional[CognitionResult]:
         """L3：LLM 推理。需要 OPENAI_API_KEY。
 
         使用 OpenAI 兼容 API。无 key 时返回 None（走兜底）。
+        intent: 丘脑分类的意图类型，影响 prompt 构建。
+        web_search_text: 预取的联网搜索结果文本（QUERY 意图时注入 prompt）。
         """
         if not self.llm_api_key:
             return None
 
         # 构建 prompt
-        prompt = self._build_llm_prompt(signal, working_memory, memory_context or {})
+        prompt = self._build_llm_prompt(signal, working_memory, memory_context or {},
+                                         intent=intent, web_search_text=web_search_text)
 
         try:
             response = await self._call_llm(prompt)
@@ -307,8 +501,13 @@ class ReasoningEngine:
             logger.error("l3_llm_failed: %s", str(e))
             return None
 
-    def _build_llm_prompt(self, signal: NeuralSignal, working_memory: List[dict], memory_context: Optional[Dict[str, Any]] = None) -> str:
-        """构造 LLM prompt。"""
+    def _build_llm_prompt(self, signal: NeuralSignal, working_memory: List[dict],
+                          memory_context: Optional[Dict[str, Any]] = None, intent: str = "business",
+                          web_search_text: Optional[str] = None) -> str:
+        """构造 LLM prompt。intent 决定提示词策略。
+
+        web_search_text: 联网搜索结果（QUERY 意图时使用），作为外部知识注入。
+        """
         signal_dict = signal.to_dict()
         recent = working_memory[-5:] if working_memory else []
         memory_context = memory_context or {}
@@ -321,27 +520,49 @@ class ReasoningEngine:
             },
         }
 
+        intent_hint = _INTENT_HINTS.get(intent, _INTENT_HINTS["business"])
+        history_json = json.dumps(memory_summary.get("history", []), ensure_ascii=False, indent=2)
+        if intent in ("chitchat", "noise"):
+            history_json = "(闲聊模式：不查历史决策)"
+
+        # 联网搜索结果区块（仅 QUERY 意图时注入）
+        web_search_block = ""
+        if intent == "query" and web_search_text:
+            web_search_block = f"""
+
+# 联网搜索结果（外部知识参考，供回答使用）
+{web_search_text}
+"""
+
         return f"""你是 ZZCC 类脑 AI 推理引擎。分析以下感知信号，给出决策建议。
+
+{intent_hint}
 
 # 当前信号
 {json.dumps(signal_dict, ensure_ascii=False, indent=2)}
 
 # 最近上下文（工作记忆）
 {json.dumps(recent, ensure_ascii=False, indent=2) if recent else "(无)"}
-
-# 长期/情景/技能/语义记忆上下文
+{web_search_block}
+# 记忆上下文
 {json.dumps(memory_summary, ensure_ascii=False, indent=2)}
+
+# 历史决策记录
+{history_json}
 
 # 输出要求
 严格返回 JSON 格式（不要 markdown 代码块包裹）：
 {{
-  "decision": "auto_approve|reject|escalate|flag|need_info|no_action",
+  "decision": "auto_approve|reject|escalate|flag|need_info|no_action|chat",
   "confidence": 0.0-1.0,
   "reasoning": "推理过程说明（中文，≤200字）",
   "actions": [{{"type": "action_type", "reason": "原因", "params": {{}}}}],
   "risks": ["风险描述"]
 }}
 
+对于闲聊/问候类信号，decision 用 "chat"，action type 用 "chat_reply"，reason 填写你的回复文本。
+对于知识查询类信号，decision 用 "no_action"，action type 用 "reply"，reason 填写你基于联网搜索结果的回答文本（中文，引用关键信息）。
+对于业务请求，按审批流程给出决策。
 请分析后直接返回 JSON。"""
 
     async def _call_llm(self, prompt: str, timeout: float = 30.0) -> str:

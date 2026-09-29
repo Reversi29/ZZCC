@@ -140,7 +140,7 @@ class BrainCore:
         self._stats["started_at"] = _iso()
         self._stats["stopped_at"] = None
         self._task = asyncio.create_task(self._run(), name="brain-core")
-        logger.info("brain_core_started", interval=self.interval_seconds, batch=self.batch_limit)
+        logger.info("brain_core_started interval=%d batch=%d", self.interval_seconds, self.batch_limit)
         return self.status()
 
     async def stop(self) -> dict:
