@@ -22,7 +22,6 @@ import 'package:zzcc/presentation/providers/font_provider.dart';
 import 'package:zzcc/presentation/providers/splash_provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:zzcc/core/services/storage_service.dart';
-import 'package:zzcc/data/repositories/chat_repository.dart';
 import 'package:path/path.dart' as path;
 import 'package:zzcc/core/routes/route_names.dart';
 import 'package:dio/dio.dart';

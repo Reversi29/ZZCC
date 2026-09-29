@@ -165,10 +165,6 @@ class _BrainChatPageState extends State<BrainChatPage> {
     }
   }
 
-  void _showLoginPrompt() {
-    // Brain AI 无需登录，保留方法以兼容旧调用
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

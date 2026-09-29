@@ -237,7 +237,6 @@ class LodManager {
     for (final n in data.nodes) {
       if (visited.contains(n.id)) continue;
 
-      final center = positions[n.id] ?? Offset.zero;
       // BFS 收集 bbox 内的邻居
       final group = <EChartNode>[n];
       visited.add(n.id);
@@ -341,7 +340,6 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   Offset _panOffset = Offset.zero;   // 屏幕平移（世界坐标原点在哪）
   double _zoom = 0.4;                 // 缩放系数
   double _lastZoom = 0.4;
-  Offset _lastDrag = Offset.zero;
   Size _canvasSize = Size.zero;
 
   // LOD 阈值
@@ -450,14 +448,12 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _lastDrag = d.focalPoint;
     _lastZoom = _zoom;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
     if (d.scale == 0 || !d.scale.isFinite) return;
     final newZoom = (_lastZoom * d.scale).clamp(kMinZoom, kMaxZoom);
-    final focal = d.focalPointDelta;
     // 保持焦点位置不移动
     final worldFocal = _screenToWorld(d.focalPoint - _panOffset);
     setState(() {
@@ -475,7 +471,6 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   void _onScaleEnd(ScaleEndDetails d) {}
 
   void _onTapUp(TapUpDetails d) {
-    final world = _screenToWorld(d.localPosition);
     // 查找点击命中的节点
     EChartNode? hit;
     double bestDist = 24.0; // 屏幕像素命中半径
@@ -907,7 +902,6 @@ class _KnowledgeGraphPainter extends CustomPainter {
     // 世界坐标每 100 单位一格
     const gridStep = 100.0;
     final view = _viewport();
-    final worldTopLeft = _toScreen(Offset.zero) - Offset(0, 0);
     // 计算视窗覆盖的世界范围
     // screen = center + world*zoom + pan, 所以 world = (screen - center - pan) / zoom
     final worldLeft = (view.left - canvasSize.width / 2 - panOffset.dx) / zoom;
@@ -1096,7 +1090,6 @@ class _KnowledgeGraphPainter extends CustomPainter {
   }
 
   Color _categoryColor(int category) {
-    final count = 1; // 从外部传入类别数量会精确，此处简单 hash
     final angle = (category.abs() % 12) * 30.0;
     return HSLColor.fromAHSL(1, angle, 0.7, 0.7).toColor();
   }

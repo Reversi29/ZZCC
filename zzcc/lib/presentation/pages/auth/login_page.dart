@@ -438,9 +438,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         final serverUser = await chatRepo.login(
           username: uid,
           password: password,
-          displayName: _urlParams['name'] ?? uid,
+          displayName: _urlParams['name'],
         );
-        final ciphertext = EncryptUtils.encryptUID(uid, password) ?? uid;
+        final ciphertext = EncryptUtils.encryptUID(uid, password);
         storageService.registerUser(uid, ciphertext);
         final bootStrapPath = path.join(configService.appDataPath, ciphertext);
         try {

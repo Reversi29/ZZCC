@@ -20,7 +20,8 @@ String _computeInitialLocation() {
       } else if (p != '/' && p.isNotEmpty) {
         result = p;
       }
-    } catch (e, st) {
+    } catch (e) {
+      // 忽略 URL 解析错误
     }
   }
   return result;
