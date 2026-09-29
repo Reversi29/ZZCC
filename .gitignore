@@ -130,3 +130,4 @@ CLAUDE.md
 .dsh-meow/uploads/
 *.bak
 .dsh-meow/
+zzcc/lib/presentation/pages/square/widgets/knowledge_graph_html.dart

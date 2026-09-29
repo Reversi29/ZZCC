@@ -5,6 +5,7 @@
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js' as js;
+import 'dart:js_util' as js_util;
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
@@ -64,10 +65,11 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
         ..style.width = '100%'
         ..style.height = '100%'
         ..srcdoc = kGraphHtml
-          .replaceAll('https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js',
-              '${html.window.location.origin}/static/echarts/echarts.min.js')
-          .replaceAll('https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js',
-              '${html.window.location.origin}/static/echarts/echarts-gl.min.js');
+          // srcdoc iframe 没有 base URL：相对路径会解析到 about:srcdoc。
+          // 在主页面（location 正常）算好绝对 base，注入 HTML 里的 __ECHARTS_BASE__ 占位符。
+          // 注意必须带引号，注入后要是合法的 JS 字符串字面量。
+          .replaceAll('__ECHARTS_BASE__',
+              "'${html.window.location.origin}/static/echarts'");
       iframe.onLoad.listen((_) {
         debugPrint('[KGView-Web] iframe onLoad');
         setState(() => _isLoading = false);
@@ -95,30 +97,62 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
           _isLoading = false;
           _errorMsg = '无法连接后端服务器\n请检查 124.223.47.167:8001 是否运行';
         });
+        return;
       }
+      // 不依赖 iframe onLoad 触发 _loadGraph（srcdoc 在 headless Chrome 下 onLoad 可能延迟），
+      // 改为在 onLoad 回调里延迟 600ms 触发（确保 iframe JS 已就绪）。
+      // 这里不能调 _loadGraph：此时 iframe 的 JS 可能还没执行到 addEventListener('message')，
+      // 消息会被丢弃，且后续 onLoad 再调也会遇到 iframe dispose 竞态。
+      debugPrint('[KGView-Web] _initSpaces 完成，等待 iframe onLoad 触发 _loadGraph');
     } catch (e, st) {
       debugPrint('[KGView-Web] _initSpaces error: $e\n$st');
       if (mounted) setState(() => _errorMsg = '获取空间列表失败: $e');
     }
   }
 
-  void _callJs(String code) {
+  // Flutter SDK 的 Window.postMessage 实现（dart-sdk/lib/html/dart2js/html_dart2js.dart:9403）
+  // 用 convertDartToNative_SerializedScriptValue 转换 Dart 对象，生成的是 DevTools 专用的
+  // SerializedScriptValue 类型，普通 iframe 的 postMessage 无法识别它。因此 cw.postMessage(...)
+  // 在 Dart 侧看起来调用成功了（无异常），但 iframe 侧实际收不到有效数据。
+  // 解决：把 msg 先 jsonEncode 成字符串再传，iframe 侧对 string 类型会 JSON.parse。
+  void _postToIframe(Map<String, dynamic> msg) {
     final cw = _iframe?.contentWindow;
-    if (cw == null) return;
+    if (cw == null) {
+      debugPrint('[KGView-Web] iframe contentWindow 为 null，无法 postMessage');
+      return;
+    }
     try {
-      js.JsObject.fromBrowserObject(cw).callMethod('eval', [code]);
+      final json = jsonEncode(msg);
+      // 用 js_util.callMethod 直接调 JS 原生 postMessage，
+      // 绕开 js.JsObject.callMethod 内部 convertDartToNative_SerializedScriptValue
+      // 导致的 null check operator 错误（postMessage 返回 undefined）。
+      // 传 JSON 字符串，iframe 侧 JSON.parse 解析。
+      final cwObj = js.JsObject.fromBrowserObject(cw);
+      js_util.callMethod(cwObj, 'postMessage', [json, '*']);
+      debugPrint('[KGView-Web] postMessage(type=${msg['type']}, len=${json.length}) via js_util ok');
     } catch (e) {
-      debugPrint('[KGView-Web] JS eval error: $e');
+      debugPrint('[KGView-Web] postMessage error: $e');
     }
   }
 
+  // 兼容旧签名：部分调用点传的是 JS 字符串代码。
+  // 现在已无调用方，保留以兼容外部引用，实际内部转成 map 消息。
+  void _callJs(String code) {
+    debugPrint('[KGView-Web] _callJs 已废弃（srcdoc 沙箱下 eval 无效），code=$code');
+  }
+
   Future<void> _loadGraph() async {
-    if (_selectedSpace == null || _iframe == null) return;
+    debugPrint('[KGView-Web] _loadGraph 进入 _selectedSpace=$_selectedSpace _iframe=$_iframe');
+    if (_selectedSpace == null || _iframe == null) {
+      debugPrint('[KGView-Web] _loadGraph 早期返回（_selectedSpace=$_selectedSpace, _iframe=$_iframe）');
+      return;
+    }
     setState(() => _isFetching = true);
 
     try {
       final graphData =
           await _repo.fetchGraphData(_selectedSpace!.name, limit: 200);
+      debugPrint('[KGView-Web] _loadGraph 拿到数据 nodes=${graphData.nodes.length} links=${graphData.links.length}');
       if (!mounted) return;
       setState(() => _isFetching = false);
 
@@ -147,7 +181,10 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
         'space': _selectedSpace?.name ?? '',
       });
 
-      _callJs('if(window.updateGraph) window.updateGraph($payload);');
+      // payload 已 jsonEncode，解码回 map 再 postMessage（iframe 侧读 e.data 是对象）
+      final msg = Map<String, dynamic>.from(jsonDecode(payload));
+      msg['type'] = 'update';
+      _postToIframe(msg);
       if (mounted) setState(() => _errorMsg = null);
     } catch (e, st) {
       debugPrint('[KGView-Web] _loadGraph error: $e\n$st');
@@ -234,12 +271,15 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
       'space': _selectedSpace?.name ?? '',
     });
 
-    _callJs('if(window.updateGraph) window.updateGraph($payload);');
+    // payload 已 jsonEncode，解码回 map 再 postMessage（iframe 侧读 e.data 是对象）
+    final msg = Map<String, dynamic>.from(jsonDecode(payload));
+    msg['type'] = 'update';
+    _postToIframe(msg);
   }
 
   void _toggle3D() {
     setState(() => _is3D = !_is3D);
-    _callJs('if(window.toggleView) window.toggleView();');
+    _postToIframe({'type': 'toggle'});
   }
 
   Future<void> _reloadGraph() async {
@@ -266,22 +306,23 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
         if (_isLoading)
           Positioned.fill(
             child: Container(
-              color: const Color(0xFF0a0a1a),
+              // 半透明：让 iframe 内部的诊断文字（step 1/5..5/5、JS错误等）可见
+              color: const Color(0xCC0a0a1a),
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(
+                  children: const [
+                    SizedBox(
                       width: 200,
                       child: LinearProgressIndicator(
                         color: Color(0xFF00d4ff),
                         backgroundColor: Colors.white12,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      '正在初始化...',
-                      style: TextStyle(color: Color(0xFF00d4ff)),
+                    SizedBox(height: 12),
+                    Text(
+                      '正在初始化...(遮罩半透明，下方为 iframe 内部诊断)',
+                      style: TextStyle(color: Color(0xFF00d4ff), fontSize: 11),
                     ),
                   ],
                 ),
