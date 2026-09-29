@@ -130,3 +130,5 @@ CLAUDE.md
 .dsh-meow/uploads/
 *.bak
 .dsh-meow/
+brain_config.json
+services/interface/data/
