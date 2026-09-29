@@ -465,7 +465,24 @@ class NebulaRemoteSource {
       }
     }
 
-    return GraphData(nodes: nodes, links: links, space: space);
+    // 后端未在响应里返回 categories，前端根据节点 tags 唯一值推断，
+    // 用于 LayoutEngine 的 category 分组。
+    final categorySet = <String>{};
+    for (final n in nodes) {
+      if (n.tags.isNotEmpty) {
+        categorySet.addAll(n.tags);
+      } else {
+        categorySet.add('unknown');
+      }
+    }
+    final categories = categorySet.toList()..sort();
+
+    return GraphData(
+      nodes: nodes,
+      links: links,
+      categories: categories,
+      space: space,
+    );
   }
 
   // ── Health Check ───────────────────────────────────────
