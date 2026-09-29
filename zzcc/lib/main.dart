@@ -127,7 +127,22 @@ void main() async {
             final password = userInfo['password'] as String? ?? '';
             logger.info('auto-login: userInfo has password=${password.isNotEmpty ? "YES" : "NO (empty)"}');
             if (password.isNotEmpty) {
-              chatRepo.syncOfflineAccountIfNeeded(password: password);
+              await chatRepo.syncOfflineAccountIfNeeded(password: password);
+              // Web 端 ConfigService 无文件持久化，刷新后 chat token 会丢失。
+              // 若 Hive 里也没有 token（旧会话或未同步的离线账号），
+              // 主动重新登录以恢复 chat 会话，并把 token 写入 Hive 便于下次刷新直接恢复。
+              if (!chatRepo.isAuthenticated) {
+                try {
+                  final restored = await chatRepo.login(
+                    username: currentUserId,
+                    password: password,
+                    displayName: userInfo['name'] as String?,
+                  );
+                  logger.info('chat auto-login: ${restored != null ? "ok userId=${restored.userId}" : "failed (null)"}');
+                } catch (e) {
+                  logger.warning('chat auto-login error: $e');
+                }
+              }
             } else {
               logger.info('auto-login: cannot sync — password not stored. User needs to log in manually once.');
             }

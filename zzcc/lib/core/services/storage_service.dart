@@ -82,6 +82,17 @@ class StorageService {
     _userRegistryBox.put(uid, ciphertext);
   }
 
+  // ── Chat auth persistence (Hive, works on Web via IndexedDB) ──
+  Future<void> saveChatAuth(String? accessToken, String? userId, String? displayName) async {
+    await _appBox.put('chat_access_token', accessToken);
+    await _appBox.put('chat_user_id', userId);
+    await _appBox.put('chat_display_name', displayName);
+  }
+
+  String? get chatAccessToken => _appBox.get('chat_access_token') as String?;
+  String? get chatUserId => _appBox.get('chat_user_id') as String?;
+  String? get chatDisplayName => _appBox.get('chat_display_name') as String?;
+
   String? getUserRegistry(String uid) {
     return _userRegistryBox.get(uid);
   }

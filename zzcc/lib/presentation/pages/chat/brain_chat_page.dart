@@ -100,7 +100,7 @@ class _BrainChatPageState extends State<BrainChatPage> {
     try {
       final resp = await _dio.post('brain/ask', data: jsonEncode({
         'question': text,
-        'execute_actions': false,
+        'execute_actions': true,
       }));
 
       final data = resp.data as Map<String, dynamic>;
@@ -110,24 +110,35 @@ class _BrainChatPageState extends State<BrainChatPage> {
       final reasoning = cognition['reasoning'] as String? ?? '';
       final reasoningLevel = cognition['reasoning_level'] as int? ?? 0;
 
-      // Build a readable brain response
-      final buffer = StringBuffer();
-      if (reasoning.isNotEmpty) {
-        buffer.writeln(reasoning);
-        buffer.writeln();
+      // 从 action_results / actions 提取回复文本
+      // LLM 把用户可见回复放在 action.reason（chat_reply/reply 类型）
+      String? replyText;
+      final actionResults = (data['action_results'] as List?) ?? [];
+      for (final ar in actionResults) {
+        if (ar is Map && (ar['action'] == 'chat_reply' || ar['action'] == 'reply')) {
+          replyText = (ar['reply_text'] as String?) ?? (ar['reason'] as String?) ?? null;
+          if (replyText != null && replyText.isNotEmpty) break;
+        }
       }
-      buffer.writeln('Decision: $decision');
-      if (confidence != null) {
-        buffer.writeln('Confidence: ${(confidence * 100).toStringAsFixed(0)}%');
+      if (replyText == null || replyText.isEmpty) {
+        final actions = (cognition['actions'] as List?) ?? [];
+        for (final a in actions) {
+          if (a is Map && (a['type'] == 'chat_reply' || a['type'] == 'reply')) {
+            replyText = (a['reason'] as String?) ?? null;
+            if (replyText != null && replyText.isNotEmpty) break;
+          }
+        }
       }
-      if (reasoningLevel > 0) {
-        buffer.writeln('Reasoning Level: L$reasoningLevel');
-      }
+
+      // 只展示用户可见文本（LLM 回复或推理文本），不暴露内部元信息
+      final displayText = (replyText != null && replyText.isNotEmpty)
+          ? replyText
+          : (reasoning.isNotEmpty ? reasoning : '');
 
       setState(() {
         _turns.add(_BrainTurn(
           userText: text,
-          brainText: buffer.toString().trim(),
+          brainText: displayText,
           decision: decision,
           confidence: confidence,
           reasoningLevel: reasoningLevel,

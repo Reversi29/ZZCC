@@ -195,15 +195,44 @@ class ConfigService {
     await _saveConfig();
   }
 
-  String? get chatAccessToken => _config['chatAccessToken'] as String?;
-  String? get chatUserId => _config['chatUserId'] as String?;
-  String? get chatDisplayName => _config['chatDisplayName'] as String?;
+  String? get chatAccessToken {
+    final v = _config['chatAccessToken'] as String?;
+    if (v != null && v.isNotEmpty) return v;
+    // Web 刷新后内存配置丢失：从 Hive(IndexedDB) 兜底恢复
+    try {
+      final b = getIt<StorageService>().chatAccessToken;
+      if (b != null && b.isNotEmpty) return b;
+    } catch (_) {}
+    return null;
+  }
+
+  String? get chatUserId {
+    final v = _config['chatUserId'] as String?;
+    if (v != null && v.isNotEmpty) return v;
+    try {
+      return getIt<StorageService>().chatUserId;
+    } catch (_) {}
+    return null;
+  }
+
+  String? get chatDisplayName {
+    final v = _config['chatDisplayName'] as String?;
+    if (v != null && v.isNotEmpty) return v;
+    try {
+      return getIt<StorageService>().chatDisplayName;
+    } catch (_) {}
+    return null;
+  }
 
   Future<void> saveChatAuth({required String? accessToken, required String? userId, String? displayName}) async {
     _config['chatAccessToken'] = accessToken;
     _config['chatUserId'] = userId;
     _config['chatDisplayName'] = displayName;
     await _saveConfig();
+    // Web 端无文件 IO：同步写入 Hive(IndexedDB)，保证刷新后仍能恢复登录态
+    try {
+      await getIt<StorageService>().saveChatAuth(accessToken, userId, displayName);
+    } catch (_) {}
   }
 
   Future<void> clearChatAuth() async {
@@ -211,5 +240,8 @@ class ConfigService {
     _config.remove('chatUserId');
     _config.remove('chatDisplayName');
     await _saveConfig();
+    try {
+      await getIt<StorageService>().saveChatAuth(null, null, null);
+    } catch (_) {}
   }
 }
