@@ -42,6 +42,24 @@ services:
     networks:
       - interface_default
 
+  # SearXNG: 开源元搜索引擎，供 Brain AI 联网搜索用
+  # Web UI: http://127.0.0.1:8888
+  # JSON API: http://127.0.0.1:8888/search?q=xxx&format=json （默认已支持）
+  searxng:
+    image: searxng/searxng:latest
+    container_name: kt-searxng
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:8888/
+      - SEARXNG_SECRET=zzcc-brain-ai-local-searxng-secret-key-2026
+    volumes:
+      - kt-searxng-data:/var/searxng
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - interface_default
+
 networks:
   interface_default:
     driver: bridge
@@ -51,3 +69,4 @@ networks:
 volumes:
   kt-db-data:
   kt-redis-data:
+  kt-searxng-data:

@@ -1,0 +1,83 @@
+# SearXNG settings override for ZZCC Brain AI
+# 诊断结论 (2026-09-25):
+# - Google/DuckDuckGo/Wikipedia/Wikidata: GFW 屏蔽或超时
+# - Baidu: CAPTCHA 拦截 (suspended 3600s)
+# - Bing: 可达，国内 (cn.bing.com) 英文查询质量差；切换到国际版 www.bing.com
+# 策略: 只用 Bing (cn.bing.com)
+use_default_settings: true
+
+server:
+  secret_key: "zzcc-brain-ai-local-searxng-secret-key-2026"
+  image_proxy: true
+  limiter: false
+  public_instance: false
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  # Naver: 从中国大陆可达且英文查询质量高，作为主引擎
+  - name: naver
+    engine: naver
+    disabled: false
+    shortcut: nv
+  # Bing: 从国内请求会 302 重定向到 cn.bing.com，英文查询被重解读为词典，导致 0 结果；禁用
+  - name: bing
+    engine: bing
+    disabled: true
+    base_url: https://www.bing.com
+    shortcut: bi
+  # Bing News: 同上，302 重定向导致质量差
+  - name: bing news
+    engine: bing_news
+    disabled: true
+    base_url: https://www.bing.com
+    shortcut: bin
+  # Baidu: CAPTCHA 拦截，禁用
+  - name: baidu
+    engine: baidu
+    disabled: true
+  - name: baidu images
+    engine: baidu
+    disabled: true
+  - name: baidu kaifa
+    engine: baidu
+    disabled: true
+  # Google: GFW 屏蔽，禁用
+  - name: google
+    engine: google
+    disabled: true
+  - name: google news
+    engine: google_news
+    disabled: true
+  - name: google videos
+    engine: google_videos
+    disabled: true
+  - name: google images
+    engine: google_images
+    disabled: true
+  - name: google cse
+    engine: google_cse
+    disabled: true
+  # DuckDuckGo: GFW 屏蔽，禁用
+  - name: duckduckgo
+    engine: duckduckgo
+    disabled: true
+  - name: duckduckgo web
+    engine: duckduckgo_web
+    disabled: true
+  - name: duckduckgo images
+    engine: duckduckgo_extra
+    disabled: true
+  - name: duckduckgo videos
+    engine: duckduckgo_extra
+    disabled: true
+  # Wikipedia/Wikidata: GFW 屏蔽，禁用
+  - name: wikipedia
+    engine: wikipedia
+    disabled: true
+  - name: wikidata
+    engine: wikidata
+    disabled: true
