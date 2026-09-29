@@ -273,7 +273,7 @@ async def register(
         await sess.commit()
 
     token = create_access_token(str(uid), req.username)
-    log_audit(actor=req.username, action="register", resource="chat_user",
+    log_audit(actor=req.username, action="register", resource=f"chat_user:{uid}",
               detail={"client_uid": req.client_uid})
     return {
         "ok": True,
@@ -305,7 +305,7 @@ async def login(
         {"id": str(row["id"])},
     )
     token = create_access_token(str(row["id"]), row["username"])
-    log_audit(actor=row["username"], action="login", resource="chat_user")
+    log_audit(actor=row["username"], action="login", resource=f"chat_user:{row['id']}")
     return {
         "ok": True,
         "data": {
@@ -328,7 +328,7 @@ async def logout(
         "UPDATE chat_user SET logged_out_at = NOW(), updated_at = NOW() WHERE id = :id",
         {"id": uid},
     )
-    log_audit(actor=user["username"], action="logout", resource="chat_user")
+    log_audit(actor=user["username"], action="logout", resource=f"chat_user:{uid}")
     return {"ok": True, "data": {"message": "Logged out", "user_id": uid}}
 
 
@@ -366,7 +366,7 @@ async def delete_account(
             {"id": uid},
         )
     log_audit(actor=user["username"], action="delete_account",
-              resource="chat_user", detail={"erase": req.erase})
+              resource=f"chat_user:{uid}", detail={"erase": req.erase})
     return {"ok": True, "data": {"user_id": uid, "erase": req.erase}}
 
 
@@ -418,7 +418,7 @@ async def sync_account(
 
     token = create_access_token(str(row["id"]), row["username"])
     log_audit(actor=row["username"], action="sync_account",
-              resource="chat_user", detail={"created": was_created})
+              resource=f"chat_user:{row['id']}", detail={"created": was_created})
     return {
         "ok": True,
         "data": {
@@ -465,7 +465,7 @@ async def set_display_name(
         "UPDATE chat_user SET display_name = :dn, updated_at = NOW() WHERE id = :id",
         {"dn": body.display_name, "id": str(user["id"])},
     )
-    log_audit(actor=user["username"], action="set_display_name", resource="chat_user")
+    log_audit(actor=user["username"], action="set_display_name", resource=f"chat_user:{user['id']}")
     return {"ok": True, "data": {"user_id": str(user["id"]), "display_name": body.display_name}}
 
 
