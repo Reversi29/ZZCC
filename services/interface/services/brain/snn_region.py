@@ -123,28 +123,61 @@ class SNNRegion:
 
     def _decode_output(self, outputs: Dict[int, bool],
                         active: List[int]) -> Optional[CognitionResult]:
-        """将 SNN 输出解码为 CognitionResult。"""
-        # 找出激活的输出神经元，按权重选最强
-        fired_outputs = [(nid, True) for nid, v in outputs.items() if v]
+        """将 SNN 输出解码为 CognitionResult。
+
+        多输出时不直接全部采信：按当前激活/膜势强的前驱连接强度排序，
+        选择最强输出，并把竞争输出写入 memory_updates 供调试。
+        """
+        fired_outputs = [nid for nid, v in outputs.items() if v]
         if not fired_outputs:
             return None
 
-        # 取激活的输出对应决策（如有多个，取第一个——后续可加权）
-        for nid, _ in fired_outputs:
-            decision = _OUTPUT_DECISION.get(nid)
-            if decision:
-                break
+        strengths: Dict[int, float] = {}
+        source_ids = set(active)
+        for out_nid in fired_outputs:
+            score = float(self.snn.neurons[out_nid].membrane or 0.0)
+            for src_nid in source_ids:
+                conn = self.snn.out_edges.get(src_nid, {}).get(out_nid)
+                if conn is not None:
+                    score += conn.weight
+            # 至少给激活输出一个基础分，避免膜电位/前驱记录缺失导致无法解码
+            strengths[out_nid] = max(0.1, score)
 
-        # 置信度 = 输出强度归一化
-        confidence = min(1.0, len(fired_outputs) * 0.4 + 0.3)
+        sorted_outputs = sorted(strengths.items(), key=lambda item: item[1], reverse=True)
+        top_nid, top_score = sorted_outputs[0]
+        decision = _OUTPUT_DECISION.get(top_nid)
+        if decision is None:
+            return None
+
+        total_score = sum(max(0.0, score) for _, score in sorted_outputs)
+        confidence = 0.35
+        if total_score > 0:
+            confidence += min(0.45, top_score / total_score * 0.65)
+        if len(sorted_outputs) == 1:
+            confidence += 0.1
+        confidence = round(min(1.0, max(0.0, confidence)), 3)
+
+        competition = [
+            {"output_neuron": nid, "decision": _OUTPUT_DECISION.get(nid), "score": round(score, 3)}
+            for nid, score in sorted_outputs
+        ]
+        fired_outputs_serializable = [
+            {"output_neuron": nid, "decision": _OUTPUT_DECISION.get(nid), "score": round(score, 3)}
+            for nid, score in sorted_outputs
+        ]
 
         return CognitionResult(
             reasoning_level=3,  # 类 L3 级别
             confidence=confidence,
             decision=decision,
-            reasoning=f"SNN 脉冲推理: 激活神经元={active[:10]}, 输出={fired_outputs}",
+            reasoning=f"SNN 脉冲推理: 激活神经元={active[:10]}, 输出={fired_outputs_serializable}",
             actions=[Action(type=decision, reason="SNN 脉冲神经网络推理")],
-            memory_updates={"snn_active": active, "snn_outputs": outputs},
+            memory_updates={
+                "snn_active": active,
+                "snn_outputs": outputs,
+                "snn_competition": competition,
+                "snn_selected": top_nid,
+            },
         )
 
     # ── 推理入口（供协调器调用）────────────────────────────
