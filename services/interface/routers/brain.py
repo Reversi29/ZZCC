@@ -36,6 +36,7 @@ from services.brain import (
     reasoning as rsn,
     rules as rls,
     semantic as sem,
+    snn_region as snn_mod,
 )
 from services.brain.broker import broker
 
@@ -521,7 +522,27 @@ async def learn(
                     )
             except Exception as exc:
                 semantic_result = {"ok": False, "error": str(exc)}
-    return {"ok": True, "updated": updated, "skill": skill, "semantic": semantic_result}
+        # SNN 反馈学习：将决策标注传递给脉冲神经网络
+        snn_result = {"ok": True, "skipped": True}
+        try:
+            if skill.get("ok"):
+                decisions_all = await mem.get_decisions(db, limit=1, signal_type=skill.get("signal_type"), decision=skill.get("decision"))
+                decision_row = decisions_all[0] if decisions_all else None
+                if decision_row:
+                    signal_obj = NeuralSignal(
+                        id=decision_row.get("signal_id", ""),
+                        type=decision_row.get("signal_type", ""),
+                        source=decision_row.get("source", "learn_feedback"),
+                        urgency=decision_row.get("urgency", 50),
+                    )
+                    snn_result = snn_mod.snn_region.train_from_feedback(
+                        signal=signal_obj,
+                        correct_decision=skill.get("decision", ""),
+                        was_correct=request.correct,
+                    )
+        except Exception as exc:
+            snn_result = {"ok": False, "error": str(exc)}
+    return {"ok": True, "updated": updated, "skill": skill, "semantic": semantic_result, "snn": snn_result}
 
 
 @router.get("/semantic/status")
@@ -633,3 +654,70 @@ async def toggle_rule(
     if not ok:
         raise HTTPException(404, "规则不存在")
     return {"ok": True, "rule_id": rule_id, "enabled": enabled}
+
+
+# ═══════════════════════════════════════════════════════════
+# SNN 脉冲神经网络管理
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/snn/status")
+async def snn_status():
+    """SNN 网络状态。"""
+    return snn_mod.snn_region.status()
+
+
+@router.post("/snn/reset")
+async def snn_reset():
+    """重置推理状态（不清除学习权重）。"""
+    snn_mod.snn_region.reset()
+    return {"ok": True, "message": "推理状态已重置"}
+
+
+@router.post("/snn/reset-network")
+async def snn_reset_network():
+    """重置网络（清除所有学习，恢复默认拓扑）。"""
+    snn_mod.snn_region.reset_network()
+    return {"ok": True, "message": "网络已重置为默认拓扑"}
+
+
+@router.post("/snn/save")
+async def snn_save():
+    """手动保存网络到磁盘。"""
+    ok = snn_mod.snn_region.save()
+    return {"ok": ok}
+
+
+@router.get("/snn/graph")
+async def snn_graph():
+    """SNN 连接图（节点+边，供前端可视化）。"""
+    return snn_mod.snn_region.connection_graph()
+
+
+@router.post("/snn/train")
+async def snn_train(request: dict):
+    """手动训练 SNN（注入信号模式并学习）。"""
+    signal_type = request.get("signal_type", "user_request")
+    decision = request.get("decision", "auto_approve")
+    steps = int(request.get("steps", 10))
+    signal = NeuralSignal(type=signal_type, urgency=50)
+    for _ in range(steps):
+        snn_mod.snn_region.train_from_feedback(
+            signal=signal, correct_decision=decision, was_correct=True,
+        )
+    return {"ok": True, "steps": steps, "stats": snn_mod.snn_region.status()}
+
+
+@router.get("/snn/connections")
+async def snn_connections():
+    """列出所有连接（含权重和延迟）。"""
+    net = snn_mod.snn_region.snn
+    connections = []
+    for src in net.out_edges:
+        for tgt, conn in net.out_edges[src].items():
+            connections.append({
+                "source": src, "target": tgt,
+                "weight": round(conn.weight, 4),
+                "delay": conn.delay,
+            })
+    connections.sort(key=lambda e: (-e["weight"], e["source"], e["target"]))
+    return {"ok": True, "count": len(connections), "connections": connections}

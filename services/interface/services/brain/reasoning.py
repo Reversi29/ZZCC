@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from models.brain import Action, CognitionResult, NeuralSignal
 from services.brain import memory as mem
 from services.brain import rules as rules_mod
+from services.brain import snn_region as snn_mod
 from services.brain.coordinator import RegionCoordinator, RegionResult, coordinator as global_coordinator
 from services.brain.compute_budget import ComputeBudget, Intent
 from services.brain.semantic import SemanticMemory
@@ -77,6 +78,7 @@ class ReasoningEngine:
             "l1_calls": 0, "l1_hits": 0,
             "l2_calls": 0, "l2_hits": 0,
             "l3_calls": 0, "l3_hits": 0,
+            "snn_calls": 0, "snn_hits": 0,
             "total": 0,
         }
         # 新架构：脑区协调器 + 算力预算
@@ -349,9 +351,15 @@ class ReasoningEngine:
             except Exception as e:
                 return RegionResult(region="episodic", ok=False, error=str(e))
 
+        # SNN 脑区（脉冲神经网络推理）
+        async def snn_region_fn(signal, context, budget):
+            self._stats["snn_calls"] = self._stats.get("snn_calls", 0) + 1
+            return await snn_mod.snn_region.reason(signal, context, budget)
+
         self.coordinator.register("rule", rule_region, weight=0.80)
         self.coordinator.register("statistical", statistical_region, weight=0.60)
         self.coordinator.register("llm", llm_region, weight=0.50)
+        self.coordinator.register("snn", snn_region_fn, weight=0.40)
         self.coordinator.register("semantic", semantic_region, weight=0.20)
         self.coordinator.register("episodic", episodic_region, weight=0.20)
         # web_search 不注册为并行脑区——已在 reason() 中作为 pre-enrichment 预先调用
