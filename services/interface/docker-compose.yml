@@ -35,7 +35,7 @@ services:
       - interface_default
 
   redis:
-    image: redis:7-alpine
+    image: redis:7
     container_name: kt-redis
     restart: unless-stopped
     ports:
