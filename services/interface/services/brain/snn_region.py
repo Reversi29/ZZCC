@@ -155,11 +155,13 @@ class SNNRegion:
         """SNN 推理入口。返回 RegionResult。
 
         从 coordinator 调用的标准签名。
+        每次推理前 reset 网络状态，避免训练残留污染。
         """
         from services.brain.coordinator import RegionResult
 
         start = time.time()
         self._stats["reason_calls"] += 1
+        self.snn.reset()
 
         try:
             # 编码输入
@@ -193,7 +195,7 @@ class SNNRegion:
                 self._stats["reason_hits"] += 1
                 self._stats["last_decision"] = best_result.decision
                 self._stats["last_confidence"] = best_result.confidence
-                self._stats["total_fires"] += self.snn.stats()["total_fires"]
+                self._stats["total_fires"] = self.snn.stats()["total_fires"]
 
                 return RegionResult(
                     region="snn", ok=True,
