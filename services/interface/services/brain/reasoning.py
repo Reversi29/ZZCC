@@ -359,7 +359,7 @@ class ReasoningEngine:
         self.coordinator.register("rule", rule_region, weight=0.80)
         self.coordinator.register("statistical", statistical_region, weight=0.60)
         self.coordinator.register("llm", llm_region, weight=0.50)
-        self.coordinator.register("snn", snn_region_fn, weight=0.40)
+        self.coordinator.register("snn", snn_region_fn, weight=0.55)
         self.coordinator.register("semantic", semantic_region, weight=0.20)
         self.coordinator.register("episodic", episodic_region, weight=0.20)
         # web_search 不注册为并行脑区——已在 reason() 中作为 pre-enrichment 预先调用

@@ -77,6 +77,8 @@ class SNNRegion:
         config_dir = os.environ.get("BRAIN_CONFIG_DIR", "/app/config_data")
         self.save_path = save_path or os.path.join(config_dir, "snn_network.json")
 
+        self._stats_path = self.save_path.replace(".json", "_stats.json")
+
         # 加载或创建默认网络
         self.snn = SNN.load(self.save_path)
         if self.snn is None:
@@ -94,6 +96,7 @@ class SNNRegion:
             "edges_added": 0,
             "edges_strengthened": 0,
         }
+        self._load_stats()
 
     # ── 编码/解码 ────────────────────────────────────────────
 
@@ -314,9 +317,10 @@ class SNNRegion:
     # ── 持久化 ──────────────────────────────────────────────
 
     def _auto_save(self):
-        """自动保存网络状态。"""
+        """自动保存网络状态和统计。"""
         try:
             self.snn.save(self.save_path)
+            self._save_stats()
         except Exception as e:
             logger.warning("snn_auto_save_failed: %s", str(e))
 
@@ -340,6 +344,25 @@ class SNNRegion:
             "edges_added": 0, "edges_strengthened": 0,
         }
         self._auto_save()
+
+    def _load_stats(self):
+        import json
+        if not os.path.exists(self._stats_path):
+            return
+        try:
+            with open(self._stats_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._stats.update(data)
+        except Exception as e:
+            logger.warning("snn: stats load failed: %s", str(e))
+
+    def _save_stats(self):
+        import json
+        try:
+            with open(self._stats_path, "w", encoding="utf-8") as f:
+                json.dump(self._stats, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("snn: stats save failed: %s", str(e))
 
     def status(self) -> dict:
         """网络状态快照。"""
