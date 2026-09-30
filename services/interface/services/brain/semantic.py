@@ -250,10 +250,7 @@ class SemanticMemory:
                 "BrainDecision.reasoning AS reasoning, BrainDecision.created_at AS created_at, "
                 "BrainDecision.updated_at AS updated_at, BrainDecision.cognition AS cognition;" if decision else None,
                 f'GO FROM "{vid}" OVER {RELATION_EDGE} '
-                'YIELD RELATES_TO.relation_type AS relation_type, '
-                'RELATES_TO.signal_id AS signal_id, '
-                'RELATES_TO.confidence AS confidence, '
-                'RELATES_TO.summary AS summary;',
+                'YIELD edgeSrc(edge) AS src, edgeDst(edge) AS dst, EDGE AS edge;'
             ]:
                 if not nql:
                     continue
@@ -262,7 +259,13 @@ class SemanticMemory:
                     rows = g._rows_to_dicts(resp)
                     for row in rows:
                         if "edge" in row:
+                            edge_val = dict(row.get("edge") or {})
                             row.setdefault("kind", "edge")
+                            edge_val.setdefault("src", row.get("src"))
+                            edge_val.setdefault("dst", row.get("dst"))
+                            edge_val.setdefault("edge", RELATION_EDGE)
+                            edge_val["edge_type"] = RELATION_EDGE
+                            row["edge"] = edge_val
                             edges.append(row)
                         else:
                             row.setdefault("kind", "vertex")

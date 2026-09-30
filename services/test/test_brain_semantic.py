@@ -54,8 +54,7 @@ def test_semantic_retrieve_returns_vertex_properties_and_edges(monkeypatch):
         _resp([{"vid": "vid_signal", "signal_type": "expense", "module": "ExpenseClaim", "source": "api_check", "urgency": 70, "keyword": "expense", "confidence": 0.85, "created_at": "c", "updated_at": "u", "payload": '{"amount": 700}'}]),
         _resp([]),
         _resp([{"vid": "vid_decision", "decision": "auto_approve", "reasoning_level": 2, "confidence": 0.95, "outcome": "no_action", "reasoning": "r", "created_at": "c", "updated_at": "u", "cognition": '{"reasoning_level": 2}'}]),
-        _resp([{"decision_vertex": {"vid": "vid_decision", "decision": "auto_approve", "confidence": 0.95}}]),
-        _resp([{"edge": {"src": "vid_signal", "dst": "vid_decision", "edge": "RELATES_TO", "rank": 0, "props": {"confidence": 0.95}}}]),
+        _resp([{"src": "vid_signal", "dst": "vid_decision", "edge": {"src": "vid_signal", "dst": "vid_decision", "edge": "RELATES_TO", "rank": 0, "props": {"confidence": 0.95}}}]),
     ]
 
     def fake_query(sess, space, nql):
@@ -80,8 +79,10 @@ def test_semantic_retrieve_returns_vertex_properties_and_edges(monkeypatch):
     assert json.loads(result["vertices"][0]["payload"]) == {"amount": 700}
     assert result["vertices"][2]["decision"] == "auto_approve"
     assert result["edges"][0]["edge"]["edge"] == "RELATES_TO"
+    assert result["edges"][0]["edge"]["props"] == {"confidence": 0.95}
     assert any("YIELD id(vertex) AS vid, BrainSignal.signal_type AS signal_type" in q for q in queries)
     assert any("BrainSignal.payload AS payload" in q for q in queries)
-    assert any("YIELD $$ AS decision_vertex" in q for q in queries)
-    assert any("YIELD EDGE AS edge" in q for q in queries)
+    assert any("edgeSrc(edge) AS src" in q for q in queries)
+    assert any("edgeDst(edge) AS dst" in q for q in queries)
+    assert any("EDGE AS edge" in q for q in queries)
     assert not any("properties(vertex)" in q for q in queries)
