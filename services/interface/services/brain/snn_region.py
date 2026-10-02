@@ -40,6 +40,10 @@ _SIGNAL_TO_NEURON = {
     "chitchat": 8,
     "system": 9,
     "noise": 10,
+    "expense": 0,
+    "invoice": 0,
+    "payment": 0,
+    "reimbursement": 0,
 }
 
 # ── 输出神经元 ID → 决策类型映射 ──────────────────────────────
@@ -181,20 +185,37 @@ class SNNRegion:
         多输出时不直接全部采信：按当前激活/膜势强的前驱连接强度排序，
         选择最强输出，并把竞争输出写入 memory_updates 供调试。
         """
+        # 检查输出神经元是否在推理期间放电过（last_fire_time >= 0）
+        # 注意：放电后 membrane 会重置为 0，不能用 membrane > 0 判断
         fired_outputs = [nid for nid, v in outputs.items() if v]
+        if not fired_outputs:
+            # 兜底：检查 last_fire_time（某些 step 可能 outputs 没捕获到）
+            fired_outputs = [
+                nid for nid in self._OUTPUT_NEURONS
+                if self.snn.neurons[nid].last_fire_time >= 0
+            ]
         if not fired_outputs:
             return None
 
         strengths: Dict[int, float] = {}
-        source_ids = set(active)
+        hidden_source_ids = set(
+            n.id for n in self.snn.neurons
+            if 16 <= n.id < 32 and n.last_fire_time >= 0
+        )
         for out_nid in fired_outputs:
-            score = float(self.snn.neurons[out_nid].membrane or 0.0)
-            for src_nid in source_ids:
+            n = self.snn.neurons[out_nid]
+            score = max(0.1, float(n.membrane or 0.0))
+            for src_nid in hidden_source_ids:
                 conn = self.snn.out_edges.get(src_nid, {}).get(out_nid)
                 if conn is not None:
-                    score += conn.weight
-            # 至少给激活输出一个基础分，避免膜电位/前驱记录缺失导致无法解码
-            strengths[out_nid] = max(0.1, score)
+                    score += conn.weight * 2.0
+            if score <= 0.1:
+                for src in self.snn.neurons:
+                    if src.last_fire_time >= 0 and src.id < 16:
+                        conn = self.snn.out_edges.get(src.id, {}).get(out_nid)
+                        if conn is not None:
+                            score += conn.weight
+            strengths[out_nid] = score
 
         sorted_outputs = sorted(strengths.items(), key=lambda item: item[1], reverse=True)
         top_nid, top_score = sorted_outputs[0]
@@ -255,7 +276,7 @@ class SNNRegion:
         try:
             # 编码输入
             input_neurons = self._encode_signal(signal)
-            strength = 1.0 + (signal.urgency / 100.0) * 2.0  # 0.0-3.0
+            strength = 2.0 + (signal.urgency / 100.0) * 3.0  # 0.0-3.0
 
             # 注入输入
             self.snn.inject_pattern(input_neurons, strength)
@@ -340,16 +361,21 @@ class SNNRegion:
 
         self._stats["training_count"] += 1
 
-        # 无论正确与否都训练，但权重不同
-        eta = 0.05 if was_correct else 0.02
-        auto_create = was_correct  # 正确时允许突触发生
+        # 恢复 auto_create：隐藏层初始连接不够，需要突触发生补充
+        # 但 LTD 不可用（反效果），SNN 选择性靠隐藏层评分偏好弥补
+        eta = 0.08 if was_correct else 0.03
+        auto_create = was_correct
 
-        # 两阶段训练：输入 → 奖励 → STDP
+        # 三阶段训练：输入 → 传播 → 奖励 → STDP
+        # 关键：注入输入后先 step 让隐藏层放电，再注入输出
+        # 这样 hidden.last_fire_time < output.last_fire_time，STDP 才能生效
+        strength = 2.0 + (signal.urgency / 100.0) * 3.0
         for _ in range(5):
-            self.snn.inject_pattern(input_neurons, 1.5)
-            self.snn.step()
+            self.snn.inject_pattern(input_neurons, strength)
+            self.snn.step()  # t=N:   输入放电，传播到隐藏层
+            self.snn.step()  # t=N+1: 隐藏层放电（事件到达）
             self.snn.inject_input(target_output, 2.0)
-            outputs = self.snn.step()
+            outputs = self.snn.step()  # t=N+2: 输出放电，hidden.last_fire < output.last_fire ✓
             if outputs.get(target_output, False):
                 before = sum(
                     1 for src in self.snn.out_edges
@@ -367,7 +393,7 @@ class SNNRegion:
                     if c.weight > 0.1
                 )
                 self._stats["edges_added"] += max(0, after - before)
-                break
+                # break removed: 训练所有 5 遍
 
         # 反向惩罚：错误决策的输出神经元被抑制
         if not was_correct:

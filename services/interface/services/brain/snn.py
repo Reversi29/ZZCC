@@ -52,6 +52,7 @@ class Neuron:
         self.membrane = 0.0
         self.is_firing = False
         self.refractory_until = -1
+        self.last_fire_time = -1
 
     def add_input(self, weight: float):
         """接收一个输入信号（累加膜电位）"""
@@ -126,10 +127,10 @@ class SNN:
         self._pending_events: deque = deque()
 
         # 学习参数
-        self.eta_plus: float = 0.01   # 同步放电增强率
-        self.eta_minus: float = 0.005 # 不同步减弱率
+        self.eta_plus: float = 0.2   # 同步放电增强率
+        self.eta_minus: float = 0.05 # 不同步减弱率
         self.weight_decay: float = 0.0  # 全局权重衰减
-        self.max_weight: float = 5.0
+        self.max_weight: float = 3.0
 
         # 输出历史（用于 Hebbian 回溯）
         self._fire_history: dict[int, list[int]] = defaultdict(list)
@@ -453,6 +454,11 @@ class SNN:
                     self.connect(n.id, target_id, weight=auto_create_weight, delay=1)
                     strengthened += 1
 
+                # LTD 实验结论：竞争性 LTD 在当前架构下反效果。
+                # auto_create 的 input→output 直连是非选择性通道，
+                # LTD 削弱 hidden→output 后只剩非选择性直连，准确率暴减。
+                # 解决方案待定：需 winner-take-all 隐藏层或竞争性学习机制。
+
     # ── 调试 / 可视化 ────────────────────────────────────────
 
     # ── 持久化 ──────────────────────────────────────────────
@@ -597,7 +603,7 @@ class SNN:
 
         # 隐藏层：计算(16-27) + 抑制(28-31)
         for nid in range(16, 28):
-            net.add_neuron(nid, NeuronType.EXCITATORY, threshold=1.2)
+            net.add_neuron(nid, NeuronType.EXCITATORY, threshold=0.8)
         for nid in range(28, 32):
             net.add_neuron(nid, NeuronType.INHIBITORY, threshold=1.0)
 
@@ -611,7 +617,7 @@ class SNN:
             ("chat", 37),
         ]
         for name, nid in output_types:
-            net.add_neuron(nid, NeuronType.OUTPUT, threshold=1.5)
+            net.add_neuron(nid, NeuronType.OUTPUT, threshold=1.0)
 
         # 输入 -> 隐藏层（稀疏连接）
         for inp_id in range(16):
