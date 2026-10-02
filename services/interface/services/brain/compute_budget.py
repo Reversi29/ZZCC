@@ -63,7 +63,7 @@ _DEFAULT_BUDGETS: Dict[Intent, Dict[str, Dict[str, float]]] = {
         "rule":        {"time_ms": 30,   "tokens": 0},
         "statistical": {"time_ms": 0,    "tokens": 0},  # 闲聊不查历史模式
         "llm":         {"time_ms": 10000, "tokens": 512},
-        "snn":         {"time_ms": 300,  "tokens": 0},
+        "snn":         {"time_ms": 0,    "tokens": 0},  # 闲聊不激活 SNN（避免误审批）
         "semantic":    {"time_ms": 0,    "tokens": 0},  # 闲聊不查语义记忆
         "episodic":    {"time_ms": 300,  "tokens": 0},
         "web_search":  {"time_ms": 0,    "tokens": 0},  # 闲聊不联网
@@ -81,7 +81,7 @@ _DEFAULT_BUDGETS: Dict[Intent, Dict[str, Dict[str, float]]] = {
         "rule":        {"time_ms": 30,   "tokens": 0},
         "statistical": {"time_ms": 0,    "tokens": 0},
         "llm":         {"time_ms": 0,    "tokens": 0},  # 噪声不消耗算力
-        "snn":         {"time_ms": 200,  "tokens": 0},
+        "snn":         {"time_ms": 0,    "tokens": 0},  # 噪声不激活 SNN
         "semantic":    {"time_ms": 0,    "tokens": 0},
         "episodic":    {"time_ms": 0,    "tokens": 0},
         "web_search":  {"time_ms": 0,    "tokens": 0},  # 噪声不联网

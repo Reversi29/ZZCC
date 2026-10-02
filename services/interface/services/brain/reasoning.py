@@ -234,9 +234,17 @@ class ReasoningEngine:
             return Intent.SYSTEM
         if sig_type in ("query", "knowledge", "search", "lookup"):
             return Intent.QUERY
+        # 业务信号类型直接归为 BUSINESS（无论 payload 文本长度）
+        if sig_type in ("approval_pending", "expense", "purchase", "contract",
+                        "invoice", "budget", "procurement", "reimbursement"):
+            return Intent.BUSINESS
 
         # 按文本关键词分类
         if not text or len(text) < 2:
+            # payload 非空但无文本字段 → 看是否有业务字段
+            if any(k in payload for k in ("amount", "price", "value", "total",
+                                          "description", "title", "department")):
+                return Intent.BUSINESS
             return Intent.NOISE
 
         # 告警关键词

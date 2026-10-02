@@ -111,6 +111,8 @@ class SNN:
             outputs = net.step()
     """
 
+    TOPOLOGY_VERSION = 2  # v2: 输入层 0-15（信号类型+紧急度+金额分桶+详情）
+
     def __init__(self, num_neurons: int = 50):
         self.num_neurons = num_neurons
         self.neurons: list[Neuron] = [Neuron(id=i) for i in range(num_neurons)]
@@ -476,6 +478,7 @@ class SNN:
                     "weight": conn.weight, "delay": conn.delay,
                 })
         return {
+            "topology_version": self.TOPOLOGY_VERSION,
             "num_neurons": self.num_neurons,
             "time": self.time,
             "eta_plus": self.eta_plus,
@@ -490,6 +493,8 @@ class SNN:
     @classmethod
     def from_dict(cls, data: dict) -> "SNN":
         """从字典恢复网络。"""
+        if data.get("topology_version", 1) != cls.TOPOLOGY_VERSION:
+            raise ValueError("topology version mismatch")
         net = cls(num_neurons=data.get("num_neurons", 50))
         net.time = data.get("time", 0)
         net.eta_plus = data.get("eta_plus", 0.01)
@@ -546,29 +551,30 @@ class SNN:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return cls.from_dict(data)
-        except Exception:
+        except Exception as e:
+            print("snn: load failed (%s), creating default" % e)
             return None
 
     # ── 默认拓扑 ────────────────────────────────────────────
 
     @classmethod
     def create_default(cls) -> "SNN":
-        """创建 Brain AI 默认拓扑。
+        """创建 Brain AI 默认拓扑（v2）。
 
         三层结构：
-        - 输入层 (0-11): 信号类型 + 紧急度分桶
-        - 隐藏层 (12-31): 计算模式 + 抑制调节
-        - 输出层 (32-37): 6 种决策类型
+        - 输入层 (0-15): 信号类型 0-10 + 紧急度高 11 + 金额分桶 12-14 + 有详情 15
+        - 隐藏层 (16-31): 计算模式 16-27 + 抑制调节 28-31
+        - 输出层 (32-37): 6 种决策类型（ID 保持不变，兼容既有映射）
 
-        拓扑设计原则：
-        - 信号类型映射到特定输入神经元（可学习）
-        - 隐藏层做交叉关联（不同信号类型组合 → 不同输出）
-        - 输出层对应 6 种决策：approve/reject/escalate/flag/no_action/chat
+        设计原则：
+        - 信号类型与 payload 特征（金额/详情）共同编码输入，
+          使同类型信号可按 payload 区分
+          （如 approval_pending 小额 -> flag / 大额 -> escalate）
+        - 隐藏层做交叉关联；抑制层抑制误触发的决策输出
         """
         net = cls(num_neurons=38)
 
-        # 输入层：信号类型编码
-        signal_types = [
+        input_types = [
             ("approval_pending", 0),
             ("threshold_breach", 1),
             ("plugin_event", 2),
@@ -580,13 +586,17 @@ class SNN:
             ("chitchat", 8),
             ("system", 9),
             ("noise", 10),
-            ("urgency_high", 11),  # 紧急度高位
+            ("urgency_high", 11),     # 紧急度 >= 70
+            ("amount_low", 12),       # 金额 <= 1000
+            ("amount_medium", 13),    # 1000 < 金额 <= 100000
+            ("amount_high", 14),      # 金额 > 100000
+            ("has_detail", 15),       # payload 含描述/标题/文本等详情字段
         ]
-        for name, nid in signal_types:
+        for name, nid in input_types:
             net.add_neuron(nid, NeuronType.INPUT, threshold=0.5)
 
-        # 隐藏层：计算 + 抑制
-        for nid in range(12, 28):
+        # 隐藏层：计算(16-27) + 抑制(28-31)
+        for nid in range(16, 28):
             net.add_neuron(nid, NeuronType.EXCITATORY, threshold=1.2)
         for nid in range(28, 32):
             net.add_neuron(nid, NeuronType.INHIBITORY, threshold=1.0)
@@ -603,37 +613,35 @@ class SNN:
         for name, nid in output_types:
             net.add_neuron(nid, NeuronType.OUTPUT, threshold=1.5)
 
-        # 初始连接：输入 → 隐藏层（全连接 + 随机权重 + 延迟）
-        for inp_id in range(12):
-            for hid_id in range(12, 28):
-                if random.random() < 0.4:  # 稀疏连接
-                    w = random.uniform(0.2, 0.8)
-                    d = random.choice([1, 2])
-                    net.connect(inp_id, hid_id, weight=w, delay=d)
+        # 输入 -> 隐藏层（稀疏连接）
+        for inp_id in range(16):
+            for hid_id in range(16, 28):
+                if random.random() < 0.4:
+                    net.connect(inp_id, hid_id,
+                                weight=random.uniform(0.2, 0.8),
+                                delay=random.choice([1, 2]))
 
-        # 隐藏层 → 抑制层
-        for hid_id in range(12, 28):
+        # 隐藏层 -> 抑制层
+        for hid_id in range(16, 28):
             for inh_id in range(28, 32):
                 if random.random() < 0.3:
                     net.connect(hid_id, inh_id, weight=0.5, delay=1)
 
-        # 隐藏层 → 输出层
-        for hid_id in range(12, 32):
+        # 隐藏层 -> 输出层
+        for hid_id in range(16, 32):
             for out_id in range(32, 38):
                 if random.random() < 0.25:
-                    w = random.uniform(0.1, 0.5)
-                    d = random.choice([1, 2, 3])
-                    net.connect(hid_id, out_id, weight=w, delay=d)
+                    net.connect(hid_id, out_id,
+                                weight=random.uniform(0.1, 0.5),
+                                delay=random.choice([1, 2, 3]))
 
-        # 抑制层 → 输出层（抑制性）
+        # 抑制层 -> 输出层（抑制性）
         for inh_id in range(28, 32):
             for out_id in range(32, 38):
                 if random.random() < 0.4:
                     net.connect(inh_id, out_id, weight=-0.3, delay=1)
 
         return net
-
-    # ── 调试 / 可视化 ────────────────────────────────────────
 
     def print_structure(self):
         """打印网络结构"""

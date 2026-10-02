@@ -60,6 +60,42 @@ def _urgency_neuron(urgency: int) -> Optional[int]:
     return None
 
 
+# ── payload 特征 → 输入神经元映射（v2） ─────────────────────
+_AMOUNT_LOW_MAX = 1000.0       # 金额 ≤ 此值 → amount_low (neuron 12)
+_AMOUNT_HIGH_MIN = 100000.0    # 金额 > 此值 → amount_high (neuron 14)
+_DETAIL_KEYS = (
+    "description", "desc", "title", "text", "note",
+    "content", "remark", "summary", "reason", "question",
+)
+
+
+def _payload_features(payload: Any) -> tuple:
+    """从 payload 提取 (金额分桶神经元 ID, 是否有详情字段)。
+
+    Returns:
+        (amount_neuron_id | None, has_detail: bool)
+    """
+    if not isinstance(payload, dict):
+        return None, False
+
+    # 金额提取：兼容 amount / price / value / total
+    amount = payload.get("amount")
+    if amount is None:
+        amount = payload.get("price") or payload.get("value") or payload.get("total")
+
+    amount_neuron = None
+    if isinstance(amount, (int, float)) and amount >= 0:
+        if amount <= _AMOUNT_LOW_MAX:
+            amount_neuron = 12       # amount_low
+        elif amount <= _AMOUNT_HIGH_MIN:
+            amount_neuron = 13       # amount_medium
+        else:
+            amount_neuron = 14       # amount_high
+
+    has_detail = any(k in payload for k in _DETAIL_KEYS)
+    return amount_neuron, has_detail
+
+
 class SNNRegion:
     """SNN 脑区：脉冲神经网络推理。
 
@@ -101,7 +137,16 @@ class SNNRegion:
     # ── 编码/解码 ────────────────────────────────────────────
 
     def _encode_signal(self, signal: NeuralSignal) -> List[int]:
-        """将 NeuralSignal 编码为 SNN 输入神经元列表。"""
+        """将 NeuralSignal 编码为 SNN 输入神经元列表（v2：含 payload 特征）。
+
+        编码维度：
+        - 信号类型 → neuron 0-10
+        - 紧急度高 → neuron 11
+        - 金额分桶 → neuron 12 (low) / 13 (medium) / 14 (high)
+        - 有详情字段 → neuron 15
+
+        同类型信号可通过 payload 特征区分（如 approval_pending 小额→flag / 大额→escalate）。
+        """
         neurons: List[int] = []
         sig_type = (signal.type or "").lower()
         nid = _SIGNAL_TO_NEURON.get(sig_type)
@@ -112,6 +157,14 @@ class SNNRegion:
         u_neuron = _urgency_neuron(signal.urgency)
         if u_neuron is not None:
             neurons.append(u_neuron)
+
+        # payload 特征编码（v2）
+        payload = signal.payload or {}
+        amount_neuron, has_detail = _payload_features(payload)
+        if amount_neuron is not None:
+            neurons.append(amount_neuron)
+        if has_detail:
+            neurons.append(15)
 
         # 如果信号类型未映射，用 hash 分桶到输入神经元
         if not neurons:

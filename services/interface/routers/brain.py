@@ -695,11 +695,17 @@ async def snn_graph():
 
 @router.post("/snn/train")
 async def snn_train(request: dict):
-    """手动训练 SNN（注入信号模式并学习）。"""
+    """手动训练 SNN（注入信号模式并学习）。
+
+    支持传 payload 以训练金额/详情条件化决策：
+        {"signal_type":"approval_pending","decision":"escalate","payload":{"amount":600000},"steps":50}
+    """
     signal_type = request.get("signal_type", "user_request")
     decision = request.get("decision", "auto_approve")
     steps = int(request.get("steps", 10))
-    signal = NeuralSignal(type=signal_type, urgency=50)
+    urgency = int(request.get("urgency", 50))
+    payload = request.get("payload", {})
+    signal = NeuralSignal(type=signal_type, payload=payload, urgency=urgency)
     for _ in range(steps):
         snn_mod.snn_region.train_from_feedback(
             signal=signal, correct_decision=decision, was_correct=True,
