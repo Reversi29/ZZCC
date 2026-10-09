@@ -549,7 +549,7 @@ async def learn(
 async def semantic_status(
 ):
     """语义记忆（NebulaGraph）状态。"""
-    return sem.semantic_memory.status()
+    return {"ok": True, **sem.semantic_memory.status()}
 
 
 @router.post("/semantic/ensure-schema")
@@ -690,7 +690,7 @@ async def snn_save():
 @router.get("/snn/graph")
 async def snn_graph():
     """SNN 连接图（节点+边，供前端可视化）。"""
-    return snn_mod.snn_region.connection_graph()
+    return {"ok": True, **snn_mod.snn_region.connection_graph()}
 
 
 @router.post("/snn/train")
