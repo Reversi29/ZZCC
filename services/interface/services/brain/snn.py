@@ -18,7 +18,8 @@ SNN 基底模块 — 带延迟的结构可塑脉冲神经网络。
 
 from __future__ import annotations
 import random
-from collections import defaultdict, deque
+from collections import defaultdict
+import heapq
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -124,7 +125,7 @@ class SNN:
         self.in_edges: dict[int, dict[int, Connection]] = defaultdict(dict)
 
         # 待传播事件队列: (arrive_time, source, target, weight)
-        self._pending_events: deque = deque()
+        self._pending_events: list = []  # heapq-based priority queue
 
         # 学习参数
         self.eta_plus: float = 0.2   # 同步放电增强率
@@ -284,7 +285,7 @@ class SNN:
         # 1. 处理到达的事件（新信号累加）
         arrived = []
         while self._pending_events and self._pending_events[0][0] <= t:
-            arrived.append(self._pending_events.popleft())
+            arrived.append(heapq.heappop(self._pending_events))
 
         # 清除上一步的抑制输入
         self._inhibitory_inputs.clear()
@@ -310,7 +311,7 @@ class SNN:
             n = self.neurons[n_id]
             for tgt, conn in self.out_edges.get(n_id, {}).items():
                 arrive_time = t + conn.delay
-                self._pending_events.append((arrive_time, n_id, tgt, conn.weight))
+                heapq.heappush(self._pending_events, (arrive_time, n_id, tgt, conn.weight))
 
         # 4. Hebbian 学习
         self._hebbian_update(t, fired_this_step)
@@ -564,7 +565,8 @@ class SNN:
     # ── 默认拓扑 ────────────────────────────────────────────
 
     @classmethod
-    def create_default(cls) -> "SNN":
+    def create_default(cls, seed: int = 7) -> "SNN":
+        random.seed(seed)
         """创建 Brain AI 默认拓扑（v2）。
 
         三层结构：
@@ -581,29 +583,35 @@ class SNN:
         net = cls(num_neurons=38)
 
         input_types = [
-            ("approval_pending", 0),
-            ("threshold_breach", 1),
-            ("plugin_event", 2),
-            ("user_request", 3),
-            ("cron_alert", 4),
-            ("external_event", 5),
-            ("error", 6),
-            ("query", 7),
-            ("chitchat", 8),
-            ("system", 9),
-            ("noise", 10),
-            ("urgency_high", 11),     # 紧急度 >= 70
-            ("amount_low", 12),       # 金额 <= 1000
-            ("amount_medium", 13),    # 1000 < 金额 <= 100000
-            ("amount_high", 14),      # 金额 > 100000
-            ("has_detail", 15),       # payload 含描述/标题/文本等详情字段
+            ("expense", 0),             # 0
+            ("approval_pending", 1),    # 1
+            ("threshold_breach", 2),   # 2
+            ("user_request", 3),        # 3
+            ("cron_alert", 4),          # 4
+            ("external_event", 5),      # 5 (含 plugin_event)
+            ("error", 6),               # 6
+            ("query", 7),               # 7
+            ("chitchat", 8),            # 8
+            ("system", 9),              # 9
+            ("noise", 10),              # 10
+            ("urgency_high", 11),       # 紧急度 >= 70
+            ("amount_low", 12),         # 金额 <= 1000
+            ("amount_medium", 13),      # 1000 < 金额 <= 100000
+            ("amount_high", 14),        # 金额 > 100000
+            ("has_detail", 15),         # payload 含描述/标题/文本等详情字段
         ]
         for name, nid in input_types:
             net.add_neuron(nid, NeuronType.INPUT, threshold=0.5)
 
         # 隐藏层：计算(16-27) + 抑制(28-31)
+        # 多输入隐藏神经元用高阈值(1.5)实现 AND 逻辑，单输入用低阈值(0.8)
+        multi_input_threshold = 1.5  # 需要至少2个输入(0.9+0.9=1.8)才触发
+        single_input_threshold = 0.8  # 单个输入(0.9)即可触发
+        multi_input_ids = {16, 17, 18, 19, 20, 21, 26, 27}  # 有2+ structured inputs
+        single_input_ids = {22, 23, 24, 25}  # 只有1 structured input
         for nid in range(16, 28):
-            net.add_neuron(nid, NeuronType.EXCITATORY, threshold=0.8)
+            th = multi_input_threshold if nid in multi_input_ids else single_input_threshold
+            net.add_neuron(nid, NeuronType.EXCITATORY, threshold=th)
         for nid in range(28, 32):
             net.add_neuron(nid, NeuronType.INHIBITORY, threshold=1.0)
 
@@ -619,32 +627,49 @@ class SNN:
         for name, nid in output_types:
             net.add_neuron(nid, NeuronType.OUTPUT, threshold=1.0)
 
-        # 输入 -> 隐藏层（稀疏连接）
-        for inp_id in range(16):
-            for hid_id in range(16, 28):
-                if random.random() < 0.4:
-                    net.connect(inp_id, hid_id,
-                                weight=random.uniform(0.2, 0.8),
-                                delay=random.choice([1, 2]))
+        # 结构化隐藏层：每个神经元专检一个 (signal_type, amount_bucket) 组合
+        # 这样只有匹配的隐藏神经元才放电，提供组合特征选择性
+        # H16: expense + low    → 32 (auto_approve)
+        # H17: expense + medium → 34 (escalate)
+        # H18: expense + high   → 34 (escalate)
+        # H19: ap + low         → 35 (flag)
+        # H20: ap + medium      → 34 (escalate)
+        # H21: ap + high        → 34 (escalate)
+        # H22: user_request     → 37 (chat)
+        # H23: error            → 35 (flag)
+        # H24: query            → 36 (no_action)
+        # H25: chitchat         → 37 (chat)
+        # H26: threshold_breach + high → 34 (escalate)
+        # H27: system           → 36 (no_action)
+        # 注：noise 无专用计算神经元——NOISE intent 下 SNN 已禁用（compute_budget）
+        structured = [
+            # (hid_id, [input_ids], [output_ids], out_weight)
+            # out_weight > output threshold (1.0) to ensure single hidden neuron can activate output
+            (16, [0, 12], [32], 1.5),         # expense + low → auto_approve
+            (17, [0, 13], [34], 1.5),         # expense + medium → escalate
+            (18, [0, 14], [34], 1.5),         # expense + high → escalate
+            (19, [1, 12], [35], 1.5),         # ap + low → flag
+            (20, [1, 13], [34], 1.5),         # ap + medium → escalate
+            (21, [1, 14], [34], 1.5),         # ap + high → escalate
+            (22, [3], [37], 1.5),             # user_request → chat
+            (23, [6], [35], 1.5),             # error → flag
+            (24, [7], [36], 1.5),             # query → no_action
+            (25, [8], [37], 1.5),             # chitchat → chat
+            (26, [2, 14], [34], 1.5),         # threshold_breach + high → escalate
+            (27, [9], [36], 1.5),             # system → no_action
+        ]
+        for hid_id, inputs, outputs, w in structured:
+            for inp_id in inputs:
+                net.connect(inp_id, hid_id, weight=0.9, delay=1)
+            for out_id in outputs:
+                net.connect(hid_id, out_id, weight=w, delay=1)
 
-        # 隐藏层 -> 抑制层
-        for hid_id in range(16, 28):
-            for inh_id in range(28, 32):
-                if random.random() < 0.3:
-                    net.connect(hid_id, inh_id, weight=0.5, delay=1)
-
-        # 隐藏层 -> 输出层
-        for hid_id in range(16, 32):
-            for out_id in range(32, 38):
-                if random.random() < 0.25:
-                    net.connect(hid_id, out_id,
-                                weight=random.uniform(0.1, 0.5),
-                                delay=random.choice([1, 2, 3]))
+        # 无随机补充连接——避免非选择性激活
 
         # 抑制层 -> 输出层（抑制性）
         for inh_id in range(28, 32):
             for out_id in range(32, 38):
-                if random.random() < 0.4:
+                if random.random() < 0.3:
                     net.connect(inh_id, out_id, weight=-0.3, delay=1)
 
         return net

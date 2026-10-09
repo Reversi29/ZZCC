@@ -45,7 +45,7 @@ _DEFAULT_BUDGETS: Dict[Intent, Dict[str, Dict[str, float]]] = {
         "rule":        {"time_ms": 50,   "tokens": 0},
         "statistical": {"time_ms": 0,    "tokens": 0},  # 告警不套历史审批模式
         "llm":         {"time_ms": 45000, "tokens": 4096},
-        "snn":         {"time_ms": 500,  "tokens": 0},
+        "snn":         {"time_ms": 0,    "tokens": 0},  # 告警不走 SNN（非业务决策）
         "semantic":    {"time_ms": 2000, "tokens": 0},
         "episodic":    {"time_ms": 800,  "tokens": 0},
         "web_search":  {"time_ms": 0,    "tokens": 0},  # 告警不联网
@@ -54,7 +54,7 @@ _DEFAULT_BUDGETS: Dict[Intent, Dict[str, Dict[str, float]]] = {
         "rule":        {"time_ms": 50,   "tokens": 0},
         "statistical": {"time_ms": 0,    "tokens": 0},  # 查询不查历史审批模式
         "llm":         {"time_ms": 20000, "tokens": 1024},
-        "snn":         {"time_ms": 500,  "tokens": 0},
+        "snn":         {"time_ms": 0,    "tokens": 0},  # 查询不走 SNN
         "semantic":    {"time_ms": 2000, "tokens": 0},
         "episodic":    {"time_ms": 500,  "tokens": 0},
         "web_search":  {"time_ms": 8000, "tokens": 0},  # 查询允许联网搜索
@@ -72,7 +72,7 @@ _DEFAULT_BUDGETS: Dict[Intent, Dict[str, Dict[str, float]]] = {
         "rule":        {"time_ms": 30,   "tokens": 0},
         "statistical": {"time_ms": 100,  "tokens": 0},
         "llm":         {"time_ms": 5000, "tokens": 256},
-        "snn":         {"time_ms": 300,  "tokens": 0},
+        "snn":         {"time_ms": 0,    "tokens": 0},  # 系统事件不走 SNN
         "semantic":    {"time_ms": 500,  "tokens": 0},
         "episodic":    {"time_ms": 200,  "tokens": 0},
         "web_search":  {"time_ms": 0,    "tokens": 0},  # 系统事件不联网

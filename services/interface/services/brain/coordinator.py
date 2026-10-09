@@ -146,33 +146,45 @@ class RegionCoordinator:
             else:
                 enabled_regions.append(name)
 
-        # 并行执行
-        tasks = []
+        # 并行执行 — 使用 as_completed 收集已完成结果，避免全局超时丢弃快脑区结果
+        tasks_map: Dict[asyncio.Task, str] = {}
         for name in enabled_regions:
             fn = self._regions[name]
             budget = plan.get(name)
-            tasks.append(self._run_region(name, fn, signal, context, budget))
+            task = asyncio.ensure_future(self._run_region(name, fn, signal, context, budget))
+            tasks_map[task] = name
 
-        results: List[RegionResult] = []
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=timeout_ms / 1000.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("coordinator: global timeout after %dms", timeout_ms)
-
-        # 处理异常结果
         processed: List[RegionResult] = []
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                region_name = enabled_regions[i] if i < len(enabled_regions) else f"region_{i}"
-                processed.append(RegionResult(
-                    region=region_name, ok=False, error=str(r),
-                    elapsed_ms=(time.time() - start) * 1000,
-                ))
-            else:
-                processed.append(r)
+        deadline = start + timeout_ms / 1000.0
+        try:
+            for coro in asyncio.as_completed(list(tasks_map.keys()), timeout=timeout_ms / 1000.0):
+                try:
+                    r = await coro
+                    processed.append(r)
+                except Exception as e:
+                    # 找到对应的 region name
+                    pass  # 异常已在 _run_region 中处理
+        except asyncio.TimeoutError:
+            # 全局超时——收集已完成的，标记未完成的
+            elapsed_now = (time.time() - start) * 1000
+            completed_names = {r.region for r in processed}
+            for task, name in tasks_map.items():
+                if name not in completed_names and not task.done():
+                    task.cancel()
+                    processed.append(RegionResult(
+                        region=name, ok=False, error="超时",
+                        elapsed_ms=elapsed_now, timeout=True,
+                    ))
+                elif name not in completed_names and task.done():
+                    # task 完成但 as_completed 循环已退出
+                    try:
+                        r = task.result()
+                        if isinstance(r, RegionResult):
+                            processed.append(r)
+                    except Exception:
+                        pass
+            logger.warning("coordinator: global timeout after %dms, %d/%d regions completed",
+                          int((time.time() - start) * 1000), len(processed), len(enabled_regions))
 
         # 加上跳过的脑区
         for name, reason in skipped.items():

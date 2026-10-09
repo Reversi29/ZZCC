@@ -29,21 +29,21 @@ logger = logging.getLogger("brain.snn_region")
 
 # ── 信号类型 → 输入神经元 ID 映射 ─────────────────────────────
 _SIGNAL_TO_NEURON = {
-    "approval_pending": 0,
-    "threshold_breach": 1,
-    "plugin_event": 2,
+    "expense": 0,
+    "invoice": 0,           # 费用类归并
+    "payment": 0,
+    "reimbursement": 0,
+    "approval_pending": 1,
+    "threshold_breach": 2,
     "user_request": 3,
     "cron_alert": 4,
     "external_event": 5,
+    "plugin_event": 5,      # 插件事件归并到外部事件
     "error": 6,
     "query": 7,
     "chitchat": 8,
     "system": 9,
     "noise": 10,
-    "expense": 0,
-    "invoice": 0,
-    "payment": 0,
-    "reimbursement": 0,
 }
 
 # ── 输出神经元 ID → 决策类型映射 ──────────────────────────────
@@ -109,6 +109,8 @@ class SNNRegion:
     - 状态持久化（JSON 文件）
     - 结构可塑（增删神经元/连接）
     """
+
+    _OUTPUT_NEURONS = [32, 33, 34, 35, 36, 37]
 
     # 推理步数：SNN 运行的最大时间步数
     INFERENCE_STEPS = 10

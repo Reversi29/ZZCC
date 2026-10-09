@@ -223,6 +223,7 @@ class ReasoningEngine:
             str(payload.get("question", "")),
             str(payload.get("text", "")),
             str(payload.get("message", "")),
+            str(payload.get("description", "")),
         ]).strip().lower()
 
         # 按 signal.type 分类

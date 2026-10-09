@@ -312,8 +312,8 @@ class TestDefaultTopology:
         types = defaultdict(int)
         for n in default_net.neurons:
             types[n.neuron_type] += 1
-        assert types[NeuronType.INPUT] == 12
-        assert types[NeuronType.EXCITATORY] == 16
+        assert types[NeuronType.INPUT] == 16
+        assert types[NeuronType.EXCITATORY] == 12
         assert types[NeuronType.INHIBITORY] == 4
         assert types[NeuronType.OUTPUT] == 6
 
@@ -324,7 +324,7 @@ class TestDefaultTopology:
     def test_default_output_thresholds(self, default_net):
         for nid in range(32, 38):
             assert default_net.neurons[nid].neuron_type == NeuronType.OUTPUT
-            assert default_net.neurons[nid].threshold == 1.5
+            assert default_net.neurons[nid].threshold == 1.0
 
 
 # ─── Reset ───────────────────────────────────────────────────
