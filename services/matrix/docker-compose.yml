@@ -24,7 +24,7 @@ services:
     depends_on:
       - synapse
     ports:
-      - "8080:8080"
+      - "8090:8080"    # Element Web (避开 8080 被 zzcc-oa-nginx 占用)
     volumes:
       - ./element/config.json:/app/config.json:ro
 
