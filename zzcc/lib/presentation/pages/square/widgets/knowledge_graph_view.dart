@@ -10,7 +10,6 @@
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:zzcc/data/models/graph_model.dart';
 import 'package:zzcc/data/repositories/graph_repository.dart';
 import 'package:zzcc/core/di/service_locator.dart';
@@ -104,24 +103,7 @@ class _QuadEntry {
   _QuadEntry(this.obj, this.bounds);
 }
 
-class _TilePaintData {
-  final List<_QuadEntry> nodes;
-  final Rect viewport;
-  final List<int> edgeIndices;
-  const _TilePaintData({required this.nodes, required this.viewport, required this.edgeIndices});
-}
 
-class TileCache {
-  final int _bucket;
-  final Map<String, List<_TilePaintData>> _cache = {};
-  TileCache(this._bucket);
-  void add(_TilePaintData d) { _cache.putIfAbsent(_tileKey(d.viewport), () => []).add(d); }
-  void clear() => _cache.clear();
-  List<_TilePaintData> all() => _cache.values.expand((e) => e).toList();
-  int size() => _cache.values.fold(0, (a, e) => a + e.length);
-  String _tileKey(Rect v) => '${v.left ~/ _bucket}_${v.top ~/ _bucket}'
-      '_${v.right ~/ _bucket}_${v.bottom ~/ _bucket}';
-}
 
 // ═══════════════════════════════════════════════════════════
 // ForceLayoutEngine — Fruchterman-Reingold 力导布局
@@ -510,7 +492,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
     if (q.isEmpty) return nodes;
     final terms = q.toLowerCase().split(RegExp(r'\\s+'));
     return nodes.where((n) {
-      final label = (n.label ?? '').toLowerCase();
+      final label = n.label.toLowerCase();
       final id = n.id.toLowerCase();
       return terms.every((t) => label.contains(t) || id.contains(t));
     }).toList();
@@ -625,7 +607,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
       decoration: BoxDecoration(
         color: const Color(0xFF0A0A1A),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.cyan.withOpacity(0.25)),
+        border: Border.all(color: Colors.cyan.withValues(alpha: 0.25)),
       ),
       child: Stack(
         children: [
@@ -633,7 +615,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
           LayoutBuilder(
             builder: (context, constraints) {
               final newSize = constraints.biggest;
-              if (newSize != _canvasSize && !_positions.isEmpty) {
+              if (newSize != _canvasSize && _positions.isNotEmpty) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   setState(() {
                     _canvasSize = newSize;
@@ -816,7 +798,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.graphic_eq, size: 64, color: Colors.cyan.withOpacity(0.3)),
+                    Icon(Icons.graphic_eq, size: 64, color: Colors.cyan.withValues(alpha: 0.3)),
                     const SizedBox(height: 12),
                     Text(
                       _spaces.isEmpty ? '暂无图谱空间' : '该空间暂无数据',
@@ -932,7 +914,7 @@ class _NodeDetailPanel extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.cyan.withOpacity(0.4)),
+          border: Border.all(color: Colors.cyan.withValues(alpha: 0.4)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -974,7 +956,7 @@ class _NodeDetailPanel extends StatelessWidget {
                 children: node.tags.map((t) => Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.cyan.withOpacity(0.15),
+                    color: Colors.cyan.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(t, style: const TextStyle(color: Colors.cyan, fontSize: 10)),
@@ -1042,7 +1024,6 @@ class _KnowledgeGraphPainter extends CustomPainter {
   final Color backgroundColor;
   final Color accentColor;
   GraphQuadtree? _qt;
-  TileCache? _tileCache;
 
   _KnowledgeGraphPainter({
     required this.visibleNodes,
@@ -1175,7 +1156,7 @@ class _KnowledgeGraphPainter extends CustomPainter {
       Paint edgePaint;
       if (isHighlighted) {
         edgePaint = Paint()
-          ..color = accentColor.withOpacity(0.9)
+          ..color = accentColor.withValues(alpha: 0.9)
           ..strokeWidth = 2.0 * math.min(1.5, math.sqrt(zoom))
           ..style = PaintingStyle.stroke;
       } else {
@@ -1195,10 +1176,10 @@ class _KnowledgeGraphPainter extends CustomPainter {
       final color = _categoryColor(c.category);
       // 主圆
       canvas.drawCircle(screen, r, Paint()
-        ..color = color.withOpacity(0.15)
+        ..color = color.withValues(alpha: 0.15)
         ..style = PaintingStyle.fill);
       canvas.drawCircle(screen, r, Paint()
-        ..color = color.withOpacity(0.8)
+        ..color = color.withValues(alpha: 0.8)
         ..strokeWidth = 2
         ..style = PaintingStyle.stroke);
 
@@ -1246,17 +1227,17 @@ class _KnowledgeGraphPainter extends CustomPainter {
       // 选中光晕
       if (isSelected) {
         canvas.drawCircle(screen, radius + 8, Paint()
-          ..color = accentColor.withOpacity(0.2)
+          ..color = accentColor.withValues(alpha: 0.2)
           ..style = PaintingStyle.fill);
       }
 
       // 节点主体
       canvas.drawCircle(screen, radius, Paint()
-        ..color = color.withOpacity(0.95)
+        ..color = color.withValues(alpha: 0.95)
         ..style = PaintingStyle.fill);
       // 边
       canvas.drawCircle(screen, radius, Paint()
-        ..color = Colors.white.withOpacity(isSelected ? 0.9 : 0.3)
+        ..color = Colors.white.withValues(alpha: isSelected ? 0.9 : 0.3)
         ..strokeWidth = isSelected ? 2.5 : 1.5
         ..style = PaintingStyle.stroke);
     }
@@ -1297,7 +1278,7 @@ class _KnowledgeGraphPainter extends CustomPainter {
       final bgRect = Rect.fromLTWH(labelPos.dx - 3, labelPos.dy - 1, tp.width + 6, tp.height + 2);
       canvas.drawRRect(
         RRect.fromRectAndRadius(bgRect, const Radius.circular(4)),
-        Paint()..color = Colors.black.withOpacity(0.55),
+        Paint()..color = Colors.black.withValues(alpha: 0.55),
       );
 
       tp.paint(canvas, labelPos);
