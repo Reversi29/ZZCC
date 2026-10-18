@@ -148,6 +148,8 @@ class LearnRequest(BaseModel):
     signal_id: str
     correct: bool
     feedback: Optional[str] = None
+    payload: Optional[dict] = None  # 客户端可传入原始信号 payload，供 SNN 反馈学习使用
+    correct_decision: Optional[str] = None  # correct=false 时，客户端指定正确的决策类型（如 auto_approve/reject/escalate/flag）
 
 
 class RuleCreateRequest(BaseModel):
@@ -529,15 +531,49 @@ async def learn(
                 decisions_all = await mem.get_decisions(db, limit=1, signal_type=skill.get("signal_type"), decision=skill.get("decision"))
                 decision_row = decisions_all[0] if decisions_all else None
                 if decision_row:
+                    sig_id = decision_row.get("signal_id", "")
+                    # payload 优先级：request.payload > brain_signal 表 > 从 action_results 提取
+                    sig_payload = request.payload if request.payload else {}
+                    if not sig_payload and sig_id:
+                        from sqlalchemy import text as sa_text
+                        sig_rows = (await db.execute(
+                            sa_text("SELECT payload FROM brain_signal WHERE id = :sid"),
+                            {"sid": sig_id},
+                        )).fetchall()
+                        if sig_rows and sig_rows[0][0]:
+                            import json as _json
+                            try:
+                                sig_payload = _json.loads(sig_rows[0][0]) if isinstance(sig_rows[0][0], str) else sig_rows[0][0]
+                            except (ValueError, TypeError):
+                                sig_payload = {}
+                    if not sig_payload:
+                        # 从 action_results JSON 中尝试提取 amount 等信息
+                        import json as _json
+                        ar = decision_row.get("action_results", "[]")
+                        if isinstance(ar, str):
+                            try:
+                                ar = _json.loads(ar)
+                            except (ValueError, TypeError):
+                                ar = []
+                        if isinstance(ar, list):
+                            for a in ar:
+                                if isinstance(a, dict) and a.get("params"):
+                                    params = a["params"]
+                                    if "amount" in params or "category" in params:
+                                        sig_payload = params
+                                        break
                     signal_obj = NeuralSignal(
-                        id=decision_row.get("signal_id", ""),
+                        id=sig_id,
                         type=decision_row.get("signal_type", ""),
+                        payload=sig_payload,
                         source=decision_row.get("source", "learn_feedback"),
                         urgency=decision_row.get("urgency", 50),
                     )
+                    # correct=false 时优先用客户端指定的 correct_decision；否则回退到原始决策
+                    effective_decision = request.correct_decision or skill.get("decision", "")
                     snn_result = snn_mod.snn_region.train_from_feedback(
                         signal=signal_obj,
-                        correct_decision=skill.get("decision", ""),
+                        correct_decision=effective_decision,
                         was_correct=request.correct,
                     )
         except Exception as exc:
@@ -727,3 +763,147 @@ async def snn_connections():
             })
     connections.sort(key=lambda e: (-e["weight"], e["source"], e["target"]))
     return {"ok": True, "count": len(connections), "connections": connections}
+
+
+# ─────────────────────────────────────────────────────────────
+# 图谱布局 API — 供前端调用，返回 world 坐标
+# 传入 nodes/links，服务端用 networkx 计算布局，返回 {id:[x,y]}
+# 支持 spring（力导）/ circular / category 三种算法
+# ─────────────────────────────────────────────────────────────
+
+import math as _math
+
+@router.post("/graph/layout")
+async def graph_layout(request: dict):
+    """计算图谱布局坐标。
+
+    请求体:
+        {
+            "nodes": [{"id":"a"}, {"id":"b"}, ...],
+            "links": [{"source":"a","target":"b"}, ...],
+            "algorithm": "spring" | "circular" | "category",
+            "categories": [{"id":"a","category":0}, ...],
+            "seed": 42,
+            "worldRadius": 800
+        }
+    返回:
+        {"ok": true, "algorithm": "spring", "positions": {"a":[x,y], ...}}
+    """
+    try:
+        nodes = request.get("nodes") or []
+        links = request.get("links") or []
+        algorithm = (request.get("algorithm") or "spring").lower()
+        seed = int(request.get("seed", 42))
+        world_radius = float(request.get("worldRadius", 800))
+        categories = request.get("categories") or []
+
+        node_ids = [n.get("id") for n in nodes if n.get("id")]
+        seen = set()
+        uniq_ids = []
+        for nid in node_ids:
+            if nid not in seen:
+                seen.add(nid)
+                uniq_ids.append(nid)
+
+        if not uniq_ids:
+            return {"ok": True, "algorithm": algorithm, "positions": {}}
+
+        if algorithm == "category":
+            positions = _layout_category(uniq_ids, categories, world_radius)
+        elif algorithm == "circular":
+            positions = _layout_circular(uniq_ids, world_radius)
+        else:
+            positions = _layout_spring(uniq_ids, links, seed, world_radius)
+
+        return {"ok": True, "algorithm": algorithm, "positions": positions}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("graph_layout failed: %s", exc)
+        return {"ok": False, "error": str(exc), "positions": {}}
+
+
+def _layout_spring(node_ids: list, links: list, seed: int, world_radius: float) -> dict:
+    """力导布局（Fruchterman-Reingold 变体）。"""
+    import networkx as nx
+
+    G = nx.Graph()
+    G.add_nodes_from(node_ids)
+    node_set = set(node_ids)
+    for e in links:
+        src = e.get("source")
+        dst = e.get("target")
+        if src and dst and src in node_set and dst in node_set and src != dst:
+            if not G.has_edge(src, dst):
+                G.add_edge(src, dst)
+
+    pos = nx.spring_layout(G, k=2.0, iterations=80, seed=seed)
+
+    xs = [p[0] for p in pos.values()]
+    ys = [p[1] for p in pos.values()]
+    if not xs:
+        return {}
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    xr = (xmax - xmin) or 1.0
+    yr = (ymax - ymin) or 1.0
+    scale = world_radius * 2.0 / max(xr, yr)
+    cx, cy = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+
+    out = {}
+    for nid, (x, y) in pos.items():
+        out[nid] = [round((x - cx) * scale, 2), round((y - cy) * scale, 2)]
+    return out
+
+
+def _layout_circular(node_ids: list, world_radius: float) -> dict:
+    """环形布局，均匀分布在圆周上。"""
+    n = len(node_ids)
+    if n == 0:
+        return {}
+    out = {}
+    for i, nid in enumerate(node_ids):
+        angle = (i / n) * 2 * _math.pi - _math.pi / 2
+        out[nid] = [
+            round(_math.cos(angle) * world_radius * 0.85, 2),
+            round(_math.sin(angle) * world_radius * 0.85, 2),
+        ]
+    return out
+
+
+def _layout_category(node_ids: list, categories: list, world_radius: float) -> dict:
+    """按 category 分组，组中心绕大圆分布，组内 golden-angle 螺旋。"""
+    golden_angle = 2.399963229728653
+    cat_of: dict = {c.get("id"): int(c.get("category", 0)) for c in categories if c.get("id")}
+
+    groups: dict = {}
+    for nid in node_ids:
+        cat = cat_of.get(nid, 0)
+        groups.setdefault(cat, []).append(nid)
+
+    group_keys = sorted(groups.keys())
+    gcount = len(group_keys)
+    out = {}
+
+    if gcount == 1:
+        _fill_spiral(list(groups.values())[0], 0.0, 0.0, world_radius * 0.7, golden_angle, out)
+        return out
+
+    for gi, cat in enumerate(group_keys):
+        angle = (gi / gcount) * 2 * _math.pi - _math.pi / 2
+        gx = _math.cos(angle) * world_radius * 0.6
+        gy = _math.sin(angle) * world_radius * 0.6
+        _fill_spiral(groups[cat], gx, gy, world_radius * 0.35, golden_angle, out)
+
+    return out
+
+
+def _fill_spiral(nodes: list, cx: float, cy: float, radius: float,
+                 golden_angle: float, out: dict) -> None:
+    """黄金角螺旋排布（确定性，无随机）。"""
+    n = len(nodes)
+    if n == 0:
+        return
+    local_r = radius / (n ** 0.5)
+    for i, nid in enumerate(nodes):
+        a = i * golden_angle
+        r = local_r * (i + 1) ** 0.5
+        out[nid] = [round(cx + _math.cos(a) * r, 2), round(cy + _math.sin(a) * r, 2)]

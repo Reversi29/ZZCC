@@ -1,18 +1,31 @@
 """services/brain/snn_region.py — SNN 脑区适配器
 
-将 NeuralSignal 编码为 SNN 输入模式，执行 SNN 推理，将输出解码为 CognitionResult。
+将 NeuralSignal 编码为 SNN 输入模式，执行 SNN 持续学习推理，将输出解码为 CognitionResult。
 
 架构位置：
     ReasoningEngine._register_regions()
         → snn_region(signal, context, budget) → RegionResult
-            → SNN.inject_pattern(...) → SNN.step() × N → SNN.get_outputs()
+            → SNN.step_with_learning() → 融合推理+微学习+探索
+            → 决策日志自动记录（JSONL）
             → 解码为 CognitionResult
 
-学习闭环：
-    /brain/learn → 反馈标注 → SNN.train_by_association() → 权重更新
+持续学习：
+    - 每个信号既是推理输入也是训练数据（在线学习）
+    - EWC 防灾难性遗忘（重要权重保护）
+    - 探索机制（混乱权利：随机扰动发现边界模式）
+    - 自动调节探索率（稳定性↑→探索率↓，错误→探索率↑）
+
+概率涌现：
+    - SNN 输出布尔值，不直接暴露概率
+    - 决策日志累积后查询 → 事后统计概率分布
+    - 相同模式多次决策 → 准确率自然形成概率
+
+反馈学习：
+    /brain/learn → 反馈标注 → 微学习（不是批量训练）
 
 持久化：
     SNN.save()/load() → JSON 文件（brain_config_dir/snn_network.json）
+    决策日志 → JSONL 文件（brain_config_dir/snn_decision_log.jsonl）
 """
 from __future__ import annotations
 
@@ -137,8 +150,17 @@ class SNNRegion:
             "training_count": 0,
             "edges_added": 0,
             "edges_strengthened": 0,
+            "edges_penalized": 0,
+            # 持续学习统计
+            "exploration_rate": 0.1,
+            "boundary_detected_count": 0,
+            "ewc_protected_edges": 0,
+            "micro_learn_steps": 0,
         }
         self._load_stats()
+
+        # 决策日志路径
+        self._decision_log_path = self.save_path.replace(".json", "_decision_log.jsonl")
 
     # ── 编码/解码 ────────────────────────────────────────────
 
@@ -267,54 +289,71 @@ class SNNRegion:
         """SNN 推理入口。返回 RegionResult。
 
         从 coordinator 调用的标准签名。
-        每次推理前 reset 网络状态，避免训练残留污染。
+        使用 step_with_learning() 融合推理+微学习+探索。
+
+        持续学习流程：
+        1. 编码信号为输入神经元
+        2. step_with_learning() → 推理 + 微学习 + 探索
+        3. 记录决策日志（JSONL）
+        4. 解码输出为 CognitionResult
+
+        注意：不在推理前 reset_learning_state()，保留学习历史。
+        这样连续信号之间可以共享学习状态，实现真正的在线学习。
         """
         from services.brain.coordinator import RegionResult
 
         start = time.time()
         self._stats["reason_calls"] += 1
-        self.snn.reset()
 
         try:
             # 编码输入
             input_neurons = self._encode_signal(signal)
             strength = 2.0 + (signal.urgency / 100.0) * 3.0  # 0.0-3.0
 
-            # 注入输入
-            self.snn.inject_pattern(input_neurons, strength)
+            # 持续学习推理：融合推理+微学习+探索
+            # 不传 expected_decision，因为推理时没有反馈
+            outputs, boundary_detected = self.snn.step_with_learning(
+                input_neurons, strength
+            )
 
-            # 运行推理步
-            best_result: Optional[CognitionResult] = None
-            best_confidence = 0.0
+            # 记录探索结果
+            if boundary_detected:
+                self._stats["boundary_detected_count"] += 1
 
-            for _ in range(self.INFERENCE_STEPS):
-                outputs = self.snn.step()
-                active = self.snn.get_active_neurons()
-                result = self._decode_output(outputs, active)
+            # 记录探索率
+            self._stats["exploration_rate"] = self.snn._exploration_rate
 
-                if result and result.confidence > best_confidence:
-                    best_confidence = result.confidence
-                    best_result = result
-
-                # 早期退出：输出已激活且置信度足够
-                if best_result and best_confidence >= 0.5:
-                    break
+            active = self.snn.get_active_neurons()
+            result = self._decode_output(outputs, active)
 
             elapsed = (time.time() - start) * 1000
 
-            if best_result and best_confidence >= 0.3:
-                best_result.signal_id = signal.id
+            # 记录决策日志
+            self._log_decision(
+                signal,
+                input_neurons,
+                outputs,
+                result.decision if result else None,
+                result.confidence if result else 0.0,
+                elapsed,
+                boundary_detected,
+            )
+
+            if result and result.confidence >= 0.3:
+                result.signal_id = signal.id
                 self._stats["reason_hits"] += 1
-                self._stats["last_decision"] = best_result.decision
-                self._stats["last_confidence"] = best_result.confidence
+                self._stats["last_decision"] = result.decision
+                self._stats["last_confidence"] = result.confidence
                 self._stats["total_fires"] = self.snn.stats()["total_fires"]
 
                 return RegionResult(
                     region="snn", ok=True,
-                    result=best_result,
+                    result=result,
                     context={
                         "input_neurons": input_neurons,
                         "steps_run": self.snn.time,
+                        "boundary_detected": boundary_detected,
+                        "exploration_rate": self._stats["exploration_rate"],
                     },
                     elapsed_ms=elapsed,
                 )
@@ -326,6 +365,7 @@ class SNNRegion:
                     "input_neurons": input_neurons,
                     "reason": "SNN 输出未达阈值",
                     "stats": self.snn.stats(),
+                    "exploration_rate": self._stats["exploration_rate"],
                 },
                 elapsed_ms=elapsed,
             )
@@ -336,6 +376,134 @@ class SNNRegion:
                 region="snn", ok=False,
                 error=str(e), elapsed_ms=elapsed,
             )
+
+    # ── 决策日志 ────────────────────────────────────────────
+
+    def _log_decision(
+        self,
+        signal: NeuralSignal,
+        input_neurons: List[int],
+        outputs: Dict[int, bool],
+        decision: Optional[str],
+        confidence: float,
+        elapsed_ms: float,
+        boundary_detected: bool,
+    ):
+        """记录决策日志（JSONL 格式）。
+
+        每条记录包含：
+        - signal_id, signal_type, urgency
+        - input_neurons, outputs
+        - decision, confidence
+        - timestamp, elapsed_ms
+        - boundary_detected
+        - exploration_rate
+
+        用途：
+        1. 事后查询概率分布（相同模式多次决策的准确率）
+        2. 训练数据回放（选择高置信度样本）
+        3. 决策审计（谁在什么时候做了什么决策）
+        """
+        import datetime
+
+        entry = {
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "signal_id": signal.id,
+            "signal_type": signal.type,
+            "urgency": signal.urgency,
+            "input_neurons": input_neurons,
+            "outputs": {str(k): v for k, v in outputs.items()},
+            "decision": decision,
+            "confidence": confidence,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "boundary_detected": boundary_detected,
+            "exploration_rate": self._stats.get("exploration_rate", 0.1),
+        }
+
+        try:
+            with open(self._decision_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("snn: decision log failed: %s", str(e))
+
+    def query_decision_probability(
+        self,
+        signal_type: str,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """查询决策概率分布（事后统计）。
+
+        从决策日志中统计相同信号类型的决策分布。
+
+        Args:
+            signal_type: 信号类型（如 "expense", "approval_pending"）
+            limit: 查询最近 N 条记录
+
+        Returns:
+            {
+                "signal_type": "expense",
+                "total": 50,
+                "distribution": {"auto_approve": 0.6, "escalate": 0.3, ...},
+                "recent": [...]  # 最近 10 条记录
+            }
+        """
+        if not os.path.exists(self._decision_log_path):
+            return {"signal_type": signal_type, "total": 0, "distribution": {}}
+
+        try:
+            entries = []
+            with open(self._decision_log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if entry.get("signal_type") == signal_type:
+                            entries.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+
+            # 取最近 limit 条
+            entries = entries[-limit:]
+
+            if not entries:
+                return {"signal_type": signal_type, "total": 0, "distribution": {}}
+
+            # 统计决策分布
+            decision_counts: Dict[str, int] = {}
+            for e in entries:
+                dec = e.get("decision")
+                if dec:
+                    decision_counts[dec] = decision_counts.get(dec, 0) + 1
+
+            total = len(entries)
+            distribution = {
+                k: round(v / total, 3)
+                for k, v in sorted(decision_counts.items(), key=lambda x: -x[1])
+            }
+
+            # 最近 10 条
+            recent = [
+                {
+                    "timestamp": e.get("timestamp"),
+                    "decision": e.get("decision"),
+                    "confidence": e.get("confidence"),
+                    "boundary_detected": e.get("boundary_detected"),
+                }
+                for e in entries[-10:]
+            ]
+
+            return {
+                "signal_type": signal_type,
+                "total": total,
+                "distribution": distribution,
+                "recent": recent,
+            }
+
+        except Exception as e:
+            logger.warning("snn: probability query failed: %s", str(e))
+            return {"signal_type": signal_type, "total": 0, "distribution": {}, "error": str(e)}
 
     # ── 反馈学习 ────────────────────────────────────────────
 
@@ -362,52 +530,65 @@ class SNNRegion:
             return {"ok": False, "reason": f"未知决策类型: {correct_decision}"}
 
         self._stats["training_count"] += 1
-
-        # 恢复 auto_create：隐藏层初始连接不够，需要突触发生补充
-        # 但 LTD 不可用（反效果），SNN 选择性靠隐藏层评分偏好弥补
-        eta = 0.08 if was_correct else 0.03
-        auto_create = was_correct
+        self._stats["micro_learn_steps"] += 1
 
         # 三阶段训练：输入 → 传播 → 奖励 → STDP
         # 关键：注入输入后先 step 让隐藏层放电，再注入输出
         # 这样 hidden.last_fire_time < output.last_fire_time，STDP 才能生效
         strength = 2.0 + (signal.urgency / 100.0) * 3.0
-        for _ in range(5):
-            self.snn.inject_pattern(input_neurons, strength)
-            self.snn.step()  # t=N:   输入放电，传播到隐藏层
-            self.snn.step()  # t=N+1: 隐藏层放电（事件到达）
-            self.snn.inject_input(target_output, 2.0)
-            outputs = self.snn.step()  # t=N+2: 输出放电，hidden.last_fire < output.last_fire ✓
-            if outputs.get(target_output, False):
-                before = sum(
-                    1 for src in self.snn.out_edges
-                    for c in self.snn.out_edges[src].values()
-                    if c.weight > 0.1
-                )
-                self.snn._reward_modulated_strengthen(
-                    target_output, eta=eta,
-                    auto_create=auto_create,
-                    auto_create_weight=0.15,
-                )
-                after = sum(
-                    1 for src in self.snn.out_edges
-                    for c in self.snn.out_edges[src].values()
-                    if c.weight > 0.1
-                )
-                self._stats["edges_added"] += max(0, after - before)
-                # break removed: 训练所有 5 遍
+        eta = 0.02  # 微学习步长
+        auto_create = False  # auto_create 会导致非选择性直连，LTD 实验结论：禁用
 
-        # 反向惩罚：错误决策的输出神经元被抑制
-        if not was_correct:
+        if was_correct:
+            # 正确决策 → 加强到正确输出的连接
+            for _ in range(5):
+                self.snn.inject_pattern(input_neurons, strength)
+                self.snn.step()  # t=N:   输入放电，传播到隐藏层
+                self.snn.step()  # t=N+1: 隐藏层放电（事件到达）
+                self.snn.inject_input(target_output, 2.0)
+                outputs = self.snn.step()  # t=N+2: 输出放电
+                if outputs.get(target_output, False):
+                    before = sum(
+                        1 for src in self.snn.out_edges
+                        for c in self.snn.out_edges[src].values()
+                        if c.weight > 0.1
+                    )
+                    strengthened = self.snn._reward_modulated_strengthen(
+                        target_output, eta=eta,
+                        auto_create=auto_create,
+                        auto_create_weight=0.15,
+                    )
+                    after = sum(
+                        1 for src in self.snn.out_edges
+                        for c in self.snn.out_edges[src].values()
+                        if c.weight > 0.1
+                    )
+                    self._stats["edges_added"] += max(0, after - before)
+                    self._stats["edges_strengthened"] += strengthened
+        else:
+            # 错误决策 → 惩罚原始输出，同时轻微加强正确输出
             original_decision = self._stats.get("last_decision", "")
             penalty_output = self._decision_to_output_neuron(original_decision)
-            if penalty_output is not None and penalty_output != target_output:
-                # 衰减连接到错误输出的权重
+            if penalty_output is not None:
                 for src in list(self.snn.out_edges.keys()):
                     if penalty_output in self.snn.out_edges[src]:
                         conn = self.snn.out_edges[src][penalty_output]
                         conn.weight = max(0, conn.weight * 0.8)
-                        self._stats["edges_strengthened"] += 1
+                        self._stats["edges_penalized"] += 1
+            # 少量加强正确输出（让下次推理偏向正确决策）
+            for _ in range(2):
+                self.snn.inject_pattern(input_neurons, strength)
+                self.snn.step()
+                self.snn.step()
+                self.snn.inject_input(target_output, 1.0)  # 较弱注入
+                outputs = self.snn.step()
+                if outputs.get(target_output, False):
+                    strengthened = self.snn._reward_modulated_strengthen(
+                        target_output, eta=eta * 0.5,
+                        auto_create=False,
+                        auto_create_weight=0.10,
+                    )
+                    self._stats["edges_strengthened"] += strengthened
 
         self._auto_save()
 
@@ -455,7 +636,7 @@ class SNNRegion:
             "reason_calls": 0, "reason_hits": 0,
             "total_fires": 0, "last_decision": "",
             "last_confidence": 0.0, "training_count": 0,
-            "edges_added": 0, "edges_strengthened": 0,
+            "edges_added": 0, "edges_strengthened": 0, "edges_penalized": 0,
         }
         self._auto_save()
 

@@ -460,7 +460,304 @@ class SNN:
                 # LTD 削弱 hidden→output 后只剩非选择性直连，准确率暴减。
                 # 解决方案待定：需 winner-take-all 隐藏层或竞争性学习机制。
 
+        return strengthened
+
     # ── 调试 / 可视化 ────────────────────────────────────────
+
+    # ── 持续学习循环 ──────────────────────────────────────
+
+    # EWC (Elastic Weight Consolidation) 参数
+    EWC_ALPHA = 100.0       # 重要性权重系数
+    EWC_IMPORTANCE_DECAY = 0.99  # 重要性衰减（防止全部饱和）
+
+    # 探索参数（混乱权利）
+    EXPLORATION_BASE_RATE = 0.1   # 基础探索率 10%
+    EXPLORATION_DECAY = 0.95      # 稳定性衰减（连续正确决策后探索率降低）
+    EXPLORATION_BOOST = 0.3       # 边界探测增强率（决策翻转时提升探索率）
+
+    def __init__(self, num_neurons: int = 50):
+        self.num_neurons = num_neurons
+        self.neurons: list[Neuron] = [Neuron(id=i) for i in range(num_neurons)]
+
+        # 出边: source -> {target: Connection}
+        self.out_edges: dict[int, dict[int, Connection]] = defaultdict(dict)
+        # 入边: target -> {source: Connection}
+        self.in_edges: dict[int, dict[int, Connection]] = defaultdict(dict)
+
+        # 待传播事件队列: (arrive_time, source, target, weight)
+        self._pending_events: list = []  # heapq-based priority queue
+
+        # 学习参数
+        self.eta_plus: float = 0.2   # 同步放电增强率
+        self.eta_minus: float = 0.05 # 不同步减弱率
+        self.weight_decay: float = 0.0  # 全局权重衰减
+        self.max_weight: float = 3.0
+
+        # 输出历史（用于 Hebbian 回溯）
+        self._fire_history: dict[int, list[int]] = defaultdict(list)
+        self.history_window: int = 20  # 回溯窗口步数
+
+        self.time: int = 0
+        self._inhibitory_inputs: defaultdict[int, float] = defaultdict(float)
+
+        # ── 持续学习状态 ──
+        self._ewc_importance: dict[tuple[int, int], float] = defaultdict(float)
+        self._exploration_rate: float = self.EXPLORATION_BASE_RATE
+        self._consecutive_correct: int = 0
+        self._total_decisions: int = 0
+        self._recent_decisions: list[bool] = []  # True=正确, False=错误
+
+    def reset(self):
+        """重置所有神经元状态和待传播事件（用于训练后验证）"""
+        for n in self.neurons:
+            n.reset_state()
+        self._pending_events.clear()
+        self.time = 0
+        self._inhibitory_inputs.clear()
+        # 清空激活历史
+        self._fire_history.clear()
+
+    def reset_learning_state(self):
+        """重置学习状态（不重置网络权重）。用于推理前清理。
+
+        与 reset() 不同：保留权重和 EWC 重要性，只清理事件队列和神经元状态。
+        这样学习历史可以跨推理保留，实现真正的持续学习。
+        """
+        for n in self.neurons:
+            n.reset_state()
+        self._pending_events.clear()
+        self._inhibitory_inputs.clear()
+        self._fire_history.clear()
+        # 不清空 time，让学习计数器继续累积
+
+    # ── EWC (Elastic Weight Consolidation) ────────────────────
+
+    def _update_ewc_importance(self, fired_neurons: set[int]):
+        """更新权重重要性（EWC 核心）。
+
+        重要权重：被频繁激活的神经元参与的连接
+        重要性高的权重在后续学习中更新率降低，防止灾难性遗忘
+        """
+        for n_id in fired_neurons:
+            # 出边重要性（该神经元的输出连接）
+            for tgt, conn in self.out_edges.get(n_id, {}).items():
+                key = (n_id, tgt)
+                self._ewc_importance[key] = min(
+                    10.0,  # 最大重要性
+                    self._ewc_importance[key] + 0.01
+                )
+
+    def _get_ewc_multiplier(self, src: int, tgt: int) -> float:
+        """获取 EWC 学习率乘数。
+
+        重要性越高，乘数越小（学习越慢）
+        重要性 0 → 乘数 1.0（正常学习）
+        重要性 10 → 乘数 0.1（强烈保护）
+        """
+        importance = self._ewc_importance.get((src, tgt), 0.0)
+        return 1.0 / (1.0 + self.EWC_ALPHA * importance)
+
+    # ── 探索机制（混乱权利）────────────────────────────────
+
+    def _adjust_exploration_rate(self, decision_was_correct: bool):
+        """自动调节探索率。
+
+        决策正确 → 稳定性提升 → 探索率衰减
+        决策错误/翻转 → 探索率提升（边界探测增强）
+        """
+        if decision_was_correct:
+            self._consecutive_correct += 1
+            # 连续正确后探索率指数衰减
+            self._exploration_rate *= self.EXPLORATION_DECAY
+        else:
+            self._consecutive_correct = 0
+            # 错误时探索率回升
+            self._exploration_rate = min(
+                0.5,  # 最大探索率 50%
+                self._exploration_rate + self.EXPLORATION_BOOST
+            )
+
+        # 底线保护：探索率不低于 2%
+        self._exploration_rate = max(0.02, self._exploration_rate)
+
+    def _explore(self, active_neurons: list[int]) -> bool:
+        """执行一次探索：随机扰动一条边，看决策是否翻转。
+
+        返回 True 表示探索成功（发现了边界模式）
+
+        探索方式：
+        1. 随机选择一个已激活的隐藏神经元
+        2. 随机抑制或增强其一条出边
+        3. 重新前向传播，观察输出是否变化
+        4. 如果输出翻转 → 边界模式，增强该连接的权重
+        """
+        if random.random() >= self._exploration_rate:
+            return False
+
+        # 选择活跃的隐藏层神经元（16-31）
+        hidden_active = [n for n in active_neurons if 16 <= n < 32]
+        if not hidden_active:
+            return False
+
+        probe_neuron = random.choice(hidden_active)
+
+        # 选择该神经元的一条出边
+        out_conns = list(self.out_edges.get(probe_neuron, {}).items())
+        if not out_conns:
+            return False
+
+        tgt, conn = random.choice(out_conns)
+        original_weight = conn.weight
+
+        # 随机扰动：抑制或增强
+        if random.random() < 0.5:
+            conn.weight *= 0.3  # 抑制
+        else:
+            conn.weight = min(self.max_weight, conn.weight * 2.0)  # 增强
+
+        # 重新前向传播（简化版：只看输出层）
+        # 注：完整重放成本高，这里用启发式：检查扰动后的有效输入
+        effective_input = sum(
+            c.weight for c in self.out_edges.get(probe_neuron, {}).values()
+        )
+
+        # 恢复原始权重
+        conn.weight = original_weight
+
+        # 如果有效输入接近输出阈值 → 边界模式，增强连接
+        output_neuron = self.neurons[tgt]
+        if abs(effective_input - output_neuron.threshold) < 0.5:
+            # 边界模式：增强这条边的权重
+            conn.weight = min(self.max_weight, conn.weight + 0.1)
+            return True
+
+        return False
+
+    # ── 持续学习核心方法 ──────────────────────────────────────
+
+    def step_with_learning(
+        self,
+        input_neurons: list[int],
+        strength: float = 1.5,
+        expected_decision: Optional[int] = None,
+    ) -> tuple[dict[int, bool], bool]:
+        """融合推理+微学习的单步计算。
+
+        与 step() 的区别：
+        - 自动注入输入
+        - 每步微学习（不是批量训练）
+        - 探索机制（混乱权利）
+        - EWC 防遗忘
+        - 返回输出 + 是否检测到边界模式
+
+        Args:
+            input_neurons: 输入神经元 ID 列表
+            strength: 注入强度
+            expected_decision: 期望的输出神经元 ID（用于反馈学习，可选）
+
+        Returns:
+            (outputs, boundary_detected)
+            - outputs: {neuron_id: is_firing}
+            - boundary_detected: 是否检测到边界模式（探索成功）
+        """
+        # 重置推理状态（保留学习历史）
+        self.reset_learning_state()
+
+        # 注入输入
+        self.inject_pattern(input_neurons, strength)
+
+        outputs: dict[int, bool] = {}
+        boundary_detected = False
+
+        # 运行多个时间步（信号需要传播）
+        for step in range(10):
+            outputs = self.step()
+            active = self.get_active_neurons()
+
+            # 探索机制
+            if active and self._explore(active):
+                boundary_detected = True
+
+            # 如果输出已稳定，提前退出
+            fired_outputs = [nid for nid, v in outputs.items() if v]
+            if fired_outputs and step >= 3:
+                break
+
+        # ── 微学习 ──
+        # 1. 更新 EWC 重要性
+        active = self.get_active_neurons()
+        self._update_ewc_importance(set(active))
+
+        # 2. 如果有反馈，进行强化学习
+        if expected_decision is not None:
+            actual_output = [nid for nid, v in outputs.items() if v]
+            is_correct = expected_decision in actual_output
+
+            # 调节探索率
+            self._adjust_exploration_rate(is_correct)
+
+            # 记录决策历史
+            self._total_decisions += 1
+            self._recent_decisions.append(is_correct)
+            if len(self._recent_decisions) > 100:
+                self._recent_decisions.pop(0)
+
+            # 微学习：加强正确路径，削弱错误路径
+            self._micro_learn(expected_decision, actual_output, is_correct, active)
+
+        return outputs, boundary_detected
+
+    def _micro_learn(
+        self,
+        target_output: int,
+        actual_outputs: list[int],
+        is_correct: bool,
+        active_neurons: list[int],
+    ):
+        """微学习：根据推理结果微调权重。
+
+        与 _reward_modulated_strengthen 的区别：
+        - 步长更小（η=0.001 vs 0.05）
+        - 不创建新连接（避免破坏拓扑）
+        - EWC 保护重要权重
+        """
+        micro_eta = 0.001  # 微学习步长
+
+        if is_correct:
+            # 正确：加强目标输出的入边
+            for src_id in active_neurons:
+                conn = self.out_edges.get(src_id, {}).get(target_output)
+                if conn and conn.weight > 0:
+                    # EWC 保护：重要权重学习更慢
+                    ewc_mult = self._get_ewc_multiplier(src_id, target_output)
+                    conn.weight = min(
+                        self.max_weight,
+                        conn.weight + micro_eta * ewc_mult
+                    )
+        else:
+            # 错误：削弱实际输出（非目标）的入边
+            for wrong_out in actual_outputs:
+                if wrong_out == target_output:
+                    continue
+                for src_id in active_neurons:
+                    conn = self.out_edges.get(src_id, {}).get(wrong_out)
+                    if conn and conn.weight > 0:
+                        # EWC 保护
+                        ewc_mult = self._get_ewc_multiplier(src_id, wrong_out)
+                        conn.weight = max(
+                            0.0,
+                            conn.weight - micro_eta * ewc_mult
+                        )
+
+            # 同时轻微加强目标输出（即使错误，也要尝试靠近正确方向）
+            for src_id in active_neurons:
+                conn = self.out_edges.get(src_id, {}).get(target_output)
+                if conn:
+                    ewc_mult = self._get_ewc_multiplier(src_id, target_output)
+                    conn.weight = min(
+                        self.max_weight,
+                        conn.weight + micro_eta * 0.5 * ewc_mult
+                    )
 
     # ── 持久化 ──────────────────────────────────────────────
 
