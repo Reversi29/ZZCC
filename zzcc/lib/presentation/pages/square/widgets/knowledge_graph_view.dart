@@ -15,6 +15,8 @@ import 'package:zzcc/data/models/graph_model.dart';
 import 'package:zzcc/data/repositories/graph_repository.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 
+enum LayoutType { circular, force }
+
 // ═══════════════════════════════════════════════════════════
 // GraphQuadtree — O(log n) 视窗查询的空间索引
 // ═══════════════════════════════════════════════════════════
@@ -70,7 +72,7 @@ class GraphQuadtree {
         return;
       }
     }
-    _items!.add(item);
+    _items!.add(_QuadEntry(item, itemBounds));
   }
 
   List<dynamic> query(Rect region, [List<dynamic>? result]) {
@@ -100,6 +102,75 @@ class _QuadEntry {
   final dynamic obj;
   final Rect bounds;
   _QuadEntry(this.obj, this.bounds);
+}
+
+class _TilePaintData {
+  final List<_QuadEntry> nodes;
+  final Rect viewport;
+  final List<int> edgeIndices;
+  const _TilePaintData({required this.nodes, required this.viewport, required this.edgeIndices});
+}
+
+class TileCache {
+  final int _bucket;
+  final Map<String, List<_TilePaintData>> _cache = {};
+  TileCache(this._bucket);
+  void add(_TilePaintData d) { _cache.putIfAbsent(_tileKey(d.viewport), () => []).add(d); }
+  void clear() => _cache.clear();
+  List<_TilePaintData> all() => _cache.values.expand((e) => e).toList();
+  int size() => _cache.values.fold(0, (a, e) => a + e.length);
+  String _tileKey(Rect v) => '${v.left ~/ _bucket}_${v.top ~/ _bucket}'
+      '_${v.right ~/ _bucket}_${v.bottom ~/ _bucket}';
+}
+
+// ═══════════════════════════════════════════════════════════
+// ForceLayoutEngine — Fruchterman-Reingold 力导布局
+// ═══════════════════════════════════════════════════════════
+class ForceLayoutEngine {
+  static Map<String, Offset> computeLayout(List<EChartNode> nodes) {
+    final n = nodes.length;
+    if (n == 0) return {};
+    const k = 80.0;
+    double temperature = 200.0;
+    final positions = <String, Offset>{};
+    for (int i = 0; i < n; i++) {
+      positions[nodes[i].id] = Offset(math.cos(2 * math.pi * i / n) * 200,
+                                       math.sin(2 * math.pi * i / n) * 200);
+    }
+    for (int iter = 0; iter < 100; iter++) {
+      final disp = <String, Offset>{for (final id in positions.keys) id: Offset.zero};
+      for (var a in positions.keys.toList()) {
+        for (var b in positions.keys.toList()) {
+          if (a == b) continue;
+          final delta = positions[a]! - positions[b]!;
+          final dist = math.max(0.01, delta.distance);
+          final repulse = k * k / dist;
+          disp[a] = disp[a]! + (delta / dist) * repulse;
+        }
+      }
+      for (var a in positions.keys.toList()) {
+        final d = disp[a]!;
+        final mag = d.distance;
+        if (mag > temperature) disp[a] = d / mag * temperature;
+        positions[a] = positions[a]! + disp[a]!;
+      }
+      temperature *= 0.95;
+    }
+    return _normalize(positions);
+  }
+
+  static Map<String, Offset> _normalize(Map<String, Offset> pos) {
+    if (pos.isEmpty) return pos;
+    double minX = double.infinity, maxX = double.negativeInfinity;
+    double minY = double.infinity, maxY = double.negativeInfinity;
+    for (final p in pos.values) {
+      minX = math.min(minX, p.dx); maxX = math.max(maxX, p.dx);
+      minY = math.min(minY, p.dy); maxY = math.max(maxY, p.dy);
+    }
+    final cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    final s = 600.0 / math.max(1.0, math.max(maxX - minX, maxY - minY));
+    return {for (final e in pos.entries) e.key: Offset((e.value.dx - cx) * s, (e.value.dy - cy) * s)};
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -335,6 +406,10 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   List<LodCluster> _clusters = [];
   List<EChartNode> _visibleNodes = [];
   EChartNode? _selectedNode;
+  LayoutType _layoutType = LayoutType.circular;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _searchQuery = '';
+  final Set<String> _hiddenCats = {};
 
   // 变换状态：world → screen
   Offset _panOffset = Offset.zero;   // 屏幕平移（世界坐标原点在哪）
@@ -376,7 +451,9 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
       if (!mounted) return;
       setState(() {
         _data = data;
-        _positions = LayoutEngine.computeLayout(data);
+        _positions = (_layoutType == LayoutType.force)
+            ? ForceLayoutEngine.computeLayout(data.nodes)
+            : LayoutEngine.computeLayout(data);
         _updateLod();
         // 自适应初始 zoom 让所有节点可见
         _fitToView();
@@ -390,8 +467,53 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
     final data = _data;
     if (data == null) return;
     final result = LodManager.build(data, _positions, _zoom);
-    _visibleNodes = result.visible;
-    _clusters = result.clusters;
+    _visibleNodes = _applyLegendFilter(result.visible);
+    _clusters = _applyLegendClusterFilter(result.clusters);
+    _visibleNodes = _applySearchFilter(_visibleNodes);
+  }
+
+  List<EChartNode> _applyLegendFilter(List<EChartNode> nodes) {
+    if (_hiddenCats.isEmpty) return nodes;
+    return nodes.where((n) {
+      for (final t in n.tags) {
+        if (_hiddenCats.contains(t)) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  List<LodCluster> _applyLegendClusterFilter(List<LodCluster> clusters) {
+    if (_hiddenCats.isEmpty) return clusters;
+    final data = _data;
+    if (data == null) return clusters;
+    return clusters.where((cl) {
+      final catName = cl.category >= 0 && cl.category < data.categories.length
+          ? data.categories[cl.category] : '';
+      if (_hiddenCats.contains(catName)) return false;
+      if (cl.childIds.isEmpty) return true;
+      return cl.childIds.any((id) {
+        for (final n in data.nodes) {
+          if (n.id == id) {
+            for (final t in n.tags) {
+              if (_hiddenCats.contains(t)) return false;
+            }
+            return true;
+          }
+        }
+        return false;
+      });
+    }).toList();
+  }
+
+  List<EChartNode> _applySearchFilter(List<EChartNode> nodes) {
+    final q = _searchQuery.trim();
+    if (q.isEmpty) return nodes;
+    final terms = q.toLowerCase().split(RegExp(r'\\s+'));
+    return nodes.where((n) {
+      final label = (n.label ?? '').toLowerCase();
+      final id = n.id.toLowerCase();
+      return terms.every((t) => label.contains(t) || id.contains(t));
+    }).toList();
   }
 
   void _fitToView() {
@@ -572,6 +694,39 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  SizedBox(
+                    width: 140,
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: _onSearchChanged,
+                      decoration: InputDecoration(
+                        hintText: '搜索...',
+                        prefixIcon: const Icon(Icons.search, size: 16),
+                        suffixIcon: _searchQuery.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear, size: 14),
+                                onPressed: () { _searchCtrl.clear(); _onSearchChanged(''); },
+                              )
+                            : null,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  DropdownButton<LayoutType>(
+                    value: _layoutType,
+                    onChanged: (v) => _switchLayout(v!),
+                    underline: const SizedBox(),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    dropdownColor: const Color(0xFF101830),
+                    items: const [
+                      DropdownMenuItem(value: LayoutType.circular, child: Text('环形')),
+                      DropdownMenuItem(value: LayoutType.force, child: Text('力导')),
+                    ],
+                  ),
+                  const SizedBox(width: 8),
                   _iconButton(Icons.refresh, '重新加载', () => _loadGraph()),
                   _iconButton(Icons.center_focus_weak, '缩放适配', () => setState(_fitToView)),
                 ],
@@ -603,14 +758,26 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
                       style: TextStyle(color: Colors.white70, fontSize: 11)),
                   const SizedBox(width: 6),
                   for (final cat in _data?.categories ?? []) ...[
-                    Container(width: 10, height: 10,
-                        decoration: BoxDecoration(
-                          color: _categoryColor(cat.hashCode, _data?.categories.length ?? 1),
-                          shape: BoxShape.circle,
-                        )),
-                    const SizedBox(width: 4),
-                    Text(cat, style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                    const SizedBox(width: 10),
+                    InkWell(
+                      onTap: () => _toggleCategory(cat),
+                      child: Row(
+                        children: [
+                          Container(width: 10, height: 10,
+                            decoration: BoxDecoration(
+                              color: _hiddenCats.contains(cat)
+                                  ? Colors.grey.withValues(alpha: 0.3)
+                                  : _categoryColor(cat.hashCode, _data?.categories.length ?? 1),
+                              shape: BoxShape.circle,
+                            )),
+                          const SizedBox(width: 4),
+                          Text(cat, style: TextStyle(
+                              color: _hiddenCats.contains(cat) ? Colors.grey : Colors.white70,
+                              fontSize: 10,
+                              decoration: _hiddenCats.contains(cat) ? TextDecoration.lineThrough : null)),
+                          const SizedBox(width: 10),
+                        ],
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -668,6 +835,30 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
         ],
       ),
     );
+  }
+
+  void _switchLayout(LayoutType type) {
+    setState(() { _layoutType = type; });
+    _loadGraph();
+  }
+
+  void _onSearchChanged(String q) {
+    setState(() { _searchQuery = q; });
+    _updateLod();
+  }
+
+  void _toggleCategory(String cat) {
+    setState(() {
+      if (_hiddenCats.contains(cat)) { _hiddenCats.remove(cat); }
+      else { _hiddenCats.add(cat); }
+    });
+    _updateLod();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   List<EChartLink> _filteredEdges() {
@@ -850,8 +1041,10 @@ class _KnowledgeGraphPainter extends CustomPainter {
   final Size canvasSize;
   final Color backgroundColor;
   final Color accentColor;
+  GraphQuadtree? _qt;
+  TileCache? _tileCache;
 
-  const _KnowledgeGraphPainter({
+  _KnowledgeGraphPainter({
     required this.visibleNodes,
     required this.clusters,
     required this.edges,
@@ -879,6 +1072,7 @@ class _KnowledgeGraphPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    _buildQuadtree();
     // 1. 背景
     canvas.drawRect(Rect.fromLTWH(0, 0, canvasSize.width, canvasSize.height), Paint()..color = backgroundColor);
 
@@ -896,6 +1090,21 @@ class _KnowledgeGraphPainter extends CustomPainter {
 
     // 6. 标签（zoom 足够大时）
     _drawLabels(canvas);
+  }
+
+  void _buildQuadtree() {
+    _qt ??= GraphQuadtree(
+      const Rect.fromLTRB(-20000, -20000, 20000, 20000),
+      maxItems: 8,
+      maxDepth: 4,
+    );
+    for (final node in visibleNodes) {
+      final pos = positions[node.id];
+      if (pos == null) continue;
+      final screen = _toScreen(pos);
+      const r = 20.0;
+      _qt!.insert(node, Rect.fromCenter(center: screen, width: r * 2, height: r * 2));
+    }
   }
 
   void _drawGrid(Canvas canvas) {
@@ -1016,7 +1225,13 @@ class _KnowledgeGraphPainter extends CustomPainter {
 
   void _drawNodes(Canvas canvas) {
     final view = _viewport();
-    for (final n in visibleNodes) {
+    final nodeList = _qt == null
+        ? visibleNodes.toList()
+        : _qt!.query(view).cast<_QuadEntry>()
+              .map((e) => e.obj)
+              .whereType<EChartNode>()
+              .toList();
+    for (final n in nodeList) {
       final pos = positions[n.id];
       if (pos == null) continue;
       final screen = _toScreen(pos);
