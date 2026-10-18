@@ -961,6 +961,26 @@ class SNN:
             for out_id in outputs:
                 net.connect(hid_id, out_id, weight=w, delay=1)
 
+        # ── 补充缺失输入神经元出边 ────────────────────────────
+        # structured 只定义了 expense/approval_pending/threshold_breach/user_request/
+        # error/query/chitchat/system 的计算神经元。以下输入神经元无出边，
+        # 信号完全丢失。将它们接入已存在的 escalate 隐藏层（与信号类型
+        # AND 组合，高阈值 1.5 仍保证选择性）：
+        #   4  cron_alert       → 17/18/26
+        #   5  external_event   → 17/18/26
+        #   11 urgency_high     → 17/18/20/21/26（高紧急度放大所有 escalate 路径）
+        #   15 has_detail       → 17/18/20/21/26（有详情说明信号重要）
+        #   10 noise            → 保持死亡（compute_budget 已禁用 noise intent 下的 SNN）
+        _escalate_hidden = {17, 18, 20, 21, 26}
+        for inp_id, targets in [
+            (4, {17, 18, 26}),
+            (5, {17, 18, 26}),
+            (11, _escalate_hidden),
+            (15, _escalate_hidden),
+        ]:
+            for hid_id in sorted(targets):
+                net.connect(inp_id, hid_id, weight=0.9, delay=1)
+
         # 无随机补充连接——避免非选择性激活
 
         # 抑制层 -> 输出层（抑制性）
