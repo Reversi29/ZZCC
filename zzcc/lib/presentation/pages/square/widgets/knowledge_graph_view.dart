@@ -388,6 +388,9 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   List<LodCluster> _clusters = [];
   List<EChartNode> _visibleNodes = [];
   EChartNode? _selectedNode;
+  EChartNode? _draggingNode;
+  EChartNode? _hoveredNode;
+  Offset _hoverScreenPos = Offset.zero;
   LayoutType _layoutType = LayoutType.circular;
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
@@ -545,10 +548,40 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   // 手势
   // ═══════════════════════════════════════════════════════════
 
+  void _onPanStart(DragStartDetails d) {
+    // Hit test: if we start dragging from a node, drag the node instead of panning
+    EChartNode? hit;
+    double bestDist = 24.0;
+    for (final n in _visibleNodes) {
+      final pos = _positions[n.id];
+      if (pos == null) continue;
+      final screen = _worldToScreen(pos, _zoom);
+      final dist = (screen - d.localPosition).distance;
+      if (dist < bestDist) {
+        bestDist = dist;
+        hit = n;
+      }
+    }
+    _draggingNode = hit;
+  }
+
   void _onPanUpdate(DragUpdateDetails d) {
-    setState(() {
-      _panOffset = _panOffset + d.delta;
-    });
+    if (_draggingNode != null) {
+      // Move node position in world space
+      final worldDelta = Offset(d.delta.dx / _zoom, d.delta.dy / _zoom);
+      final currentPos = _positions[_draggingNode!.id] ?? Offset.zero;
+      _positions[_draggingNode!.id] = currentPos + worldDelta;
+      setState(() {});
+    } else {
+      setState(() {
+        _panOffset = _panOffset + d.delta;
+      });
+    }
+  }
+
+  void _onPanEnd(DragEndDetails d) {
+    _draggingNode = null;
+    _updateLod();
   }
 
   void _onScaleStart(ScaleStartDetails d) {
@@ -577,7 +610,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
   void _onTapUp(TapUpDetails d) {
     // 查找点击命中的节点
     EChartNode? hit;
-    double bestDist = 24.0; // 屏幕像素命中半径
+    double bestDist = 24.0;
 
     for (final n in _visibleNodes) {
       final pos = _positions[n.id];
@@ -593,6 +626,28 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
     setState(() {
       _selectedNode = hit;
     });
+  }
+
+  void _onHover(PointerEvent e) {
+    // Hit test for hover tooltip
+    EChartNode? hit;
+    double bestDist = 20.0;
+    for (final n in _visibleNodes) {
+      final pos = _positions[n.id];
+      if (pos == null) continue;
+      final screen = _worldToScreen(pos, _zoom);
+      final dist = (screen - e.localPosition).distance;
+      if (dist < bestDist) {
+        bestDist = dist;
+        hit = n;
+      }
+    }
+    if (hit != _hoveredNode) {
+      setState(() {
+        _hoveredNode = hit;
+        _hoverScreenPos = e.localPosition;
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -629,8 +684,12 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
                   });
                 });
               }
-              return GestureDetector(
+              return Listener(
+                onPointerMove: _onHover,
+                child: GestureDetector(
+                onPanStart: _onPanStart,
                 onPanUpdate: _onPanUpdate,
+                onPanEnd: _onPanEnd,
                 onScaleStart: _onScaleStart,
                 onScaleUpdate: _onScaleUpdate,
                 onScaleEnd: _onScaleEnd,
@@ -643,6 +702,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
                     edges: _filteredEdges(),
                     positions: _positions,
                     selectedNode: _selectedNode,
+                    hoveredNode: _hoveredNode,
                     panOffset: _panOffset,
                     zoom: _zoom,
                     canvasSize: newSize,
@@ -650,6 +710,7 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
                     accentColor: scheme.primary,
                   ),
                 ),
+              ),
               );
             },
           ),
@@ -765,6 +826,14 @@ class _KnowledgeGraphViewState extends State<KnowledgeGraphView> {
               ),
             ),
           ),
+
+          // Hover tooltip
+          if (_hoveredNode != null && _draggingNode == null)
+            Positioned(
+              left: (_hoverScreenPos.dx + 14).clamp(0.0, (_canvasSize.width - 180).clamp(0.0, double.infinity)),
+              top: (_hoverScreenPos.dy + 14).clamp(0.0, (_canvasSize.height - 80).clamp(0.0, double.infinity)),
+              child: _NodeTooltip(node: _hoveredNode!),
+            ),
 
           // 节点详情面板
           if (_selectedNode != null)
@@ -1018,6 +1087,7 @@ class _KnowledgeGraphPainter extends CustomPainter {
   final List<EChartLink> edges;
   final Map<String, Offset> positions;
   final EChartNode? selectedNode;
+  final EChartNode? hoveredNode;
   final Offset panOffset;
   final double zoom;
   final Size canvasSize;
@@ -1031,6 +1101,7 @@ class _KnowledgeGraphPainter extends CustomPainter {
     required this.edges,
     required this.positions,
     required this.selectedNode,
+    this.hoveredNode,
     required this.panOffset,
     required this.zoom,
     required this.canvasSize,
@@ -1299,5 +1370,42 @@ class _KnowledgeGraphPainter extends CustomPainter {
         || old.clusters != clusters
         || old.edges != edges
         || old.selectedNode?.id != selectedNode?.id;
+  }
+}
+
+// ── Node Hover Tooltip ──
+class _NodeTooltip extends StatelessWidget {
+  final EChartNode node;
+  const _NodeTooltip({required this.node});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xCC1A1A2E),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            node.label.isNotEmpty ? node.label : node.id,
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+          if (node.tags.isNotEmpty)
+            Text(
+              '#${node.tags.join(' #')}',
+              style: const TextStyle(color: Colors.white54, fontSize: 10),
+            ),
+          if (node.props.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text('${node.props.length} props', style: const TextStyle(color: Colors.white38, fontSize: 9)),
+          ],
+        ],
+      ),
+    );
   }
 }
