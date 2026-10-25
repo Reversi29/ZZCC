@@ -389,8 +389,91 @@ class NebulaRemoteSource {
   // ── Graph Schema ───────────────────────────────────────
 
   /// 获取某个 space 的完整图谱数据（nodes + links），用于 ECharts 渲染
-  /// 通过 nGQL 查询拼装：MATCH (a)-[r]->(b) RETURN a, r, b
+  /// 优先使用后端 /brain/graph 聚合结果；失败时回退到 nGQL 查询拼装。
   Future<GraphData> fetchGraphData(String space, {int limit = 200}) async {
+    final brainData = await _fetchGraphDataFromBrain(space, limit: limit);
+    if (brainData != null) return brainData;
+    return _fetchGraphDataFromNebulaQuery(space, limit: limit);
+  }
+
+  Future<GraphData?> _fetchGraphDataFromBrain(
+    String space, {
+    required int limit,
+  }) async {
+    try {
+      final resp = await _dio.get(
+        'brain/graph',
+        queryParameters: {'space': space, 'limit': limit},
+        options: Options(validateStatus: (_) => true),
+      );
+      if (resp.statusCode != 200) {
+        _log.warning(
+          'brainGraphUnavailable status=${resp.statusCode} body=${resp.data}',
+        );
+        return null;
+      }
+      final data = resp.data as Map<String, dynamic>? ?? {};
+      if (data['ok'] != true) {
+        _log.warning('brainGraphFailed body=${resp.data}');
+        return null;
+      }
+
+      final payload = data['data'] as Map<String, dynamic>? ?? {};
+      final nodes = <EChartNode>[];
+      final links = <EChartLink>[];
+
+      final rawNodes = payload['nodes'] as List<dynamic>? ?? [];
+      for (final raw in rawNodes) {
+        final m = raw as Map<String, dynamic>? ?? {};
+        final id = m['id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        nodes.add(EChartNode(
+          id: id,
+          label: m['label']?.toString() ?? id,
+          category: (m['category'] as num?)?.toInt() ?? 0,
+          symbolSize: (m['symbolSize'] as num?)?.toInt() ?? 28,
+          tags: (m['tags'] as List<dynamic>? ?? [])
+              .map((e) => e.toString())
+              .toList(),
+          props: (m['props'] as Map<String, dynamic>?) ?? {},
+        ));
+      }
+
+      final rawLinks = payload['links'] as List<dynamic>? ?? [];
+      for (final raw in rawLinks) {
+        final m = raw as Map<String, dynamic>? ?? {};
+        final source = m['source']?.toString() ?? '';
+        final target = m['target']?.toString() ?? '';
+        if (source.isEmpty || target.isEmpty) continue;
+        links.add(EChartLink(
+          source: source,
+          target: target,
+          label: m['label']?.toString() ?? '',
+        ));
+      }
+
+      final categories = (payload['categories'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList();
+      return GraphData(
+        nodes: nodes,
+        links: links,
+        categories: categories,
+        space: data['space']?.toString() ?? space,
+      );
+    } on DioException catch (e) {
+      _log.warning('brainGraph failed: ${e.message} status=${e.response?.statusCode}');
+      return null;
+    } catch (e, st) {
+      _log.warning('brainGraph unexpected: $e $st');
+      return null;
+    }
+  }
+
+  Future<GraphData> _fetchGraphDataFromNebulaQuery(
+    String space, {
+    required int limit,
+  }) async {
     final nGQL = 'MATCH (a)-[r]->(b) '
         'RETURN a, r, b '
         'LIMIT $limit';
