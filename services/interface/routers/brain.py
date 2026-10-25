@@ -723,6 +723,109 @@ async def snn_save():
     return {"ok": ok}
 
 
+@router.get("/graph")
+async def brain_graph(
+    space: Optional[str] = Query(None, description="NebulaGraph space；默认使用 brain_semantic"),
+    limit: int = Query(300, ge=1, le=1000, description="最多返回边数；节点/边均按此上限截断"),
+):
+    """语义图谱数据，供前端知识图谱直接渲染。
+
+    返回 ECharts/前端 GraphData 可直接消费的结构：
+        {ok, space, data:{nodes:[], links:[], categories:[]}}
+    """
+    from dependencies import get_client
+    from models.schemas import check_identifier
+    from modules.nebula_client import NebulaError
+    from services.graph import run_query
+
+    target_space = space or sem.semantic_memory.space or "brain_semantic"
+    check_identifier(target_space, "空间名")
+    if limit <= 0:
+        raise HTTPException(status_code=400, detail="limit must be > 0")
+
+    nGQL = (
+        "MATCH (a)-[r]->(b) "
+        "RETURN a, r, b "
+        f"LIMIT {int(limit)}"
+    )
+    try:
+        # Brain API 是全局系统服务；这里复用 Graph/Query API 的连接依赖。
+        with get_client().session_with() as sess:
+            rows = run_query(get_client(), sess, space=target_space, q=nGQL)
+    except NebulaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    nodes: list[dict] = []
+    links: list[dict] = []
+    seen_nodes: dict[str, dict] = {}
+    categories: dict[str, int] = {}
+
+    def category_index(name: str) -> int:
+        key = name or "unknown"
+        if key not in categories:
+            categories[key] = len(categories)
+        return categories[key]
+
+    def node_label(vid: str, tags: dict) -> str:
+        if tags:
+            first_tag = next(iter(tags.values()), {})
+            if first_tag:
+                label = next(iter(first_tag.values()), "")
+                if label is not None and str(label).strip():
+                    return str(label)
+        return str(vid)
+
+    def add_node(v: dict | None):
+        if not v:
+            return
+        vid = str(v.get("vid", ""))
+        if not vid or vid in seen_nodes:
+            return
+        tags = v.get("tags") or {}
+        tag_names = sorted(str(k) for k in tags.keys())
+        cat = category_index(tag_names[0] if tag_names else "unknown")
+        props = {k: v.get(k) for k in v.keys() if k not in {"vid", "tags"}}
+        node = {
+            "id": vid,
+            "label": node_label(vid, tags),
+            "category": cat,
+            "symbolSize": 28,
+            "tags": tag_names,
+            "props": props,
+        }
+        seen_nodes[vid] = node
+        nodes.append(node)
+
+    for row in rows:
+        a = row.get("a") or {}
+        b = row.get("b") or {}
+        r = row.get("r") or {}
+        add_node(a)
+        add_node(b)
+        src = str(a.get("vid", ""))
+        dst = str(b.get("vid", ""))
+        if src and dst:
+            links.append({
+                "source": src,
+                "target": dst,
+                "label": str(r.get("edge", "")),
+            })
+            if len(links) >= limit:
+                break
+
+    category_names = [c for c, _ in sorted(categories.items(), key=lambda kv: kv[1])]
+    return {
+        "ok": True,
+        "space": target_space,
+        "data": {
+            "nodes": nodes[:limit],
+            "links": links[:limit],
+            "categories": category_names,
+        },
+    }
+
 @router.get("/snn/graph")
 async def snn_graph():
     """SNN 连接图（节点+边，供前端可视化）。"""
