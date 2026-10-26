@@ -38,6 +38,7 @@ from services.brain import (
     semantic as sem,
     snn_region as snn_mod,
 )
+from services.brain.snn_region import shadow_snn_region
 from services.brain.broker import broker
 
 logger = logging.getLogger("brain.api")
@@ -406,6 +407,7 @@ async def status(
         "memory_entries": memory_count,
         "decisions_logged": decisions_count,
         "reasoning_stats": rsn.engine.stats(),
+        "shadow_stats": shadow_snn_region.status(),
         "rules_loaded": len(rls.list_rules()),
         "action_executors": ae.list_executors(),
     }
@@ -593,6 +595,13 @@ async def semantic_ensure_schema(
 ):
     """创建/校验语义记忆 space、tag、edge。"""
     return await sem.semantic_memory.ensure_schema()
+
+
+@router.get("/shadow")
+async def shadow_status(
+):
+    """Shadow SNN 状态。"""
+    return {"ok": True, **shadow_snn_region.status()}
 
 
 @router.get("/core/status")

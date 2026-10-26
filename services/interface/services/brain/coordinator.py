@@ -101,7 +101,8 @@ class RegionCoordinator:
 
     def __init__(self):
         self._regions: Dict[str, Callable] = {}
-        self._region_weights = dict(_REGION_WEIGHTS)
+        self._region_weights: Dict[str, float] = dict(_REGION_WEIGHTS)
+        self._shadow_regions: set[str] = set()
 
     def register(self, region: str, fn: Callable, weight: Optional[float] = None) -> None:
         """注册脑区推理函数。
@@ -111,6 +112,8 @@ class RegionCoordinator:
         self._regions[region] = fn
         if weight is not None:
             self._region_weights[region] = weight
+        if region.startswith("shadow:"):
+            self._shadow_regions.add(region)
 
     def set_weight(self, region: str, weight: float) -> None:
         self._region_weights[region] = weight
@@ -151,7 +154,7 @@ class RegionCoordinator:
         for name in enabled_regions:
             fn = self._regions[name]
             budget = plan.get(name)
-            task = asyncio.ensure_future(self._run_region(name, fn, signal, context, budget))
+            task = asyncio.ensure_future(self._run_region(name, fn, signal, context, budget, shadow=name in self._shadow_regions))
             tasks_map[task] = name
 
         processed: List[RegionResult] = []
@@ -207,6 +210,7 @@ class RegionCoordinator:
         signal: NeuralSignal,
         context: Dict[str, Any],
         budget: Any,
+        shadow: bool = False,
     ) -> RegionResult:
         """执行单个脑区，包装为 RegionResult。"""
         start = time.time()
@@ -257,6 +261,15 @@ class RegionCoordinator:
 
         for r in results:
             if not r.ok:
+                continue
+            if r.region in self._shadow_regions:
+                enrichment_context[r.region] = {
+                    "shadow": True,
+                    "has_result": r.result is not None,
+                    "decision": r.result.decision if r.result else None,
+                    "confidence": r.result.confidence if r.result else 0.0,
+                    "context": r.context,
+                }
                 continue
             if r.result is not None:
                 weight = self._region_weights.get(r.region, 0.3)

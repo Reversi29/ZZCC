@@ -37,6 +37,7 @@ _DEFAULT_BUDGETS: Dict[Intent, Dict[str, Dict[str, float]]] = {
         "statistical": {"time_ms": 200,  "tokens": 0},
         "llm":         {"time_ms": 30000, "tokens": 2048},
         "snn":         {"time_ms": 500,  "tokens": 0},
+        "shadow:snn_aux": {"time_ms": 300, "tokens": 0},
         "semantic":    {"time_ms": 1500, "tokens": 0},
         "episodic":    {"time_ms": 500,  "tokens": 0},
         "web_search":  {"time_ms": 0,    "tokens": 0},  # 业务默认不联网（避免噪声）

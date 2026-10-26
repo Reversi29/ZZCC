@@ -16,6 +16,7 @@ from models.brain import Action, CognitionResult, NeuralSignal
 from services.brain import memory as mem
 from services.brain import rules as rules_mod
 from services.brain import snn_region as snn_mod
+from services.brain.snn_region import shadow_snn_region
 from services.brain.coordinator import RegionCoordinator, RegionResult, coordinator as global_coordinator
 from services.brain.compute_budget import ComputeBudget, Intent
 from services.brain.semantic import SemanticMemory
@@ -363,12 +364,21 @@ class ReasoningEngine:
         # SNN 脑区（脉冲神经网络推理）
         async def snn_region_fn(signal, context, budget):
             self._stats["snn_calls"] = self._stats.get("snn_calls", 0) + 1
-            return await snn_mod.snn_region.reason(signal, context, budget)
+            result = await snn_mod.snn_region.reason(signal, context, budget)
+            # 让 shadow 读取主 SNN 决策，但不参与融合
+            if isinstance(result, RegionResult):
+                context["main_snn_result"] = result.result
+            return result
+
+        # Shadow 辅助 SNN：MVP 阶段只做影子观察，不参与融合决策
+        async def shadow_snn_region_fn(signal, context, budget):
+            return await shadow_snn_region.reason(signal, context, budget)
 
         self.coordinator.register("rule", rule_region, weight=0.80)
         self.coordinator.register("statistical", statistical_region, weight=0.60)
         self.coordinator.register("llm", llm_region, weight=0.50)
         self.coordinator.register("snn", snn_region_fn, weight=0.55)
+        self.coordinator.register("shadow:snn_aux", shadow_snn_region_fn, weight=0.10)
         self.coordinator.register("semantic", semantic_region, weight=0.20)
         self.coordinator.register("episodic", episodic_region, weight=0.20)
         # web_search 不注册为并行脑区——已在 reason() 中作为 pre-enrichment 预先调用

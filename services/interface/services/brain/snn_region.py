@@ -40,6 +40,16 @@ from services.brain.snn import SNN, NeuronType
 
 logger = logging.getLogger("brain.snn_region")
 
+def _default_brain_config_dir() -> str:
+    configured = os.environ.get("BRAIN_CONFIG_DIR", "/app/config_data")
+    if os.path.isdir(configured) or os.path.abspath(configured) == "/app/config_data":
+        return configured
+    local_data = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "data"))
+    if os.path.isdir(local_data):
+        return local_data
+    return configured
+
+
 # ── 信号类型 → 输入神经元 ID 映射 ─────────────────────────────
 _SIGNAL_TO_NEURON = {
     "expense": 0,
@@ -129,7 +139,7 @@ class SNNRegion:
     INFERENCE_STEPS = 10
 
     def __init__(self, save_path: Optional[str] = None):
-        config_dir = os.environ.get("BRAIN_CONFIG_DIR", "/app/config_data")
+        config_dir = _default_brain_config_dir()
         self.save_path = save_path or os.path.join(config_dir, "snn_network.json")
 
         self._stats_path = self.save_path.replace(".json", "_stats.json")
@@ -695,4 +705,82 @@ class SNNRegion:
     # 全局单例
     global_instance: Optional["SNNRegion"] = None
 
+
+class ShadowSNNRegion(SNNRegion):
+    """辅助 SNN shadow 脑区。
+
+    MVP 最小闭环：
+    - 复用 SNNRegion 的编码/解码逻辑
+    - 只观察主 SNN 结果，不参与最终融合
+    - 结果写入 context["shadow:snn_aux"] 供后续评估/回放
+    """
+
+    def __init__(self, save_path: Optional[str] = None):
+        config_dir = _default_brain_config_dir()
+        save_path = save_path or os.path.join(config_dir, "snn_shadow_network.json")
+        super().__init__(save_path=save_path)
+        self._stats_path = self.save_path.replace(".json", "_stats.json")
+        self._stats.update({
+            "shadow_calls": 0,
+            "shadow_hits": 0,
+            "agreement": 0,
+            "disagreement": 0,
+            "last_shadow_decision": "",
+            "last_main_decision": "",
+        })
+        self._load_stats()
+
+    async def reason(self, signal: NeuralSignal, context: Dict[str, Any], budget: Any = None):
+        from services.brain.coordinator import RegionResult
+        from services.brain.compute_budget import RegionBudget
+
+        start = time.time()
+        self._stats["shadow_calls"] = self._stats.get("shadow_calls", 0) + 1
+        try:
+            budget = budget or RegionBudget(time_ms=300, tokens=0, allowed=True)
+            if not getattr(budget, "allowed", True):
+                return RegionResult(region="shadow:snn_aux", ok=True, result=None,
+                                    context={"reason": "shadow disabled by budget"}, elapsed_ms=0)
+
+            input_neurons = self._encode_signal(signal)
+            outputs, _ = self.snn.step_with_learning(input_neurons, 2.0)
+            result = self._decode_output(outputs, self.snn.get_active_neurons())
+            main_decision = context.get("main_snn_result")
+            if main_decision is not None and not isinstance(main_decision, str):
+                main_decision = getattr(main_decision, "decision", None)
+            shadow_decision = result.decision if result else None
+
+            if shadow_decision and main_decision:
+                if shadow_decision == main_decision:
+                    self._stats["agreement"] = self._stats.get("agreement", 0) + 1
+                    self._stats["shadow_hits"] = self._stats.get("shadow_hits", 0) + 1
+                else:
+                    self._stats["disagreement"] = self._stats.get("disagreement", 0) + 1
+            if shadow_decision:
+                self._stats["last_shadow_decision"] = shadow_decision
+            if main_decision:
+                self._stats["last_main_decision"] = main_decision
+            if result:
+                result.signal_id = signal.id
+            elapsed = (time.time() - start) * 1000
+            return RegionResult(
+                region="shadow:snn_aux",
+                ok=True,
+                result=result,
+                context={
+                    "shadow": True,
+                    "input_neurons": input_neurons,
+                    "main_decision": main_decision,
+                    "shadow_decision": shadow_decision,
+                    "agreement": self._stats.get("agreement", 0),
+                    "disagreement": self._stats.get("disagreement", 0),
+                },
+                elapsed_ms=elapsed,
+            )
+        except Exception as e:
+            elapsed = (time.time() - start) * 1000
+            return RegionResult(region="shadow:snn_aux", ok=False, error=str(e), elapsed_ms=elapsed)
+
+
+shadow_snn_region = ShadowSNNRegion(save_path=os.path.join(_default_brain_config_dir(), "snn_shadow_network.json"))
 snn_region = SNNRegion()
