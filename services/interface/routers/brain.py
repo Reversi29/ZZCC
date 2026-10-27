@@ -675,9 +675,14 @@ async def learn(
                 # 推导感受方向：correct_decision 或有效决策 → 威胁方向
                 eff = request.correct_decision or skill.get("decision", "") if skill.get("ok") else request.correct_decision or ""
                 feedback_dir: Dict[str, str] = {}
+                # 感知一次，供反馈推导与学习复用
+                perception = v2.perception.perceive(request.payload)
                 if eff in ("reject", "escalate", "flag"):
                     feedback_dir["threat"] = "high"
-                    feedback_dir["urgency"] = "high"
+                    # urgency 仅在文本含紧急语义时才推 high（避免无紧急词时"学而无功"）
+                    flat = perception.to_flat_vector()
+                    if len(flat) > 17 and (flat[16] > 0.05 or flat[17] > 0.05):
+                        feedback_dir["urgency"] = "high"
                 elif eff in ("auto_approve", "approve"):
                     feedback_dir["threat"] = "low"
                 else:
@@ -685,7 +690,6 @@ async def learn(
                     if not request.correct:
                         feedback_dir["threat"] = "high"
                 if feedback_dir:
-                    perception = v2.perception.perceive(request.payload)
                     st = v2.sentience.sense(perception)
                     learn_stats = v2.sentience.learn(perception, st.sentiments, feedback_dir)
                     sentience_result = {"ok": True, "skipped": False, "learned": learn_stats}
