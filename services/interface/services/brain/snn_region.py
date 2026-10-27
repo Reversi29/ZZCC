@@ -56,7 +56,10 @@ _SIGNAL_TO_NEURON = {
     "invoice": 0,           # 费用类归并
     "payment": 0,
     "reimbursement": 0,
+    "expense_approval": 0,  # 费用审批归并
     "approval_pending": 1,
+    "purchase_order": 1,    # 采购订单归并
+    "vendor_risk": 2,       # 供应商风险归并到阈值违规
     "threshold_breach": 2,
     "user_request": 3,
     "cron_alert": 4,
@@ -203,6 +206,17 @@ class SNNRegion:
             neurons.append(amount_neuron)
         if has_detail:
             neurons.append(15)
+
+        # ── 专用标记神经元（v3 编码消歧） ──────────────────
+        # approval_pending + 低紧急度(<40) → 38 (ap_low_marker) → auto_approve
+        # user_request + 动作关键词 → 39 (user_action_marker) → escalate
+        if sig_type == "approval_pending" and signal.urgency < 40:
+            neurons.append(38)
+        elif sig_type == "user_request":
+            text = str(payload.get("question", "")) + str(payload.get("text", ""))
+            if any(k in text.lower() for k in
+                   ("cancel", "order", "delete", "refund", "urgent", "escalate")):
+                neurons.append(39)
 
         # 如果信号类型未映射，用 hash 分桶到输入神经元
         if not neurons:
@@ -629,7 +643,8 @@ class SNNRegion:
         """自动保存网络状态和统计。"""
         try:
             self.snn.save(self.save_path)
-            self._save_stats()
+            if hasattr(self, "_stats"):
+                self._save_stats()
         except Exception as e:
             logger.warning("snn_auto_save_failed: %s", str(e))
 

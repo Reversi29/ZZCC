@@ -877,7 +877,7 @@ class SNN:
           （如 approval_pending 小额 -> flag / 大额 -> escalate）
         - 隐藏层做交叉关联；抑制层抑制误触发的决策输出
         """
-        net = cls(num_neurons=38)
+        net = cls(num_neurons=40)
 
         input_types = [
             ("expense", 0),             # 0
@@ -896,6 +896,8 @@ class SNN:
             ("amount_medium", 13),      # 1000 < 金额 <= 100000
             ("amount_high", 14),        # 金额 > 100000
             ("has_detail", 15),         # payload 含描述/标题/文本等详情字段
+            ("ap_low_marker", 38),      # approval_pending + 低紧急度(<40)
+            ("user_action_marker", 39), # user_request + 动作关键词
         ]
         for name, nid in input_types:
             net.add_neuron(nid, NeuronType.INPUT, threshold=0.5)
@@ -943,7 +945,7 @@ class SNN:
             # (hid_id, [input_ids], [output_ids], out_weight)
             # out_weight > output threshold (1.0) to ensure single hidden neuron can activate output
             (16, [0, 12], [32], 1.5),         # expense + low → auto_approve
-            (17, [0, 13], [34], 1.5),         # expense + medium → escalate
+            (17, [0, 13], [34], 2.0),         # expense + medium → escalate
             (18, [0, 14], [34], 1.5),         # expense + high → escalate
             (19, [1, 12], [35], 1.5),         # ap + low → flag
             (20, [1, 13], [34], 1.5),         # ap + medium → escalate
@@ -962,24 +964,26 @@ class SNN:
                 net.connect(hid_id, out_id, weight=w, delay=1)
 
         # ── 补充缺失输入神经元出边 ────────────────────────────
-        # structured 只定义了 expense/approval_pending/threshold_breach/user_request/
-        # error/query/chitchat/system 的计算神经元。以下输入神经元无出边，
-        # 信号完全丢失。将它们接入已存在的 escalate 隐藏层（与信号类型
-        # AND 组合，高阈值 1.5 仍保证选择性）：
-        #   4  cron_alert       → 17/18/26
-        #   5  external_event   → 17/18/26
-        #   11 urgency_high     → 17/18/20/21/26（高紧急度放大所有 escalate 路径）
-        #   15 has_detail       → 17/18/20/21/26（有详情说明信号重要）
-        #   10 noise            → 保持死亡（compute_budget 已禁用 noise intent 下的 SNN）
+        # 高紧急度(11)放大 escalate 路径（与信号类型 AND 组合，阈值仍保持选择性）
         _escalate_hidden = {17, 18, 20, 21, 26}
-        for inp_id, targets in [
-            (4, {17, 18, 26}),
-            (5, {17, 18, 26}),
-            (11, _escalate_hidden),
-            (15, _escalate_hidden),
-        ]:
-            for hid_id in sorted(targets):
+        for inp_id in (4, 5, 11):
+            for hid_id in sorted(_escalate_hidden):
                 net.connect(inp_id, hid_id, weight=0.9, delay=1)
+
+        # ── v3 消歧标记路由 ───────────────────────────────────
+        # 38 (ap_low_marker): ap+低紧急度 → auto_approve，抑制 flag 误触
+        net.connect(38, 32, weight=1.5, delay=1)
+        net.connect(38, 19, weight=-0.6, delay=1)
+        # 39 (user_action_marker): user_request 带动作关键词 → escalate
+        net.connect(39, 17, weight=0.9, delay=1)
+        net.connect(3, 17, weight=0.9, delay=1)
+        # H19 阈值提升到 1.8（需 1+12 双输入 1.8 才 flag，38 抑制时 1.8-0.6=1.2 不触发）
+        net.neurons[19].threshold = 1.8
+        # ap 低紧急度直连 auto_approve 辅助路径
+        net.connect(1, 32, weight=0.6, delay=1)
+        net.connect(12, 32, weight=0.6, delay=1)
+        # threshold_breach + 低紧急度 → auto_approve
+        net.connect(2, 32, weight=1.5, delay=1)
 
         # 无随机补充连接——避免非选择性激活
 

@@ -306,16 +306,27 @@ class TestPersistence:
 
 class TestDefaultTopology:
     def test_create_default_has_38_neurons(self, default_net):
-        assert default_net.num_neurons == 38
+        # v3 拓扑：40 神经元（新增 38=ap_low_marker, 39=user_action_marker）
+        assert default_net.num_neurons == 40
 
     def test_default_neuron_types(self, default_net):
         types = defaultdict(int)
         for n in default_net.neurons:
             types[n.neuron_type] += 1
-        assert types[NeuronType.INPUT] == 16
+        assert types[NeuronType.INPUT] == 18
         assert types[NeuronType.EXCITATORY] == 12
         assert types[NeuronType.INHIBITORY] == 4
         assert types[NeuronType.OUTPUT] == 6
+
+    def test_default_marker_neurons(self, default_net):
+        """v3 消歧标记：38=ap_low_marker, 39=user_action_marker 有正确出边"""
+        # 38 → 32 (auto_approve) + 38 → 19 (flag 抑制)
+        assert 32 in default_net.out_edges.get(38, {})
+        assert 19 in default_net.out_edges.get(38, {})
+        # 39 → 17 (escalate 隐藏层)
+        assert 17 in default_net.out_edges.get(39, {})
+        # 38 → 32 权重 1.5 > 输出阈值 1.0
+        assert default_net.out_edges[38][32].weight >= 1.0
 
     def test_default_has_connections(self, default_net):
         edge_count = sum(len(v) for v in default_net.out_edges.values())
@@ -368,7 +379,7 @@ class TestReset:
 class TestStats:
     def test_stats_structure(self, default_net):
         s = default_net.stats()
-        assert s["num_neurons"] == 38
+        assert s["num_neurons"] == 40
         assert s["num_edges"] > 0
         assert s["total_fires"] == 0  # 初始无激活
         assert s["time"] == 0
