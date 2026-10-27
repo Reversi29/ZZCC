@@ -604,6 +604,19 @@ async def shadow_status(
     return {"ok": True, **shadow_snn_region.status()}
 
 
+@router.post("/shadow/replay")
+async def shadow_replay(
+    limit: int = Query(50, ge=1, le=500),
+    dry_run: bool = Query(True),
+):
+    """Shadow SNN 从 disagreement 样本回放训练。
+
+    读取 shadow 对比日志中 main_decision != shadow_decision 的样本，
+    以主决策为正确目标训练 shadow 网络（不触碰主 SNN 网络）。
+    """
+    return {"ok": True, **shadow_snn_region.replay_disagreements(limit=limit, dry_run=dry_run)}
+
+
 @router.get("/core/status")
 async def brain_core_status(
 ):

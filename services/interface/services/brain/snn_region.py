@@ -522,6 +522,9 @@ class SNNRegion:
         signal: NeuralSignal,
         correct_decision: str,
         was_correct: bool,
+        wrong_decision: Optional[str] = None,
+        eta: float = 0.02,
+        inject_strength: float = 2.0,
     ) -> dict:
         """从反馈标注中学习。
 
@@ -529,6 +532,7 @@ class SNNRegion:
             signal: 原始信号（重放输入模式）
             correct_decision: 正确决策（如 "auto_approve"）
             was_correct: 原始推理是否正确
+            wrong_decision: 错误决策（was_correct=False 时用于惩罚；默认读 last_decision）
 
         Returns:
             学习结果摘要
@@ -555,7 +559,7 @@ class SNNRegion:
                 self.snn.inject_pattern(input_neurons, strength)
                 self.snn.step()  # t=N:   输入放电，传播到隐藏层
                 self.snn.step()  # t=N+1: 隐藏层放电（事件到达）
-                self.snn.inject_input(target_output, 2.0)
+                self.snn.inject_input(target_output, inject_strength)
                 outputs = self.snn.step()  # t=N+2: 输出放电
                 if outputs.get(target_output, False):
                     before = sum(
@@ -577,7 +581,7 @@ class SNNRegion:
                     self._stats["edges_strengthened"] += strengthened
         else:
             # 错误决策 → 惩罚原始输出，同时轻微加强正确输出
-            original_decision = self._stats.get("last_decision", "")
+            original_decision = wrong_decision or self._stats.get("last_decision", "")
             penalty_output = self._decision_to_output_neuron(original_decision)
             if penalty_output is not None:
                 for src in list(self.snn.out_edges.keys()):
@@ -590,7 +594,7 @@ class SNNRegion:
                 self.snn.inject_pattern(input_neurons, strength)
                 self.snn.step()
                 self.snn.step()
-                self.snn.inject_input(target_output, 1.0)  # 较弱注入
+                self.snn.inject_input(target_output, inject_strength * 0.5)  # 较弱注入
                 outputs = self.snn.step()
                 if outputs.get(target_output, False):
                     strengthened = self.snn._reward_modulated_strengthen(
@@ -725,13 +729,93 @@ class ShadowSNNRegion(SNNRegion):
             "shadow_hits": 0,
             "agreement": 0,
             "disagreement": 0,
+            "replay_count": 0,
+            "null_shadow_calls": 0,
             "last_shadow_decision": "",
             "last_main_decision": "",
         })
         self._load_stats()
         # 决策对比日志路径（shadow 专用）
         self._shadow_log_path = self.save_path.replace(".json", "_shadow_compare.jsonl")
+        # 扰动标记文件（确保只扰动一次）
+        self._perturbed_flag_path = self.save_path.replace(".json", "_perturbed.flag")
+        # Shadow 必须是主 SNN 的“异质变体”：初始化时对所有权重加扰动，
+        # 否则从同一 create_default() 出发、未训练时输出完全一致，永远 agreement，无观测价值。
+        # 扰动只影响 shadow 自身网络，不触碰主 SNN。
+        self._perturb_network()
         self._save_stats()  # 确保统计文件存在
+
+    def _perturb_network(self, amplitude: float = 0.35, n_extra_edges: int = 8):
+        """对 shadow 网络进行异质化：权重扰动 + 随机新增连接。
+
+        仅第一次执行（标记文件不存在时）。
+
+        异质化策略：
+        1. 权重扰动：对现有边加 ±amplitude 的随机扰动
+        2. 结构扰动：随机新增若干条 input→hidden 或 hidden→output 的边
+           这些新边在主 SNN 中不存在，为 shadow 提供替代路径，
+           从而在某些输入下产生不同的输出（真正的 disagreement）。
+        """
+        try:
+            if os.path.exists(self._perturbed_flag_path):
+                return
+            import random
+            rng = random.Random()
+
+            # Phase 1: 权重扰动
+            changed = 0
+            for src, targets in self.snn.out_edges.items():
+                for tgt, conn in list(targets.items()):
+                    if conn is None:
+                        continue
+                    factor = 1.0 + rng.uniform(-amplitude, amplitude)
+                    conn.weight = max(0.05, min(self.snn.max_weight, conn.weight * factor))
+                    changed += 1
+
+            # Phase 2: 结构扰动 — 随机新增边
+            # 输入层 (0-15) → 隐藏层 (16-27 exc, 28-31 inh)
+            # 隐藏层 → 输出层 (32-37)
+            added = 0
+            input_range = list(range(0, 16))
+            exc_range = list(range(16, 28))
+            inh_range = list(range(28, 32))
+            output_range = list(range(32, 38))
+            attempts = n_extra_edges * 3  # 尝试更多次以避开已存在的边
+            for _ in range(attempts):
+                if added >= n_extra_edges:
+                    break
+                # 随机选择边类型
+                if rng.random() < 0.5:
+                    src = rng.choice(input_range)
+                    tgt_pool = exc_range if rng.random() < 0.85 else inh_range
+                    tgt = rng.choice(tgt_pool)
+                    w = round(rng.uniform(0.5, 1.5), 3)
+                else:
+                    src = rng.choice(exc_range + inh_range)
+                    tgt = rng.choice(output_range)
+                    w = round(rng.uniform(0.8, 2.0), 3)
+                # 跳过已存在的边
+                if tgt in self.snn.out_edges.get(src, {}):
+                    continue
+                self.snn.connect(src, tgt, weight=w, delay=1)
+                added += 1
+
+            logger.info(
+                "shadow: perturbed %d edges + added %d structural edges (heterogenous topology)",
+                changed, added,
+            )
+
+            # 持久化扰动后的网络
+            try:
+                self.snn.save(self.save_path)
+            except Exception as e:
+                logger.warning("shadow: perturb save failed: %s", str(e))
+
+            # 写入标记
+            with open(self._perturbed_flag_path, "w", encoding="utf-8") as f:
+                f.write("ok")
+        except Exception as e:
+            logger.warning("shadow: perturb failed: %s", str(e))
 
     async def reason(self, signal: NeuralSignal, context: Dict[str, Any], budget: Any = None):
         from services.brain.coordinator import RegionResult
@@ -753,14 +837,28 @@ class ShadowSNNRegion(SNNRegion):
                 main_decision = getattr(main_decision, "decision", None)
             shadow_decision = result.decision if result else None
 
+            # 对比统计：
+            # - agreement: shadow 与主决策都非空且相同
+            # - disagreement: 两者都非空但不同，或一方为 null 另一方非 null（真实差异）
+            #   null 差异是 shadow 异质化的核心价值——它在主 SNN 无法决策或决策不同的场景中提供不同视角
             if shadow_decision and main_decision:
                 if shadow_decision == main_decision:
                     self._stats["agreement"] = self._stats.get("agreement", 0) + 1
                     self._stats["shadow_hits"] = self._stats.get("shadow_hits", 0) + 1
                 else:
                     self._stats["disagreement"] = self._stats.get("disagreement", 0) + 1
+            elif (shadow_decision and not main_decision) or (not shadow_decision and main_decision):
+                # 一方有输出另一方无——记录为 disagreement（带类型区分）
+                self._stats["disagreement"] = self._stats.get("disagreement", 0) + 1
+                if shadow_decision and not main_decision:
+                    self._stats["null_shadow_calls"] = self._stats.get("null_shadow_calls", 0) + 1
+                else:
+                    self._stats["null_shadow_calls"] = self._stats.get("null_shadow_calls", 0) + 1
             if shadow_decision:
                 self._stats["last_shadow_decision"] = shadow_decision
+            elif main_decision:
+                # shadow 无输出时，记录主决策供回放/审计
+                self._stats["last_shadow_decision"] = "<null>"
             if main_decision:
                 self._stats["last_main_decision"] = main_decision
 
@@ -775,6 +873,8 @@ class ShadowSNNRegion(SNNRegion):
                     "input_neurons": input_neurons,
                     "main_decision": main_decision,
                     "shadow_decision": shadow_decision,
+                    "payload": signal.payload or {},
+                    "urgency": signal.urgency,
                     "agreement": self._stats.get("agreement", 0),
                     "disagreement": self._stats.get("disagreement", 0),
                 }
@@ -809,6 +909,113 @@ class ShadowSNNRegion(SNNRegion):
         except Exception as e:
             elapsed = (time.time() - start) * 1000
             return RegionResult(region="shadow:snn_aux", ok=False, error=str(e), elapsed_ms=elapsed)
+
+    def replay_disagreements(self, limit: int = 50, dry_run: bool = True) -> dict:
+        """从对比日志回放 disagreement 样本，训练 shadow 向主决策收敛。
+
+        读取 snn_shadow_network_shadow_compare.jsonl，筛选 main_decision != shadow_decision 的样本，
+        用 train_from_feedback() 以主决策为正确目标进行微学习。
+
+        Args:
+            limit: 最多回放的样本数
+            dry_run: True 时只统计不训练；False 时实际训练并保存
+
+        Returns:
+            摘要：{ok, samples, matched, trained, strengthened, disagreement_before, disagreement_after}
+        """
+        import json
+        import os
+
+        if not os.path.exists(self._shadow_log_path):
+            return {"ok": True, "samples": 0, "matched": 0, "trained": 0,
+                    "reason": "no compare log", "disagreement_before": self._stats.get("disagreement", 0)}
+
+        samples = []
+        try:
+            with open(self._shadow_log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        s = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    main_d = s.get("main_decision")
+                    shadow_d = s.get("shadow_decision")
+                    # 只采样真实差异：两者都非空且不同，或一方 null 另一方非 null
+                    if main_d is None and shadow_d is None:
+                        continue
+                    if main_d == shadow_d:
+                        continue
+                    samples.append(s)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+        if not samples:
+            return {"ok": True, "samples": 0, "matched": 0, "trained": 0,
+                    "reason": "no disagreement samples", "disagreement_before": self._stats.get("disagreement", 0)}
+
+        samples = samples[-limit:]
+        matched = 0
+        trained = 0
+        strengthened_before = self._stats.get("edges_strengthened", 0)
+        strengthened_penalty_before = self._stats.get("edges_penalized", 0)
+        for s in samples:
+            sig_id = s.get("signal_id")
+            main_d = s.get("main_decision")
+            shadow_d = s.get("shadow_decision")
+            payload = s.get("payload") or {}
+            urgency = s.get("urgency", 50)
+            sig_type = s.get("signal_type", "user_request")
+            # 目标决策：主决策优先；主无输出则用 shadow 自身决策
+            target_decision = main_d if main_d else shadow_d
+            # 错误决策：shadow 原本输出（需被惩罚）
+            wrong_d = shadow_d if (main_d and shadow_d and main_d != shadow_d) else None
+            # 构造回放信号
+            signal = NeuralSignal(
+                id=sig_id or f"replay-{matched}",
+                type=sig_type,
+                payload=payload,
+                source="shadow_replay",
+                urgency=urgency,
+            )
+            if dry_run:
+                matched += 1
+                continue
+            try:
+                res = self.train_from_feedback(
+                    signal=signal,
+                    correct_decision=target_decision,
+                    was_correct=False,
+                    wrong_decision=wrong_d,
+                    eta=0.16,
+                    inject_strength=3.0,
+                )
+                if res.get("ok"):
+                    matched += 1
+                    trained += 1
+            except Exception:
+                continue
+
+        if not dry_run:
+            self._stats["replay_count"] = self._stats.get("replay_count", 0) + 1
+            try:
+                self._save_stats()
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "samples": len(samples),
+            "matched": matched,
+            "trained": trained,
+            "strengthened": self._stats.get("edges_strengthened", 0) - strengthened_before,
+            "penalized": self._stats.get("edges_penalized", 0) - strengthened_penalty_before,
+            "replay_count": self._stats.get("replay_count", 0),
+            "dry_run": dry_run,
+            "disagreement_before": self._stats.get("disagreement", 0),
+        }
 
 
 shadow_snn_region = ShadowSNNRegion(save_path=os.path.join(_default_brain_config_dir(), "snn_shadow_network.json"))
