@@ -41,6 +41,18 @@ from services.brain import (
 from services.brain.snn_region import shadow_snn_region
 from services.brain.broker import broker
 
+# v2 引擎（感知+感受前置）：惰性单例，首次使用才创建
+# 保持 v1 (rsn.engine) 为默认，v2 通过 engine=v2 参数启用
+_v2_engine: Optional[Any] = None
+
+def _get_v2_engine() -> Any:
+    """惰性获取 v2 推理引擎。"""
+    global _v2_engine
+    if _v2_engine is None:
+        from services.brain.reasoning_v2 import ReasoningEngineV2
+        _v2_engine = ReasoningEngineV2(rsn.engine)
+    return _v2_engine
+
 logger = logging.getLogger("brain.api")
 
 router = APIRouter(prefix="/brain", tags=["Brain AI"])
@@ -160,6 +172,7 @@ class AskRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict, description="附加上下文")
     session_id: Optional[str] = Field(None, description="会话 ID，用于工作记忆隔离")
     execute_actions: bool = Field(True, description="是否执行认知结果中的行动")
+    engine: str = Field("v1", description="推理引擎：v1=现有，v2=感知+感受前置")
 
 
 class ObserveRequest(BaseModel):
@@ -322,7 +335,12 @@ async def ask(
     memory_context: Dict[str, Any] = {}
     async with managed_session() as db:
         memory_context = await broker.retrieve_for_signal(db, signal.to_dict())
-        cognition = await rsn.engine.reason(signal, working_memory, db, memory_context=memory_context)
+        # 选择推理引擎：v2（感知+感受前置）或 v1（现有）
+        if request.engine == "v2":
+            v2 = _get_v2_engine()
+            cognition = await v2.reason(signal, working_memory, db, memory_context=memory_context)
+        else:
+            cognition = await rsn.engine.reason(signal, working_memory, db, memory_context=memory_context)
 
         # 4. 写入决策日志
         log_payload = {
