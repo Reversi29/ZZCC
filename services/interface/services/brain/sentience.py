@@ -496,6 +496,7 @@ class SentienceDrivenBudget:
             plan["snn"] = _b(0, 0)
             plan["semantic"] = _b(0, 0)
             plan["episodic"] = _b(300, 0)
+            plan["shadow:snn_aux"] = _b(0, 0)  # 影子 SNN 也禁用，避免闲聊误升
             return plan
 
         # 高威胁：增强 rule/llm/snn（多脑区协商）

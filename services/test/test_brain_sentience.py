@@ -96,3 +96,35 @@ class TestSentience:
         self.sentience.learn(per, st.sentiments, {"threat": "high"})
         after = self.sentience.get_stats().get("learn_calls", 0)
         assert after == before + 1
+
+
+class TestSentienceDrivenBudget:
+    """感受驱动预算测试。"""
+
+    def setup_method(self):
+        from services.brain.sentience import SentienceDrivenBudget
+        from services.brain.compute_budget import ComputeBudget
+        self.budget = SentienceDrivenBudget(ComputeBudget())
+
+    def test_safety_disables_snn(self):
+        """闲聊/安全：主 SNN 与影子 SNN 预算都为 0。"""
+        plan = self.budget.allocate({"safety": 0.7, "threat": 0.0})
+        assert plan["snn"].allowed is False
+        assert plan["shadow:snn_aux"].allowed is False
+
+    def test_threat_activates_snn(self):
+        """高威胁：主 SNN 与影子 SNN 激活。"""
+        plan = self.budget.allocate({"threat": 0.9, "safety": 0.0})
+        assert plan["snn"].allowed is True
+        assert plan["shadow:snn_aux"].allowed is True
+
+    def test_confusion_disables_snn(self):
+        """高困惑：检索记忆，SNN 不激活。"""
+        plan = self.budget.allocate({"confusion": 0.7, "threat": 0.1, "safety": 0.0})
+        assert plan["snn"].allowed is False
+        assert "semantic" in plan
+        assert plan["semantic"].allowed is True
+        # 困惑分支不设影子 SNN（plan.get 返回 None 时 coordinator 安全跳过）
+        assert "shadow:snn_aux" not in plan
+
+
