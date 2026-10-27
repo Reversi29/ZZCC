@@ -313,8 +313,9 @@ class SNN:
                 arrive_time = t + conn.delay
                 heapq.heappush(self._pending_events, (arrive_time, n_id, tgt, conn.weight))
 
-        # 4. Hebbian 学习
-        self._hebbian_update(t, fired_this_step)
+        # 4. Hebbian 学习（仅在学习启用时；推理/sense 时禁用防意外削弱）
+        if self.enable_hebbian:
+            self._hebbian_update(t, fired_this_step)
 
         # 5. 膜电位衰减（本步结束后，旧信号消退）
         for n in self.neurons:
@@ -492,6 +493,8 @@ class SNN:
         self.eta_minus: float = 0.05 # 不同步减弱率
         self.weight_decay: float = 0.0  # 全局权重衰减
         self.max_weight: float = 3.0
+        # Hebbian 学习开关：推理（sense）时禁用，防止意外削弱权重
+        self.enable_hebbian: bool = True
 
         # 输出历史（用于 Hebbian 回溯）
         self._fire_history: dict[int, list[int]] = defaultdict(list)

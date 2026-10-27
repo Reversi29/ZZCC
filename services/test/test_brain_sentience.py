@@ -67,3 +67,32 @@ class TestSentience:
         assert "sentiments" in d
         assert "firing_neurons" in d
         assert isinstance(d["sentiments"], dict)
+
+    def test_learn_strengthen_threat(self):
+        """学习：无风险词但大额场景，多轮学习后 threat 提升（突触发生）。"""
+        per = self.perception.text_channel.perceive("审批一笔15000元的市场推广费用")
+        before = self.sentience.sense(per).get("threat")
+        for _ in range(30):
+            st = self.sentience.sense(per)
+            self.sentience.learn(per, st.sentiments, {"threat": "high"})
+        after = self.sentience.sense(per).get("threat")
+        assert after > before + 0.3, f"expected threat to rise, {before} -> {after}"
+
+    def test_learn_no_forgetting(self):
+        """学习不泛化：学习大额高威胁后，闲聊 threat 仍低。"""
+        per = self.perception.text_channel.perceive("审批一笔15000元的市场推广费用")
+        for _ in range(30):
+            st = self.sentience.sense(per)
+            self.sentience.learn(per, st.sentiments, {"threat": "high"})
+        # 闲聊不受影响
+        chat = self.sentience.sense(self.perception.text_channel.perceive("你好"))
+        assert chat.get("threat") < 0.3, f"expected low threat after learning, got {chat.get('threat')}"
+
+    def test_learn_stats_increment(self):
+        """学习后统计递增。"""
+        per = self.perception.text_channel.perceive("审批一笔88000元的设备采购费用，供应商风险高")
+        st = self.sentience.sense(per)
+        before = self.sentience.get_stats().get("learn_calls", 0)
+        self.sentience.learn(per, st.sentiments, {"threat": "high"})
+        after = self.sentience.get_stats().get("learn_calls", 0)
+        assert after == before + 1

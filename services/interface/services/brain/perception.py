@@ -200,12 +200,16 @@ class TextPerceptionChannel:
         neg_hits = sum(1 for t in match_tokens if t in NEGATIVE_WORDS)
         unc_hits = sum(1 for t in match_tokens if t in UNCERTAIN_WORDS)
         match_count = max(1, len(match_tokens))
+        # neg/pos 命中时设基准（不被 match_count 稀释），提高感受层区分度
+        pos_score = 0.4 if pos_hits > 0 else 0.0
+        neg_score = 0.4 if neg_hits > 0 else 0.0
+        unc_score = 0.3 if unc_hits > 0 else 0.0
         features["sentiment"] = [
-            _clip01(pos_hits / match_count),
-            _clip01(neg_hits / match_count),
-            _clip01((pos_hits + neg_hits) / match_count),  # arousal
-            _clip01((pos_hits - neg_hits) / match_count),   # dominance
-            _clip01(unc_hits / match_count),
+            _clip01(pos_score),
+            _clip01(neg_score),
+            _clip01((pos_score + neg_score) / 2.0),  # arousal
+            _clip01((pos_score - neg_score) / 2.0),   # dominance
+            _clip01(unc_score),
             _clip01(0.0),
         ]
 
@@ -213,10 +217,13 @@ class TextPerceptionChannel:
         formal_hits = sum(1 for t in match_tokens if t in FORMAL_WORDS)
         urgency_hits = sum(1 for t in match_tokens if t in URGENCY_MARKERS)
         is_imperative = any(re.match(p, text.lower()) for p in IMPERATIVE_PATTERNS)
+        # urgency_markers 命中时设基准 0.4（不被 match_count 稀释），
+        # 让"紧急/风险/违规"等标记显著激活，而非按比例淹没
+        urgency_score = 0.4 if urgency_hits > 0 else 0.0
         features["formality"] = [
             _clip01(formal_hits / match_count),
             _clip01(0.0),  # politeness（Phase 1 简化）
-            _clip01(urgency_hits / match_count),
+            _clip01(urgency_score),
             _clip01(1.0 if is_imperative else 0.0),
         ]
 

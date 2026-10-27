@@ -658,7 +658,41 @@ async def learn(
                     )
         except Exception as exc:
             snn_result = {"ok": False, "error": str(exc)}
-    return {"ok": True, "updated": updated, "skill": skill, "semantic": semantic_result, "snn": snn_result}
+
+    # ── 感受层学习：将反馈传递给 SentienceNet ──
+    sentience_result = {"ok": True, "skipped": True}
+    try:
+        v2 = _get_v2_engine()
+        if v2 is not None and request.payload:
+            # 从 payload 提取文本（text/question 字段）
+            text = (
+                request.payload.get("text")
+                or request.payload.get("question")
+                or request.payload.get("content")
+                or ""
+            )
+            if text:
+                # 推导感受方向：correct_decision 或有效决策 → 威胁方向
+                eff = request.correct_decision or skill.get("decision", "") if skill.get("ok") else request.correct_decision or ""
+                feedback_dir: Dict[str, str] = {}
+                if eff in ("reject", "escalate", "flag"):
+                    feedback_dir["threat"] = "high"
+                    feedback_dir["urgency"] = "high"
+                elif eff in ("auto_approve", "approve"):
+                    feedback_dir["threat"] = "low"
+                else:
+                    # 无明确决策：若标记错误则提升威胁（需重新审视）
+                    if not request.correct:
+                        feedback_dir["threat"] = "high"
+                if feedback_dir:
+                    perception = v2.perception.perceive(request.payload)
+                    st = v2.sentience.sense(perception)
+                    learn_stats = v2.sentience.learn(perception, st.sentiments, feedback_dir)
+                    sentience_result = {"ok": True, "skipped": False, "learned": learn_stats}
+    except Exception as exc:
+        sentience_result = {"ok": False, "error": str(exc)}
+
+    return {"ok": True, "updated": updated, "skill": skill, "semantic": semantic_result, "snn": snn_result, "sentience": sentience_result}
 
 
 @router.get("/semantic/status")
