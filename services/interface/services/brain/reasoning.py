@@ -366,8 +366,10 @@ class ReasoningEngine:
             self._stats["snn_calls"] = self._stats.get("snn_calls", 0) + 1
             result = await snn_mod.snn_region.reason(signal, context, budget)
             # 让 shadow 读取主 SNN 决策，但不参与融合
-            if isinstance(result, RegionResult):
+            if isinstance(result, RegionResult) and result.result is not None:
                 context["main_snn_result"] = result.result
+            elif isinstance(result, RegionResult):
+                context["main_snn_result"] = result  # 无结果也写入，供 shadow 判断
             return result
 
         # Shadow 辅助 SNN：MVP 阶段只做影子观察，不参与融合决策

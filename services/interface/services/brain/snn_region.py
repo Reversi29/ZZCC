@@ -729,6 +729,9 @@ class ShadowSNNRegion(SNNRegion):
             "last_main_decision": "",
         })
         self._load_stats()
+        # 决策对比日志路径（shadow 专用）
+        self._shadow_log_path = self.save_path.replace(".json", "_shadow_compare.jsonl")
+        self._save_stats()  # 确保统计文件存在
 
     async def reason(self, signal: NeuralSignal, context: Dict[str, Any], budget: Any = None):
         from services.brain.coordinator import RegionResult
@@ -760,6 +763,32 @@ class ShadowSNNRegion(SNNRegion):
                 self._stats["last_shadow_decision"] = shadow_decision
             if main_decision:
                 self._stats["last_main_decision"] = main_decision
+
+            # 写入 shadow 对比日志（JSONL），供回放/审计
+            try:
+                import datetime
+                import json
+                cmp_entry = {
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                    "signal_id": signal.id,
+                    "signal_type": signal.type,
+                    "input_neurons": input_neurons,
+                    "main_decision": main_decision,
+                    "shadow_decision": shadow_decision,
+                    "agreement": self._stats.get("agreement", 0),
+                    "disagreement": self._stats.get("disagreement", 0),
+                }
+                with open(self._shadow_log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(cmp_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
+            # 立即落盘 shadow 统计，避免重启丢失
+            try:
+                self._save_stats()
+            except Exception:
+                pass
+
             if result:
                 result.signal_id = signal.id
             elapsed = (time.time() - start) * 1000

@@ -149,12 +149,15 @@ class RegionCoordinator:
             else:
                 enabled_regions.append(name)
 
-        # 并行执行 — 使用 as_completed 收集已完成结果，避免全局超时丢弃快脑区结果
+        # 主脑区：并行执行（shadow 不参与并行，改为后置串行，保证读到主决策）
+        main_regions = [n for n in enabled_regions if n not in self._shadow_regions]
+        shadow_regions = [n for n in enabled_regions if n in self._shadow_regions]
+
         tasks_map: Dict[asyncio.Task, str] = {}
-        for name in enabled_regions:
+        for name in main_regions:
             fn = self._regions[name]
             budget = plan.get(name)
-            task = asyncio.ensure_future(self._run_region(name, fn, signal, context, budget, shadow=name in self._shadow_regions))
+            task = asyncio.ensure_future(self._run_region(name, fn, signal, context, budget))
             tasks_map[task] = name
 
         processed: List[RegionResult] = []
@@ -193,6 +196,23 @@ class RegionCoordinator:
         for name, reason in skipped.items():
             processed.append(RegionResult(region=name, ok=False, error=reason,
                                           elapsed_ms=0, timeout=False))
+
+        # shadow 后置串行：主脑区全部完成后，再让 shadow 读取主决策进行观察
+        # 这样 agreement/disagreement 才有真实对照（避免抢跑读到空主决策）
+        shadow_tasks: List[asyncio.Task] = []
+        for name in shadow_regions:
+            fn = self._regions[name]
+            budget = plan.get(name)
+            shadow_tasks.append(asyncio.ensure_future(
+                self._run_region(name, fn, signal, context, budget, shadow=True)
+            ))
+        if shadow_tasks:
+            for st in asyncio.as_completed(shadow_tasks):
+                try:
+                    r = await st
+                    processed.append(r)
+                except Exception:
+                    pass
 
         # 融合
         final = self._integrate(signal, processed, context)
