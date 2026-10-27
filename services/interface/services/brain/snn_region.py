@@ -347,7 +347,8 @@ class SNNRegion:
             # 记录探索率
             self._stats["exploration_rate"] = self.snn._exploration_rate
 
-            active = self.snn.get_active_neurons()
+            active = [n.id for n in self.snn.neurons
+                      if n.last_fire_time >= 0 and (self.snn.time - n.last_fire_time) <= 10]
             result = self._decode_output(outputs, active)
 
             elapsed = (time.time() - start) * 1000

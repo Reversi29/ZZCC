@@ -118,6 +118,36 @@ rsn.engine.update_llm_config(
 R = Dict[str, Any]
 
 
+def _infer_signal_type(question: str) -> str:
+    """从自然语言问题推断信号类型（供 /brain/ask 从 question 构造 signal）。
+
+    业务关键词 → 对应业务类型；否则默认 user_request。
+    这样 SNN 能正确编码业务语义（如审批费用 → auto_approve），
+    而非固定 user_request 导致 SNN 走 chat 路径。
+    """
+    text = (question or "").lower()
+    # 金额关键词 + 业务动词 → 费用/审批
+    amount_kw = ("元", "¥", "￥", "金额", "费用", "amount", "price", "total", "价值", "预算")
+    has_amount = any(k in text for k in amount_kw)
+    # 审批/费用类关键词
+    if any(k in text for k in ("报销", "采购", "购买", "费用", "支出", "付款", "预算")) or has_amount:
+        if any(k in text for k in ("风险", "异常", "超限", "违规", "供应商", "新供应商", "高额")):
+            return "threshold_breach"
+        if any(k in text for k in ("审批", "申请", "待审批", "pending")):
+            return "approval_pending"
+        return "expense"
+    # 告警类
+    if any(k in text for k in ("告警", "异常", "故障", "错误", "超时", "失败", "alert", "error", "crash")):
+        return "error"
+    # 查询类
+    if any(k in text for k in ("是什么", "怎么", "如何", "为什么", "查询", "搜索", "what", "how", "why")):
+        return "query"
+    # 闲聊
+    if any(k in text for k in ("你好", "hello", "hi", "在吗", "谢谢", "好的")):
+        return "chitchat"
+    return "user_request"
+
+
 # ═══════════════════════════════════════════════════════════
 # 请求模型
 # ═══════════════════════════════════════════════════════════
@@ -243,12 +273,42 @@ async def ask(
             context=request.signal.get("context", {}),
         )
     elif request.question:
-        # 从 question 推断（简单场景）
+        # 从 question 推断（关键词分类，让 SNN 能正确编码业务语义）
+        sig_type = _infer_signal_type(request.question)
+        # 提取金额（若有）供 payload/SNN 金额分桶
+        import re
+        amount = None
+        m = re.search(r'(\d[\d,]*(?:\.\d+)?)\s*(元|万元|块|¥|￥|amount)?', request.question)
+        if m:
+            try:
+                val = float(m.group(1).replace(',', ''))
+                # 万元换算
+                if m.group(2) in ("万元",):
+                    val *= 10000
+                amount = val
+            except ValueError:
+                amount = None
+        payload = {"question": request.question, "text": request.question}
+        if amount is not None:
+            payload["amount"] = amount
+        # 根据金额推断紧急度（小额→低紧急度，大额/高风险→高紧急度）
+        # 这样 SNN 能区分：小额审批→auto_approve，大额→escalate
+        inferred_urgency = 50
+        if amount is not None:
+            if amount >= 100000:
+                inferred_urgency = 90
+            elif amount >= 10000:
+                inferred_urgency = 70
+            elif amount <= 1000:
+                inferred_urgency = 30
+        # 风险关键词放大紧急度
+        if any(k in request.question.lower() for k in ("风险", "异常", "超限", "违规", "供应商")):
+            inferred_urgency = max(inferred_urgency, 80)
         signal = NeuralSignal(
-            type="user_request",
-            payload={"question": request.question, "text": request.question},
+            type=sig_type,
+            payload=payload,
             source="api_call",
-            urgency=50,
+            urgency=inferred_urgency,
             context=request.context,
         )
     else:

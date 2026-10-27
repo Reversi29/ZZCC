@@ -228,7 +228,7 @@ class ReasoningEngine:
         ]).strip().lower()
 
         # 按 signal.type 分类
-        if sig_type in ("alert", "alarm", "anomaly", "threshold_breach", "error", "failed"):
+        if sig_type in ("alert", "alarm", "anomaly", "error", "failed"):
             return Intent.ALERT
         if sig_type in ("noise", "heartbeat", "ping"):
             return Intent.NOISE
@@ -237,8 +237,11 @@ class ReasoningEngine:
         if sig_type in ("query", "knowledge", "search", "lookup"):
             return Intent.QUERY
         # 业务信号类型直接归为 BUSINESS（无论 payload 文本长度）
+        # threshold_breach 是业务风险告警（阈值/供应商/金额违规），归 BUSINESS
+        # 让 SNN 能参与风险审批决策（v8 拓扑含 threshold_breach 神经元）
         if sig_type in ("approval_pending", "expense", "purchase", "contract",
-                        "invoice", "budget", "procurement", "reimbursement"):
+                        "invoice", "budget", "procurement", "reimbursement",
+                        "threshold_breach"):
             return Intent.BUSINESS
 
         # 按文本关键词分类
