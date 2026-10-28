@@ -375,6 +375,8 @@ async def ask(
     return {
         "ok": True,
         "signal_id": signal.id,
+        "decision": cognition.decision,
+        "confidence": cognition.confidence,
         "cognition": cognition.to_dict(),
         "action_results": action_results,
         "session_id": session_id,
