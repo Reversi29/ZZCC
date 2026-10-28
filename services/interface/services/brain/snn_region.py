@@ -634,6 +634,9 @@ class SNNRegion:
             "was_correct": was_correct,
             "input_neurons": input_neurons,
             "target_output": target_output,
+            "edges_strengthened": self._stats.get("edges_strengthened", 0),
+            "edges_added": self._stats.get("edges_added", 0),
+            "edges_penalized": self._stats.get("edges_penalized", 0),
             "snn_stats": self.snn.stats(),
         }
 
