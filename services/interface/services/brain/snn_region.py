@@ -334,6 +334,10 @@ class SNNRegion:
             input_neurons = self._encode_signal(signal)
             strength = 2.0 + (signal.urgency / 100.0) * 3.0  # 0.0-3.0
 
+            # 推理时禁用 Hebbian/LTD，防止 STDP 削弱权重（学习漂移）
+            # 学习通过 train_from_feedback / _reward_modulated_strengthen 进行
+            self.snn.enable_hebbian = False
+
             # 持续学习推理：融合推理+微学习+探索
             # 不传 expected_decision，因为推理时没有反馈
             outputs, boundary_detected = self.snn.step_with_learning(
@@ -599,10 +603,12 @@ class SNNRegion:
             original_decision = wrong_decision or self._stats.get("last_decision", "")
             penalty_output = self._decision_to_output_neuron(original_decision)
             if penalty_output is not None:
+                # 温和惩罚：削弱 5%（原来 20% 太狠导致权重净流失/灾难性遗忘）
+                # 且保留最小权重 0.5，避免关键决策路径被磨没
                 for src in list(self.snn.out_edges.keys()):
                     if penalty_output in self.snn.out_edges[src]:
                         conn = self.snn.out_edges[src][penalty_output]
-                        conn.weight = max(0, conn.weight * 0.8)
+                        conn.weight = max(0.5, conn.weight * 0.95)
                         self._stats["edges_penalized"] += 1
             # 少量加强正确输出（让下次推理偏向正确决策）
             for _ in range(2):

@@ -212,6 +212,34 @@ class TestSTDP:
             net.step()
         assert net.out_edges[0][1].weight <= 2.0
 
+    def test_hebbian_disabled_prevents_ltd(self, small_net):
+        """推理时禁用 Hebbian：即使源激活过久、目标后激活，权重也不应被 LTD 削弱。
+
+        回归保护：之前推理时 enable_hebbian 默认 True，每次 step() 都执行
+        _hebbian_update（LTD），导致业务 SNN 关键决策路径（如 escalate）权重被磨没。
+        """
+        net = SNN(num_neurons=5)
+        net.add_neuron(0, NeuronType.INPUT, threshold=0.5)
+        net.add_neuron(1, NeuronType.EXCITATORY, threshold=1.0)
+        net.add_neuron(2, NeuronType.OUTPUT, threshold=1.5)
+        net.connect(0, 1, weight=2.0, delay=1)
+        net.connect(1, 2, weight=2.0, delay=1)
+
+        # 禁用 Hebbian（推理模式）
+        net.enable_hebbian = False
+
+        # 触发源激活但目标延迟激活（超 STDP 窗口）——之前会触发 LTD 削弱
+        net.inject_input(0, 2.0)
+        net.step()
+        for _ in range(20):
+            net.step()
+        net.inject_input(1, 3.0)
+        net.step()
+
+        # 权重应保持 2.0（不被削弱）
+        assert net.out_edges[0][1].weight == pytest.approx(2.0)
+        assert net.out_edges[1][2].weight == pytest.approx(2.0)
+
 
 # ─── 奖励调制学习 ───────────────────────────────────────────
 
