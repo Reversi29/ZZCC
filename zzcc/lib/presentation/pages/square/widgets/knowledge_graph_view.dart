@@ -208,7 +208,7 @@ class LayoutEngine {
       return;
     }
     // Golden angle spiral: 每加一个节点角度累加 goldenAngle，半径按 sqrt(i) 递增
-    final localRadius = radius / math.sqrt(nodes.length);
+    final localRadius = radius / math.sqrt(nodes.length) * 2.5;
     for (int i = 0; i < nodes.length; i++) {
       final angle = i * _goldenAngle;
       final r = localRadius * math.sqrt(i + 1);
@@ -256,7 +256,7 @@ class LodManager {
   static const double kLoDDistZoom = 0.25;     // 小于此值聚合一层
   static const double kLoDCollapseZoom = 0.12; // 更小聚合两层
 
-  static const double _clusterRadiusFactor = 0.35; // 距离阈值 = 世界半径 * factor
+  static const double _clusterRadiusFactor = 0.08; // 距离阈值 = 世界半径 * factor
 
   /// 根据 zoom 决定要渲染的节点与聚类
   static ({List<EChartNode> visible, List<LodCluster> clusters}) build(
