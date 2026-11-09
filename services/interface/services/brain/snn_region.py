@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 
 from models.brain import Action, CognitionResult, NeuralSignal
 from services.brain.snn import SNN, NeuronType
+from services.brain.neuro_registry import InputRegistry, OutputRegistry
 
 logger = logging.getLogger("brain.snn_region")
 
@@ -175,6 +176,18 @@ class SNNRegion:
         # 决策日志路径
         self._decision_log_path = self.save_path.replace(".json", "_decision_log.jsonl")
 
+        # ── 通用输入/输出槽注册器（新类型有新槽）────────────
+        self.input_registry = InputRegistry()
+        self.output_registry = OutputRegistry()
+
+    def _register_signal_type(self, sig_type: str) -> int:
+        """注册信号类型到动态输入槽（新类型有新槽，不挤占旧槽）。
+
+        返回输入神经元 ID。新类型会分配新的输入神经元，并通过
+        探索连接（弱随机连接）接入隐藏层，靠 STDP/强化学习收敛。
+        """
+        return self.input_registry.register(sig_type)
+
     # ── 编码/解码 ────────────────────────────────────────────
 
     def _encode_signal(self, signal: NeuralSignal) -> List[int]:
@@ -193,6 +206,12 @@ class SNNRegion:
         nid = _SIGNAL_TO_NEURON.get(sig_type)
         if nid is not None:
             neurons.append(nid)
+        else:
+            # 类型未映射到固定槽 → 动态注册新槽（新类型有新槽）
+            # 无论 payload 是否产生金额/详情特征，类型信息都必须保留
+            dynamic_nid = self._ensure_dynamic_input_slot(sig_type)
+            if dynamic_nid is not None:
+                neurons.append(dynamic_nid)
 
         # 紧急度编码
         u_neuron = _urgency_neuron(signal.urgency)
@@ -218,13 +237,104 @@ class SNNRegion:
                    ("cancel", "order", "delete", "refund", "urgent", "escalate")):
                 neurons.append(39)
 
-        # 如果信号类型未映射，用 hash 分桶到输入神经元
-        if not neurons:
-            if sig_type:
-                bucket = hash(sig_type) % 11
-                neurons.append(bucket)
-
+        # 类型映射已在顶部处理：固定槽或动态注册槽
         return neurons or [10]  # 默认 noise
+
+    def _ensure_dynamic_input_slot(self, sig_type: str) -> Optional[int]:
+        """确保信号类型有动态输入槽，并确保神经元 + 探索连接存在。
+
+        新类型有新槽（区别于旧 hash 分桶挤占旧槽）：
+        1. 注册新类型 → 分配新的输入神经元 ID（≥40）
+        2. 确保神经元存在于 SNN（add_neuron 自动扩展 num_neurons）
+        3. 建立探索连接（弱随机连接到兴奋性隐藏神经元）
+        4. 靠 STDP/强化学习自然收敛
+        """
+        try:
+            nid = self.input_registry.get(sig_type)
+            if nid is None:
+                nid = self.input_registry.register(sig_type)
+                # 确保神经元存在（add_neuron 自动扩展 num_neurons）
+                self._ensure_dynamic_neuron(nid)
+                # 建立探索连接
+                self._connect_dynamic_exploration(nid)
+                # 立即持久化：动态神经元 + 探索连接不丢失（reason 不调 _auto_save）
+                self._auto_save()
+            return nid
+        except Exception as e:
+            logger.warning(f"snn_region: dynamic input slot failed for '{sig_type}': {e}")
+            return None
+
+    def _ensure_dynamic_neuron(self, nid: int):
+        """确保动态输入神经元存在且类型正确。"""
+        if nid >= self.snn.num_neurons:
+            self.snn.add_neuron(nid, NeuronType.INPUT, threshold=0.5)
+        else:
+            n = self.snn.neurons[nid]
+            if n.neuron_type != NeuronType.INPUT:
+                n.neuron_type = NeuronType.INPUT
+                n.threshold = 0.5
+
+    def _connect_dynamic_exploration(self, input_nid: int):
+        """新输入神经元 → 广泛连接到兴奋性隐藏神经元（探索连接）。
+
+        敏感期广泛探索：连接全部兴奋性隐藏层，让网络自己
+        发现哪些连接重要。权重与固定拓扑一致（0.90），确保
+        新类型能参与推理；连接的选择靠 STDP/强化学习收敛。
+        """
+        import random
+        hidden_pool = [h for h in range(16, 28) if h < self.snn.num_neurons]
+        if not hidden_pool:
+            return
+        for hid in hidden_pool:
+            self.snn.connect(input_nid, hid, weight=0.90, delay=1)
+        logger.info(f"snn_region: dynamic input {input_nid} exploration → {hidden_pool} (w=0.90)")
+
+    # ── 输出侧动态动作（四肢百骸：改变世界的新动作）──────────
+
+    def _ensure_dynamic_output_slot(self, action: str) -> Optional[int]:
+        """确保动作有动态输出槽，并确保神经元 + 探索连接存在。
+
+        新动作有新槽（对称于输入侧新类型有新槽）：
+        1. 注册新动作 → 分配新的输出神经元 ID（≥40）
+        2. 确保神经元存在于 SNN（类型 OUTPUT）
+        3. 建立探索连接（兴奋性隐藏神经元 → 新输出，弱权重）
+        4. 立即持久化（reason 不调 _auto_save）
+        """
+        try:
+            nid = self.output_registry.get(action)
+            if nid is None:
+                nid = self.output_registry.register(action)
+                # 确保输出神经元存在
+                self._ensure_dynamic_output_neuron(nid)
+                # 建立探索连接（隐藏层 → 新输出）
+                self._connect_dynamic_output_exploration(nid)
+                # 立即持久化
+                self._auto_save()
+            return nid
+        except Exception as e:
+            logger.warning(f"snn_region: dynamic output slot failed for '{action}': {e}")
+            return None
+
+    def _ensure_dynamic_output_neuron(self, nid: int):
+        """确保动态输出神经元存在且类型为 OUTPUT。"""
+        if nid >= self.snn.num_neurons:
+            self.snn.add_neuron(nid, NeuronType.OUTPUT, threshold=1.0)
+        else:
+            n = self.snn.neurons[nid]
+            if n.neuron_type != NeuronType.OUTPUT:
+                n.neuron_type = NeuronType.OUTPUT
+                n.threshold = 1.0
+
+    def _connect_dynamic_output_exploration(self, output_nid: int):
+        """新输出神经元 ← 隐藏层探索连接（突触发生，非预建）。
+
+        对称于输入侧：新动作的连接**不预建**，而是在训练时通过
+        _reward_modulated_strengthen(auto_create=True, restrict_to_hidden=True)
+        针对性创建——只创建与新类型实际放电的隐藏层的连接，
+        避免无差别加强导致劫持所有路径（灾难性遗忘）。
+        """
+        # 不预建连接：让训练时突触发生针对性创建（避免劫持）
+        logger.info(f"snn_region: dynamic output {output_nid} exploration (lazy, synaptogenesis)")
 
     def _decode_output(self, outputs: Dict[int, bool],
                         active: List[int]) -> Optional[CognitionResult]:
@@ -238,9 +348,14 @@ class SNNRegion:
         fired_outputs = [nid for nid, v in outputs.items() if v]
         if not fired_outputs:
             # 兜底：检查 last_fire_time（某些 step 可能 outputs 没捕获到）
+            # 包含固定输出 + 动态注册输出槽
+            all_output_neurons = list(self._OUTPUT_NEURONS)
+            for nid in self.output_registry.all_actions().values():
+                if nid not in all_output_neurons:
+                    all_output_neurons.append(nid)
             fired_outputs = [
-                nid for nid in self._OUTPUT_NEURONS
-                if self.snn.neurons[nid].last_fire_time >= 0
+                nid for nid in all_output_neurons
+                if nid < len(self.snn.neurons) and self.snn.neurons[nid].last_fire_time >= 0
             ]
         if not fired_outputs:
             return None
@@ -267,7 +382,7 @@ class SNNRegion:
 
         sorted_outputs = sorted(strengths.items(), key=lambda item: item[1], reverse=True)
         top_nid, top_score = sorted_outputs[0]
-        decision = _OUTPUT_DECISION.get(top_nid)
+        decision = self._decision_for_output(top_nid)
         if decision is None:
             return None
 
@@ -280,11 +395,11 @@ class SNNRegion:
         confidence = round(min(1.0, max(0.0, confidence)), 3)
 
         competition = [
-            {"output_neuron": nid, "decision": _OUTPUT_DECISION.get(nid), "score": round(score, 3)}
+            {"output_neuron": nid, "decision": self._decision_for_output(nid), "score": round(score, 3)}
             for nid, score in sorted_outputs
         ]
         fired_outputs_serializable = [
-            {"output_neuron": nid, "decision": _OUTPUT_DECISION.get(nid), "score": round(score, 3)}
+            {"output_neuron": nid, "decision": self._decision_for_output(nid), "score": round(score, 3)}
             for nid, score in sorted_outputs
         ]
 
@@ -301,6 +416,15 @@ class SNNRegion:
                 "snn_selected": top_nid,
             },
         )
+
+    def _decision_for_output(self, nid: int) -> Optional[str]:
+        """输出神经元 → 决策名。支持固定 + 动态注册输出槽。"""
+        # 固定输出映射（0-37 区间）
+        dec = _OUTPUT_DECISION.get(nid)
+        if dec is not None:
+            return dec
+        # 动态注册输出动作
+        return self.output_registry.get_action(nid)
 
     # ── 推理入口（供协调器调用）────────────────────────────
 
@@ -560,7 +684,15 @@ class SNNRegion:
         target_output = self._decision_to_output_neuron(correct_decision)
 
         if target_output is None:
-            return {"ok": False, "reason": f"未知决策类型: {correct_decision}"}
+            # 新动作有新槽：动态注册输出槽（改变世界的新动作）
+            target_output = self._ensure_dynamic_output_slot(correct_decision)
+            if target_output is None:
+                return {"ok": False, "reason": f"未知决策类型: {correct_decision}"}
+
+        # 目标导向强化：禁用 Hebbian LTD（被动削弱会磨弱新动作的探索连接）。
+        # 只用 _reward_modulated_strengthen 做因果强化，不受被动 LTD 干扰。
+        _saved_hebbian = self.snn.enable_hebbian
+        self.snn.enable_hebbian = False
 
         self._stats["training_count"] += 1
         self._stats["micro_learn_steps"] += 1
@@ -575,6 +707,9 @@ class SNNRegion:
         if was_correct:
             # 正确决策 → 加强到正确输出的连接
             for _ in range(5):
+                # 每次循环重置学习状态，确保 last_fire_time 只反映本次放电
+                # （否则历史放电累积，_reward_modulated_strengthen 无差别加强）
+                self.snn.reset_learning_state()
                 self.snn.inject_pattern(input_neurons, strength)
                 self.snn.step()  # t=N:   输入放电，传播到隐藏层
                 self.snn.step()  # t=N+1: 隐藏层放电（事件到达）
@@ -586,10 +721,15 @@ class SNNRegion:
                         for c in self.snn.out_edges[src].values()
                         if c.weight > 0.1
                     )
+                    # 动态输出槽：针对性突触发生（只创建/加强隐藏层→新输出）
+                    # 固定输出槽：保持 auto_create=False（LTD 实验结论）
+                    is_dynamic_output = target_output >= 40
                     strengthened = self.snn._reward_modulated_strengthen(
                         target_output, eta=eta,
-                        auto_create=auto_create,
+                        auto_create=is_dynamic_output,
                         auto_create_weight=0.15,
+                        restrict_to_hidden=is_dynamic_output,
+                        cap_weight=1.5 if is_dynamic_output else None,
                     )
                     after = sum(
                         1 for src in self.snn.out_edges
@@ -612,20 +752,28 @@ class SNNRegion:
                         self._stats["edges_penalized"] += 1
             # 少量加强正确输出（让下次推理偏向正确决策）
             for _ in range(2):
+                self.snn.reset_learning_state()
                 self.snn.inject_pattern(input_neurons, strength)
                 self.snn.step()
                 self.snn.step()
                 self.snn.inject_input(target_output, inject_strength * 0.5)  # 较弱注入
                 outputs = self.snn.step()
                 if outputs.get(target_output, False):
+                    # 动态输出槽同样 restrict_to_hidden（避免输入→输出直连）
+                    is_dynamic_output = target_output >= 40
                     strengthened = self.snn._reward_modulated_strengthen(
                         target_output, eta=eta * 0.5,
                         auto_create=False,
                         auto_create_weight=0.10,
+                        restrict_to_hidden=is_dynamic_output,
+                        cap_weight=1.5 if is_dynamic_output else None,
                     )
                     self._stats["edges_strengthened"] += strengthened
 
         self._auto_save()
+
+        # 恢复 Hebbian 状态（推理时可能被 reason() 设为 False）
+        self.snn.enable_hebbian = _saved_hebbian
 
         return {
             "ok": True,
@@ -641,11 +789,12 @@ class SNNRegion:
         }
 
     def _decision_to_output_neuron(self, decision: str) -> Optional[int]:
-        """决策类型 → 输出神经元 ID。"""
+        """决策类型 → 输出神经元 ID。支持固定 + 动态注册输出槽。"""
         for nid, dec in _OUTPUT_DECISION.items():
             if dec == decision:
                 return nid
-        return None
+        # 动态注册输出动作
+        return self.output_registry.get(decision)
 
     # ── 持久化 ──────────────────────────────────────────────
 

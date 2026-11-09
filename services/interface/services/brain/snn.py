@@ -423,7 +423,9 @@ class SNN:
 
     def _reward_modulated_strengthen(self, target_id: int, eta: float = 0.02,
                                      auto_create: bool = False,
-                                     auto_create_weight: float = 0.1):
+                                     auto_create_weight: float = 0.1,
+                                     restrict_to_hidden: bool = False,
+                                     cap_weight: Optional[float] = None):
         """奖励调制加强：回溯所有先激活的神经元，加强到目标的连接。
 
         类比：动物大脑中多巴胺奖励机制——当结果被奖励时，
@@ -434,7 +436,12 @@ class SNN:
             eta: 每次加强的权重增量
             auto_create: 是否允许创建新的连接（突触发生）
             auto_create_weight: 新连接的初始权重
+            restrict_to_hidden: 仅加强/创建隐藏层(16-31)→目标连接，
+                不碰输入神经元→输出直连（避免非选择性直连，LTD 实验教训）
+            cap_weight: 连接权重上限（默认 max_weight=3.0；动态输出用较低
+                上限避免劫持共享路径，如 1.5）
         """
+        cap = cap_weight if cap_weight is not None else self.max_weight
         tgt_neuron = self.neurons[target_id]
         tgt_fire_t = tgt_neuron.last_fire_time
         if tgt_fire_t < 0:
@@ -445,11 +452,14 @@ class SNN:
             if n.id == target_id:
                 continue
             if n.last_fire_time >= 0 and n.last_fire_time < tgt_fire_t:
+                # 限制只处理隐藏层源（避免输入→输出非选择性直连）
+                if restrict_to_hidden and not (16 <= n.id < 32):
+                    continue
                 # 源先激活，目标后被奖励 → 因果关系成立
                 conn = self.out_edges.get(n.id, {}).get(target_id)
                 if conn:
                     old_w = conn.weight
-                    conn.weight = min(self.max_weight, conn.weight + eta)
+                    conn.weight = min(cap, conn.weight + eta)
                     strengthened += 1
                 elif auto_create:
                     # 突触发生：创建新的直接连接
