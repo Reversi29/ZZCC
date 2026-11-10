@@ -9,6 +9,7 @@ import 'package:zzcc/core/services/audio_analysis_service.dart';
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:event_bus/event_bus.dart';
 import 'package:zzcc/core/services/config_service.dart';
+import 'package:zzcc/core/services/device_status_service.dart';
 import 'package:zzcc/core/services/torrent_metadata_service.dart';
 import 'package:zzcc/data/repositories/graph_repository.dart';
 import 'package:zzcc/data/sources/nebula_remote_source.dart';
@@ -23,6 +24,7 @@ Future<void> setupServiceLocator() async {
   getIt.registerLazySingleton<LoggerService>(() => LoggerService());
   // getIt.registerLazySingleton<StorageService>(() => StorageService()); 
   getIt.registerLazySingleton<TorrentService>(() => TorrentServiceImpl());
+  getIt.registerLazySingleton<DeviceStatusService>(() => DeviceStatusServiceImpl());
   getIt.registerSingleton<TorrentMetadataService>(TorrentMetadataService(getIt<LoggerService>()));
   getIt.registerLazySingleton<ApiService>(() => ApiServiceImpl());
   getIt.registerLazySingleton<FileRepository>(() => FileRepositoryImpl());

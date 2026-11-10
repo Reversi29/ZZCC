@@ -8,6 +8,7 @@ import 'package:zzcc/presentation/providers/user_provider.dart';
 import 'package:zzcc/presentation/pages/home/widgets/resizable_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/weather_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/todo_widget.dart';
+import 'package:zzcc/presentation/pages/home/widgets/memo_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/network_status_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/device_status_widget.dart';
 import 'package:zzcc/presentation/pages/home/widgets/location_widget.dart';
@@ -243,6 +244,13 @@ class _HomePageState extends ConsumerState<HomePage> {
       ),
       WidgetItem(
         key: GlobalKey(),
+        type: WidgetType.memo,
+        position: const Offset(0, 1340),
+        size: const Size(300, 380),
+        minSize: const Size(300, 300),
+      ),
+      WidgetItem(
+        key: GlobalKey(),
         type: WidgetType.location,
         position: const Offset(300, 0),
         size: const Size(400, 400),
@@ -277,6 +285,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           WidgetType.todo => const TodoWidget(),
           WidgetType.network => const NetworkStatusWidget(),
           WidgetType.deviceStatus => const DeviceStatusWidget(),
+          WidgetType.memo => const MemoWidget(),
           WidgetType.location => const LocationWidget(),
           WidgetType.calendar => const CalendarWidget(),
           WidgetType.hardwareDetails => const HardwareDetailsWidget(),
@@ -1031,6 +1040,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       WidgetType.todo => '待办',
       WidgetType.network => '网络',
       WidgetType.deviceStatus => '设备',
+      WidgetType.memo => '备忘录',
       WidgetType.location => '位置',
       WidgetType.calendar => '日历',
       WidgetType.hardwareDetails => '硬件',
@@ -1043,6 +1053,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       WidgetType.todo => Icons.checklist,
       WidgetType.network => Icons.network_wifi,
       WidgetType.deviceStatus => Icons.device_thermostat,
+      WidgetType.memo => Icons.sticky_note_2_outlined,
       WidgetType.location => Icons.location_on,
       WidgetType.calendar => Icons.calendar_today,
       WidgetType.hardwareDetails => Icons.info,
@@ -1077,7 +1088,7 @@ class WidgetItem {
 }
 
 enum WidgetType {
-  weather, todo, network, deviceStatus, location, calendar, hardwareDetails
+  weather, todo, network, deviceStatus, memo, location, calendar, hardwareDetails
 }
 
 // Minimap painter
