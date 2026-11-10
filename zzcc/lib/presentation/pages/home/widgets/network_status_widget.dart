@@ -1,9 +1,9 @@
 // 修改文档8：NetworkStatusWidget
-import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:zzcc/core/services/network_stats_service.dart';
 import 'package:zzcc/core/utils/color_utils.dart';
 
 class NetworkStatusWidget extends StatefulWidget {
@@ -16,6 +16,7 @@ class NetworkStatusWidget extends StatefulWidget {
 class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
   final Connectivity _connectivity = Connectivity();
   final NetworkInfo _networkInfo = NetworkInfo();
+  final NetworkStatsService _statsService = NetworkStatsServiceImpl();
   
   StreamSubscription<dynamic>? _connectivitySubscription;
   ConnectivityResult _connectionStatus = ConnectivityResult.none;
@@ -69,11 +70,11 @@ class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
       
       if (timeDiff < 1) return;
       
-      final networkStats = await _getNetworkInterfaceStats();
+      final networkStats = await _statsService.getNetworkStats();
       
       if (networkStats != null) {
-        final receivedBytes = networkStats['receivedBytes'] ?? 0;
-        final sentBytes = networkStats['sentBytes'] ?? 0;
+        final receivedBytes = networkStats.receivedBytes;
+        final sentBytes = networkStats.sentBytes;
         
         if (_lastReceivedBytes > 0 && _lastSentBytes > 0) {
           final downloadDiff = receivedBytes - _lastReceivedBytes;
@@ -98,154 +99,6 @@ class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
     }
   }
 
-  Future<Map<String, int>?> _getNetworkInterfaceStats() async {
-    try {
-      if (Platform.isWindows) {
-        return await _getWindowsNetworkStats();
-      } else if (Platform.isLinux || Platform.isMacOS) {
-        return await _getUnixNetworkStats();
-      }
-    } catch (e) {
-      // 在实际应用中应使用日志记录
-    }
-    return null;
-  }
-
-  Future<Map<String, int>> _getWindowsNetworkStats() async {
-    final result = await Process.run('powershell', [
-      'Get-NetAdapterStatistics | Select-Object Name,ReceivedBytes,SentBytes | ConvertTo-Json'
-    ]);
-    
-    if (result.exitCode == 0) {
-      final output = result.stdout.toString();
-      final lines = output.split('\n');
-      for (final line in lines) {
-        if (line.contains('ReceivedBytes') && line.contains('SentBytes')) {
-          final receivedMatch = RegExp(r'"ReceivedBytes":\s*(\d+)').firstMatch(line);
-          final sentMatch = RegExp(r'"SentBytes":\s*(\d+)').firstMatch(line);
-          
-          if (receivedMatch != null && sentMatch != null) {
-            return {
-              'receivedBytes': int.parse(receivedMatch.group(1)!),
-              'sentBytes': int.parse(sentMatch.group(1)!),
-            };
-          }
-        }
-      }
-    }
-    
-    final netstatResult = await Process.run('netstat', ['-e']);
-    if (netstatResult.exitCode == 0) {
-      return _parseNetstatOutput(netstatResult.stdout.toString());
-    }
-    
-    throw Exception('无法获取Windows网络统计信息');
-  }
-
-  Future<Map<String, int>> _getUnixNetworkStats() async {
-    final result = await Process.run('cat', ['/proc/net/dev']);
-    
-    if (result.exitCode == 0) {
-      return _parseProcNetDev(result.stdout.toString());
-    }
-    
-    try {
-      final ifconfigResult = await Process.run('ifconfig', []);
-      if (ifconfigResult.exitCode == 0) {
-        return _parseIfconfigOutput(ifconfigResult.stdout.toString());
-      }
-    } catch (e) {
-      // 忽略错误
-    }
-    
-    final netstatResult = await Process.run('netstat', ['-i']);
-    if (netstatResult.exitCode == 0) {
-      return _parseNetstatOutput(netstatResult.stdout.toString());
-    }
-    
-    throw Exception('无法获取Unix网络统计信息');
-  }
-
-  Map<String, int> _parseProcNetDev(String output) {
-    final lines = output.split('\n');
-    for (final line in lines) {
-      if (line.contains('eth0') || line.contains('wlan0') || line.contains('en0')) {
-        final parts = line.trim().split(RegExp(r'\s+'));
-        if (parts.length >= 10) {
-          return {
-            'receivedBytes': int.parse(parts[1]),
-            'sentBytes': int.parse(parts[9]),
-          };
-        }
-      }
-    }
-    throw Exception('无法解析/proc/net/dev输出');
-  }
-
-  Map<String, int> _parseIfconfigOutput(String output) {
-    final rxMatch = RegExp(r'RX bytes:(\d+)').firstMatch(output);
-    final txMatch = RegExp(r'TX bytes:(\d+)').firstMatch(output);
-    
-    if (rxMatch != null && txMatch != null) {
-      return {
-        'receivedBytes': int.parse(rxMatch.group(1)!),
-        'sentBytes': int.parse(txMatch.group(1)!),
-      };
-    }
-    throw Exception('无法解析ifconfig输出');
-  }
-
-  Map<String, int> _parseNetstatOutput(String output) {
-    // Robust parsing for multiple netstat output formats (Windows/netstat -e, Unix netstat -i, localized outputs)
-    final lines = output.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-
-    // Helper to extract integers from a line (handles commas)
-    List<int> extractInts(String line) {
-      final matches = RegExp(r'[\d,]+').allMatches(line);
-      return matches.map((m) => int.parse(m.group(0)!.replaceAll(',', ''))).toList();
-    }
-
-    // First try: look for a line that contains 'Bytes' or common localized keywords
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      final lower = line.toLowerCase();
-      if (lower.contains('bytes') || lower.contains('received') || lower.contains('接收') || lower.contains('接收字节') || lower.contains('已接收')) {
-        // If this line contains numbers, take them. Otherwise, check the next line for numbers.
-        final ints = extractInts(line);
-        if (ints.length >= 2) {
-          return {'receivedBytes': ints[0], 'sentBytes': ints[1]};
-        }
-        if (i + 1 < lines.length) {
-          final nextInts = extractInts(lines[i + 1]);
-          if (nextInts.length >= 2) {
-            return {'receivedBytes': nextInts[0], 'sentBytes': nextInts[1]};
-          }
-        }
-      }
-    }
-
-    // Second try: find any line that has two large integer columns (likely Received and Sent)
-    for (final line in lines) {
-      final ints = extractInts(line);
-      if (ints.length >= 2) {
-        // Heuristic: numbers should be non-zero and reasonably large
-        if ((ints[0] > 0 || ints[1] > 0)) {
-          return {'receivedBytes': ints[0], 'sentBytes': ints[1]};
-        }
-      }
-    }
-
-    // Third try: scan for any pair of integers across adjacent lines (header + values)
-    for (int i = 0; i < lines.length - 1; i++) {
-      final a = extractInts(lines[i]);
-      final b = extractInts(lines[i + 1]);
-      if (a.isEmpty && b.length >= 2) {
-        return {'receivedBytes': b[0], 'sentBytes': b[1]};
-      }
-    }
-
-    throw Exception('无法解析netstat输出');
-  }
 
   void _fallbackToSimulatedSpeed() {
     if (!_hasInternet) {
@@ -294,13 +147,10 @@ class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
 
   Future<void> _checkRealInternetConnection() async {
     try {
-      final result = await InternetAddress.lookup('google.com').timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw SocketException('Connection timeout'),
-      );
+      final hasInternet = await _statsService.checkInternet();
       if (!mounted) return;
       setState(() {
-        _hasInternet = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+        _hasInternet = hasInternet;
       });
     } catch (e) {
       _checkInternetConnectionByIP();

@@ -10,7 +10,7 @@ class HardwareDetailsWidget extends StatefulWidget {
 }
 
 class _HardwareDetailsWidgetState extends State<HardwareDetailsWidget> {
-  final HardwareInfoService service = HardwareInfoService.instance;
+  final HardwareInfoService service = HardwareInfoServiceImpl.instance;
   late Future<Map<String, String>> _info;
 
   @override

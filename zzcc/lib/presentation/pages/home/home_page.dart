@@ -135,9 +135,25 @@ class _HomePageState extends ConsumerState<HomePage> {
         ));
       }
 
+      // 合并默认项：已保存布局缺省的新类型组件（如 deviceStatus/memo）
+      // 自动追加到主画布，保证旧布局用户也能看到新增组件。
+      final loadedTypes = {for (final w in loaded) w.type};
+      final merged = List<WidgetItem>.from(loaded);
+      for (final def in defaults) {
+        if (!loadedTypes.contains(def.type)) {
+          merged.add(WidgetItem(
+            key: GlobalKey(),
+            type: def.type,
+            position: def.position,
+            size: def.size,
+            minSize: def.minSize,
+          ));
+        }
+      }
+
       if (mounted) {
         setState(() {
-          _widgets = loaded;
+          _widgets = merged;
           _stashBox
             ..clear()
             ..addAll(stash);
