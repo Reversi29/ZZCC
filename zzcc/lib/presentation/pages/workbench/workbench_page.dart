@@ -29,6 +29,8 @@ import 'package:path/path.dart' as path;
 import 'package:universal_html/html.dart' as html;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:zzcc/presentation/pages/workbench/web_three_viewer_stub.dart'
+    if (dart.library.js_interop) 'package:zzcc/presentation/pages/workbench/web_three_viewer.dart';
 import 'package:video_player/video_player.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -373,7 +375,11 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
   void _debounceOpenFile(WorkbenchProvider provider, String path) {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 300), () {
-      provider.openFileByName(path);
+      if (kIsWeb) {
+        provider.openWebFile(path);
+      } else {
+        provider.openFileByName(path);
+      }
     });
   }
 
@@ -2135,6 +2141,7 @@ class _ModelViewerState extends State<_ModelViewer> {
   late final WebViewController _controller;
   bool _isLoading = true;
   bool _hasError = false;
+  Uint8List? _webModelBytes;
 
   @override
   void initState() {
@@ -2168,6 +2175,15 @@ class _ModelViewerState extends State<_ModelViewer> {
         setState(() {
           _isLoading = false;
           _hasError = true;
+        });
+        return;
+      }
+
+      // Web 平台：webview_flutter 无 Web 实现，改用 HtmlElementView + iframe
+      if (kIsWeb) {
+        setState(() {
+          _isLoading = false;
+          _webModelBytes = modelBytes;
         });
         return;
       }
@@ -2330,11 +2346,21 @@ window.addEventListener('resize', () => {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
-    
+
     if (_hasError) {
       return const Center(child: Text('无法加载3D模型查看器'));
     }
-    
+
+    // Web 平台：用 HtmlElementView + iframe 渲染 three.js，不用 WebViewWidget
+    if (kIsWeb) {
+      final webBytes = _webModelBytes;
+      final ext = widget.filePath.split('.').last.toLowerCase();
+      if (webBytes != null && webBytes.isNotEmpty) {
+        return WebThreeViewer(ext: ext, bytes: webBytes);
+      }
+      return const Center(child: Text('模型数据为空'));
+    }
+
     return Column(
       children: [
         Expanded(

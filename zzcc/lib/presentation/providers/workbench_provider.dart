@@ -127,6 +127,8 @@ class WorkbenchProvider extends ChangeNotifier {
   final Map<String, Duration> _audioPositions = {};
   Timer? _fileWatcherTimer;
   bool _fileTreeNeedsRefresh = false;
+  // Web 端打开文件夹/文件时暂存的虚拟文件内容（浏览器沙箱无本地路径）
+  final Map<String, WebPickedFile> _webFiles = {};
   final ApiService _apiService = GetIt.I<ApiService>();
   // Editor status
   int _editorLine = 1;
@@ -654,20 +656,10 @@ class WorkbenchProvider extends ChangeNotifier {
 
       setFileTree([rootNode]);
 
-      // 打开所有文件（文本文件自动加入，其他文件可点击预览）
-      _openedFiles.clear();
+      // 暂存虚拟文件内容供点击树节点时读取，不自动打开全部文件
+      _webFiles.clear();
       for (final f in result.files) {
-        final content = f.content ?? '';
-        final bytes = f.bytes;
-        _openedFiles.add(OpenedFile(
-          path: f.relativePath,
-          content: content,
-          bytes: bytes,
-          originalContent: content,
-        ));
-      }
-      if (_openedFiles.isNotEmpty) {
-        setActiveFile(0);
+        _webFiles[f.relativePath] = f;
       }
 
       notifyListeners();
@@ -869,6 +861,33 @@ class WorkbenchProvider extends ChangeNotifier {
     notifyListeners();
   }
   
+  /// Web 端：从暂存的虚拟文件（打开文件夹/文件时缓存的内容）打开。
+  /// 浏览器沙箱无本地路径，文件内容已在打开文件夹/文件时读入 _webFiles。
+  void openWebFile(String path) {
+    final picked = _webFiles[path];
+    if (picked == null) {
+      debugPrint('Web 文件未缓存: $path');
+      return;
+    }
+
+    final normalizedPath = _normalizePath(path);
+    final existingIndex = _openedFiles.indexWhere(
+        (f) => _normalizePath(f.path) == normalizedPath);
+    if (existingIndex >= 0) {
+      setActiveFile(existingIndex);
+      return;
+    }
+
+    _openedFiles.add(OpenedFile(
+      path: normalizedPath,
+      content: picked.content ?? '',
+      bytes: picked.bytes,
+      originalContent: picked.content ?? '',
+    ));
+    setActiveFile(_openedFiles.length - 1);
+    notifyListeners();
+  }
+
   Future<void> openFileByName(String path) async {
     try {
       _isLoading = true;

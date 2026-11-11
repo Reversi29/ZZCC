@@ -165,4 +165,10 @@ void main() {
     expect(deep.children.length, 1);
     expect(deep.children[0].name, 'x.txt');
   });
+
+  test('openWebFile 未缓存文件安全返回，不添加打开文件', () {
+    final before = provider.openedFiles.length;
+    provider.openWebFile('nonexistent/path.dart');
+    expect(provider.openedFiles.length, before);
+  });
 }
