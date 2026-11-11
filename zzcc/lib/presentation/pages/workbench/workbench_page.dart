@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/gestures.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -44,13 +46,82 @@ bool get isWeb {
 }
 
 // 添加 SettingsPanel 定义
-class SettingsPanel extends StatelessWidget {
+class SettingsPanel extends ConsumerWidget {
   const SettingsPanel({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Text('设置面板'),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final provider = ref.watch(workbenchProvider);
+    final notifier = ref.read(workbenchProvider.notifier);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('工作台设置',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Text('编辑器偏好设置，保存到本地',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 24),
+
+          // 字体大小
+          Text('编辑器字体大小',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Text('${provider.editorFontSize.toStringAsFixed(0)} px',
+                  style: const TextStyle(fontSize: 14)),
+              Expanded(
+                child: Slider(
+                  value: provider.editorFontSize,
+                  min: 10,
+                  max: 24,
+                  divisions: 14,
+                  onChanged: (v) => notifier.setEditorFontSize(v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Divider(),
+
+          // 主题
+          SwitchListTile(
+            title: const Text('深色主题'),
+            subtitle: const Text('编辑器使用深色配色'),
+            value: provider.editorTheme == 'dark',
+            onChanged: (v) => notifier.setEditorTheme(v ? 'dark' : 'light'),
+          ),
+          // 行号
+          SwitchListTile(
+            title: const Text('显示行号'),
+            subtitle: const Text('在编辑器左侧显示行号'),
+            value: provider.showLineNumbers,
+            onChanged: notifier.setShowLineNumbers,
+          ),
+          // 自动保存
+          SwitchListTile(
+            title: const Text('自动保存'),
+            subtitle: const Text('编辑文件时自动保存到磁盘'),
+            value: provider.autoSave,
+            onChanged: notifier.setAutoSave,
+          ),
+
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          Text('关于工作台',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          const Text(
+            '版本 1.0.0 · ZZCC 集成开发环境',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -68,6 +139,8 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
   final ScrollController _tabScrollController = ScrollController();
   String? _rootPath;
   bool _isDragging = false;
+  final TextEditingController _commitMessageController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -108,6 +181,8 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
   void dispose() {
     _fileWatcherTimer?.cancel();
     _debounceTimer?.cancel();
+    _commitMessageController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -317,53 +392,332 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
   }
 
   Widget _buildSearchSidebar() {
+    final provider = ref.watch(workbenchProvider);
+    final results = provider.searchResults;
+
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(16),
           child: TextField(
+            controller: _searchController,
             decoration: InputDecoration(
-              hintText: '搜索',
+              hintText: '搜索文件名/内容',
               prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              suffixIcon: provider.searchLoading
+                  ? const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : null,
+            ),
+            onChanged: (value) {
+              if (value.trim().isEmpty) {
+                ref.read(workbenchProvider.notifier).clearSearchResults();
+              }
+            },
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                ref.read(workbenchProvider.notifier).searchFiles(value);
+              }
+            },
+          ),
+        ),
+        if (provider.currentFolderPath == null)
+          const Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.folder_open, size: 32, color: Colors.grey),
+                  SizedBox(height: 8),
+                  Text('请先打开一个文件夹', style: TextStyle(color: Colors.grey)),
+                ],
               ),
             ),
+          )
+        else
+          Expanded(
+            child: results.isEmpty
+                ? const Center(
+                    child: Text('输入关键词后回车搜索', style: TextStyle(color: Colors.grey)),
+                  )
+                : ListView.builder(
+                    itemCount: results.length,
+                    itemBuilder: (context, index) {
+                      final r = results[index];
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(
+                          r.isContentMatch ? Icons.article : Icons.insert_drive_file,
+                          size: 16,
+                          color: r.isContentMatch ? Colors.blue : Colors.grey,
+                        ),
+                        title: Text(
+                          r.isContentMatch
+                              ? '${r.name} :${r.lineNumber}'
+                              : r.name,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: r.snippet.isNotEmpty
+                            ? Text(r.snippet,
+                                style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis)
+                            : Text(r.path,
+                                style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis),
+                        onTap: () => _openSearchResult(r),
+                      );
+                    },
+                  ),
           ),
-        ),
-        const Expanded(
-          child: Center(
-            child: Text('搜索功能'),
-          ),
-        ),
       ],
     );
   }
 
+  void _openSearchResult(SearchResult r) {
+    final provider = ref.read(workbenchProvider.notifier);
+    provider.openFileByName(r.path);
+  }
   Widget _buildSourceControlSidebar() {
+    final provider = ref.watch(workbenchProvider);
+    final statusList = provider.gitStatus;
+    final gitLog = provider.gitLog;
+
     return Column(
       children: [
+        // 头部
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [
+              const Icon(Icons.source, size: 16),
+              const SizedBox(width: 6),
               const Text('源代码管理', style: TextStyle(fontWeight: FontWeight.bold)),
               const Spacer(),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.commit),
-                label: const Text('提交'),
-                onPressed: () {},
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 16),
+                tooltip: '刷新',
+                onPressed: () => ref.read(workbenchProvider.notifier).refreshGitStatus(),
               ),
             ],
           ),
         ),
-        const Expanded(
-          child: Center(
-            child: Text('源代码管理功能'),
+        if (provider.currentFolderPath == null)
+          const Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.folder_open, size: 32, color: Colors.grey),
+                  SizedBox(height: 8),
+                  Text('请先打开一个文件夹', style: TextStyle(color: Colors.grey)),
+                ],
+              ),
+            ),
+          )
+        else ...[
+          // 分支信息
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Icon(Icons.call_split, size: 14, color: Colors.blue),
+                const SizedBox(width: 4),
+                Text(provider.gitBranch, style: const TextStyle(fontSize: 12)),
+                const Spacer(),
+                Text('${statusList.length} 个变更',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            ),
           ),
-        ),
+          const SizedBox(height: 4),
+          // 变更列表
+          Expanded(
+            child: provider.gitLoading
+                ? const Center(child: CircularProgressIndicator())
+                : statusList.isEmpty
+                    ? const Center(
+                        child: Text('工作区干净', style: TextStyle(color: Colors.grey)))
+                    : ListView.builder(
+                        itemCount: statusList.length,
+                        itemBuilder: (context, index) {
+                          final item = statusList[index];
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(
+                              _gitStatusIcon(item.status),
+                              size: 16,
+                              color: _gitStatusColor(item.status),
+                            ),
+                            title: Text(item.path,
+                                style: const TextStyle(fontSize: 12),
+                                overflow: TextOverflow.ellipsis),
+                            trailing: Text(item.displayStatus,
+                                style:
+                                    const TextStyle(fontSize: 10, color: Colors.grey)),
+                            onTap: () => _gitDiscardConfirm(item),
+                          );
+                        },
+                      ),
+          ),
+          // 提交区 + 最近提交
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.grey.shade300)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _commitMessageController,
+                  maxLines: 2,
+                  minLines: 1,
+                  decoration: const InputDecoration(
+                    hintText: '提交信息 (commit message)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.commit, size: 16),
+                    label: Text(statusList.isEmpty
+                        ? '提交'
+                        : '提交 ${statusList.length} 个变更'),
+                    onPressed: statusList.isEmpty ? null : _handleGitCommit,
+                  ),
+                ),
+                if (gitLog.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  const Divider(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('最近提交',
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(height: 4),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 150),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: gitLog.length,
+                      itemBuilder: (context, index) {
+                        final c = gitLog[index];
+                        return ListTile(
+                          dense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                          leading: const Icon(Icons.history, size: 14),
+                          title: Text(c.message,
+                              style: const TextStyle(fontSize: 11),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                          subtitle: Text('${c.id} · ${c.author}',
+                              style: const TextStyle(fontSize: 10)),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  IconData _gitStatusIcon(String status) {
+    switch (status) {
+      case 'M': return Icons.edit;
+      case 'A': return Icons.add_circle_outline;
+      case 'D': return Icons.delete_outline;
+      case '??': return Icons.help_outline;
+      case 'R': return Icons.drive_file_move;
+      case 'U': return Icons.error_outline;
+      default: return Icons.change_circle_outlined;
+    }
+  }
+
+  Color _gitStatusColor(String status) {
+    switch (status) {
+      case 'M': return Colors.orange;
+      case 'A': return Colors.green;
+      case 'D': return Colors.red;
+      case '??': return Colors.grey;
+      case 'U': return Colors.redAccent;
+      default: return Colors.blueGrey;
+    }
+  }
+
+  Future<void> _handleGitCommit() async {
+    final message = _commitMessageController.text.trim();
+    if (message.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入提交信息')),
+      );
+      return;
+    }
+    final ok = await ref.read(workbenchProvider.notifier).gitCommit(message);
+    if (ok) {
+      _commitMessageController.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('提交成功')),
+        );
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('提交失败，请检查 git 仓库')),
+        );
+      }
+    }
+  }
+
+  Future<void> _gitDiscardConfirm(GitFileStatus item) async {
+    if (item.status == '??') {
+      // 未跟踪文件直接忽略（不显示确认）
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('放弃修改'),
+        content: Text('确认放弃对 ${item.path} 的修改？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('放弃'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      final ok = await ref.read(workbenchProvider.notifier).gitDiscard(item.path);
+      if (ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已放弃 ${item.path}')),
+        );
+      }
+    }
   }
 
   Widget _buildMenuBar(BuildContext context, WidgetRef ref) {
@@ -1586,7 +1940,10 @@ class _CodeEditorState extends State<_CodeEditor> {
         }),
         child: CodeField(
           controller: controller,
-          textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 16),
+          textStyle: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: widget.provider.editorFontSize,
+          ),
         ),
       ),
     );
@@ -1778,19 +2135,179 @@ class _ModelViewerState extends State<_ModelViewer> {
         _isLoading = true;
         _hasError = false;
       });
-      
-      // 加载3D模型查看器
-      _controller.loadRequest(Uri.parse('https://3dviewer.net'));
-      
+
+      // 读取模型数据（bytes 优先，否则从文件读取）
+      Uint8List? modelBytes = widget.bytes;
+      if (modelBytes == null && !kIsWeb && widget.filePath.isNotEmpty) {
+        try {
+          final file = File(widget.filePath);
+          if (await file.exists()) {
+            modelBytes = await file.readAsBytes();
+          }
+        } catch (e) {
+          debugPrint('读取模型文件失败: $e');
+        }
+      }
+
+      if (modelBytes == null || modelBytes.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _hasError = true;
+        });
+        return;
+      }
+
+      final ext = widget.filePath.split('.').last.toLowerCase();
+      final base64Data = base64Encode(modelBytes);
+      final html = _buildThreeJsHtml(ext, base64Data);
+      _controller.loadHtmlString(html);
+
       setState(() {
         _isLoading = false;
       });
     } catch (e) {
+      debugPrint('3D 模型加载失败: $e');
       setState(() {
         _isLoading = false;
         _hasError = true;
       });
     }
+  }
+
+  String _buildThreeJsHtml(String ext, String base64Data) {
+    final loaderName = switch (ext) {
+      'obj' => 'OBJ',
+      'stl' => 'STL',
+      'gltf' || 'glb' => 'GLTF',
+      _ => 'OBJ',
+    };
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; overflow: hidden; background: #1a1a2e; }
+  #info { position: absolute; top: 10px; left: 10px; color: #fff;
+          font-family: monospace; font-size: 12px; z-index: 10;
+          background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 4px; }
+  #error { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+           color: #ff6b6b; font-family: monospace; font-size: 14px; display: none; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+</head>
+<body>
+<div id="info">正在加载 $loaderName 模型...</div>
+<div id="error">模型加载失败</div>
+<script>
+const modelBase64 = "$base64Data";
+const modelExt = "$ext";
+
+function base64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000);
+camera.position.set(3, 2, 4);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 8, 6);
+scene.add(dirLight);
+
+const grid = new THREE.GridHelper(10, 10, 0x444466, 0x333355);
+scene.add(grid);
+
+const buffer = base64ToArrayBuffer(modelBase64);
+let object = null;
+
+function centerAndScale(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const scale = 2.0 / maxDim;
+  obj.position.sub(center);
+  obj.scale.setScalar(scale);
+}
+
+try {
+  if (modelExt === 'stl') {
+    const loader = new THREE.STLLoader();
+    const geometry = loader.parse(buffer);
+    object = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x4a9eff, metalness: 0.3, roughness: 0.4 }));
+  } else if (modelExt === 'gltf' || modelExt === 'glb') {
+    const loader = new THREE.GLTFLoader();
+    loader.parse(buffer, '', (gltf) => {
+      object = gltf.scene;
+      centerAndScale(object);
+      scene.add(object);
+      document.getElementById('info').textContent = '模型加载完成';
+    }, (err) => {
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('info').textContent = 'GLTF 加载失败';
+    });
+    return;
+  } else {
+    const loader = new THREE.OBJLoader();
+    const text = new TextDecoder().decode(new Uint8Array(buffer));
+    object = loader.parse(text);
+  }
+  centerAndScale(object);
+  scene.add(object);
+  document.getElementById('info').textContent = '模型加载完成';
+} catch (e) {
+  document.getElementById('error').style.display = 'block';
+  document.getElementById('info').textContent = '加载失败: ' + e.message;
+}
+
+let isDragging = false, prevX = 0, prevY = 0;
+renderer.domElement.addEventListener('mousedown', (e) => { isDragging = true; prevX = e.clientX; prevY = e.clientY; });
+window.addEventListener('mouseup', () => isDragging = false);
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  const dx = e.clientX - prevX;
+  const dy = e.clientY - prevY;
+  prevX = e.clientX; prevY = e.clientY;
+  if (object) {
+    object.rotation.y += dx * 0.01;
+    object.rotation.x += dy * 0.01;
+  }
+});
+renderer.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  camera.position.multiplyScalar(e.deltaY > 0 ? 1.1 : 0.9);
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
+""";
   }
 
   @override

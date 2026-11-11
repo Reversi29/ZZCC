@@ -36,6 +36,46 @@ enum SidebarContent {
   search,
   debug
 }
+class GitFileStatus {
+  final String path;
+  final String status;  // M/A/D/??/R/U
+  final String displayStatus;
+
+  GitFileStatus({
+    required this.path,
+    required this.status,
+  }) : displayStatus = _statusToText(status);
+
+  static String _statusToText(String s) {
+    switch (s) {
+      case 'M': return '修改';
+      case 'A': return '新增';
+      case 'D': return '删除';
+      case '??': return '未跟踪';
+      case 'R': return '重命名';
+      case 'U': return '冲突';
+      default: return s.isEmpty ? '变更' : s;
+    }
+  }
+}
+
+
+
+class SearchResult {
+  final String path;
+  final String name;
+  final bool isContentMatch;
+  final int lineNumber;
+  final String snippet;
+
+  SearchResult({
+    required this.path,
+    required this.name,
+    required this.isContentMatch,
+    required this.lineNumber,
+    required this.snippet,
+  });
+}
 
 class OpenedFile {
   final String path;
@@ -172,6 +212,72 @@ class WorkbenchProvider extends ChangeNotifier {
     _activeFileIndex = 0;
     
     _isLoading = false;
+    notifyListeners();
+  }
+
+
+  // ═══════════════════════════════════════════════
+  // 编辑器设置
+  // ═══════════════════════════════════════════════
+  double _editorFontSize = 16.0;
+  String _editorTheme = 'light';
+  bool _showLineNumbers = true;
+  bool _autoSave = false;
+
+  double get editorFontSize => _editorFontSize;
+  String get editorTheme => _editorTheme;
+  bool get showLineNumbers => _showLineNumbers;
+  bool get autoSave => _autoSave;
+
+  void loadEditorSettings() {
+    try {
+      final storage = getIt<StorageService>();
+      final size = storage.getFromAppBox('editorFontSize');
+      if (size is num && size > 0) _editorFontSize = size.toDouble();
+      final theme = storage.getFromAppBox('editorTheme');
+      if (theme is String) _editorTheme = theme;
+      final lineNums = storage.getFromAppBox('showLineNumbers');
+      if (lineNums is bool) _showLineNumbers = lineNums;
+      final auto = storage.getFromAppBox('autoSave');
+      if (auto is bool) _autoSave = auto;
+    } catch (e) {
+      debugPrint('加载编辑器设置失败: $e');
+    }
+  }
+
+  void setEditorFontSize(double size) {
+    _editorFontSize = size;
+    try {
+      final storage = getIt<StorageService>();
+      if (storage.isAppBoxOpen) storage.saveToAppBox('editorFontSize', size);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  void setEditorTheme(String theme) {
+    _editorTheme = theme;
+    try {
+      final storage = getIt<StorageService>();
+      if (storage.isAppBoxOpen) storage.saveToAppBox('editorTheme', theme);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  void setShowLineNumbers(bool v) {
+    _showLineNumbers = v;
+    try {
+      final storage = getIt<StorageService>();
+      if (storage.isAppBoxOpen) storage.saveToAppBox('showLineNumbers', v);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  void setAutoSave(bool v) {
+    _autoSave = v;
+    try {
+      final storage = getIt<StorageService>();
+      if (storage.isAppBoxOpen) storage.saveToAppBox('autoSave', v);
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -489,6 +595,8 @@ class WorkbenchProvider extends ChangeNotifier {
     }
 
     await refreshFileTree();
+    // 打开文件夹后同步 git 状态
+    await refreshGitStatus();
   }
 
   /// Handle files/folders dropped onto the workbench.
@@ -847,7 +955,115 @@ class WorkbenchProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> saveFile(String path, String content) async {
+  
+  // ═══════════════════════════════════════════════
+  // Git 源代码管理
+  // ═══════════════════════════════════════════════
+  List<GitFileStatus> _gitStatus = [];
+  bool _gitLoading = false;
+  String _gitBranch = 'main';
+  List<GitCommit> _gitLog = [];
+
+  List<GitFileStatus> get gitStatus => _gitStatus;
+  bool get gitLoading => _gitLoading;
+  String get gitBranch => _gitBranch;
+  List<GitCommit> get gitLog => _gitLog;
+
+  Future<void> refreshGitStatus() async {
+    final root = _currentFolderPath;
+    if (root == null || kIsWeb || root.isEmpty) return;
+    _gitLoading = true;
+    notifyListeners();
+    try {
+      // git status --porcelain -b（机器可读格式）
+      final result = await Process.run('git', ['-C', root, 'status', '--porcelain', '-b']);
+      if (result.exitCode == 0) {
+        final lines = (result.stdout as String).split('\n');
+        final statusList = <GitFileStatus>[];
+        String branch = 'main';
+        for (final line in lines) {
+          if (line.isEmpty) continue;
+          if (line.startsWith('## ')) {
+            branch = line.substring(3).split('...')[0].split(' ')[0].trim();
+            continue;
+          }
+          if (line.length < 3) continue;
+          final code = line.substring(0, 2).trim();
+          final path = line.substring(3).trim();
+          statusList.add(GitFileStatus(path: path, status: code));
+        }
+        _gitStatus = statusList;
+        _gitBranch = branch;
+      }
+      // git log
+      final logResult = await Process.run('git', ['-C', root, 'log', '--pretty=format:%h|%an|%ad|%s', '--date=short', '-20']);
+      if (logResult.exitCode == 0) {
+        final logList = <GitCommit>[];
+        final lines = (logResult.stdout as String).split('\n');
+        for (final line in lines) {
+          if (line.trim().isEmpty) continue;
+          final parts = line.split('|');
+          if (parts.length >= 4) {
+            logList.add(GitCommit(
+              id: parts[0],
+              author: parts[1],
+              message: parts[3],
+              date: DateTime.tryParse(parts[2]) ?? DateTime.now(),
+            ));
+          }
+        }
+        _gitLog = logList;
+      }
+    } catch (e) {
+      debugPrint('git status 失败: $e');
+    } finally {
+      _gitLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> gitCommit(String message) async {
+    final root = _currentFolderPath;
+    if (root == null || kIsWeb || root.isEmpty || message.trim().isEmpty) return false;
+    try {
+      // stage all 变更
+      await Process.run('git', ['-C', root, 'add', '-A']);
+      final result = await Process.run('git', ['-C', root, 'commit', '-m', message.trim()]);
+      if (result.exitCode == 0) {
+        await refreshGitStatus();
+        return true;
+      }
+      debugPrint('git commit 失败: ${result.stderr}');
+      return false;
+    } catch (e) {
+      debugPrint('git commit 异常: $e');
+      return false;
+    }
+  }
+
+  Future<bool> gitDiscard(String path) async {
+    final root = _currentFolderPath;
+    if (root == null || kIsWeb || root.isEmpty || path.isEmpty) return false;
+    try {
+      final result = await Process.run('git', ['-C', root, 'checkout', '--', path]);
+      if (result.exitCode == 0) {
+        await refreshGitStatus();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('git discard 异常: $e');
+      return false;
+    }
+  }
+
+  Future<void> refreshGitStatusOnFolderChange() async {
+    if (_currentFolderPath != null && _currentFolderPath!.isNotEmpty) {
+      await refreshGitStatus();
+    }
+  }
+
+Future<void> saveFile(String path, String content) async {
     try {
       final file = File(path);
       await file.writeAsString(content);
@@ -861,6 +1077,95 @@ class WorkbenchProvider extends ChangeNotifier {
       debugPrint('文件保存失败: $e');
       rethrow;
     }
+  }
+
+
+  // ═══════════════════════════════════════════════
+  // 搜索功能
+  // ═══════════════════════════════════════════════
+  List<SearchResult> _searchResults = [];
+  bool _searchLoading = false;
+
+  List<SearchResult> get searchResults => _searchResults;
+  bool get searchLoading => _searchLoading;
+
+  void clearSearchResults() {
+    _searchResults = [];
+    notifyListeners();
+  }
+
+  Future<void> searchFiles(String keyword) async {
+    final root = _currentFolderPath;
+    if (root == null || keyword.trim().isEmpty) {
+      _searchResults = [];
+      notifyListeners();
+      return;
+    }
+    _searchLoading = true;
+    notifyListeners();
+    try {
+      final results = <SearchResult>[];
+      await _searchDir(Directory(root), keyword.toLowerCase(), results);
+      _searchResults = results;
+    } catch (e) {
+      debugPrint('搜索失败: $e');
+    } finally {
+      _searchLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _searchDir(
+      Directory dir, String keyword, List<SearchResult> results) async {
+    try {
+      await for (final entity in dir.list(followLinks: false)) {
+        if (results.length >= 200) break;
+        try {
+          if (entity is Directory) {
+            final name = entity.path.split('/').last;
+            if (name.startsWith('.') ||
+                const ['node_modules', 'build', '.dart_tool', '.git', 'Pods', '.idea', 'out']
+                    .contains(name)) {
+              continue;
+            }
+            await _searchDir(entity, keyword, results);
+          } else if (entity is File) {
+            final name = entity.path.split('/').last;
+            final path = entity.path;
+            if (name.toLowerCase().contains(keyword)) {
+              results.add(SearchResult(
+                  path: path,
+                  name: name,
+                  isContentMatch: false,
+                  lineNumber: 0,
+                  snippet: ''));
+            } else if (const ['dart', 'txt', 'md', 'json', 'yaml', 'yml', 'py',
+                    'js', 'ts', 'html', 'css', 'xml', 'conf', 'cfg', 'env']
+                .contains(name.split('.').last.toLowerCase())) {
+              // 内容搜索（限文本文件）
+              try {
+                final content = await entity.readAsString();
+                final lines = content.split('\n');
+                for (int i = 0; i < lines.length; i++) {
+                  if (lines[i].toLowerCase().contains(keyword)) {
+                    final trimmed = lines[i].trim();
+                    results.add(SearchResult(
+                        path: path,
+                        name: name,
+                        isContentMatch: true,
+                        lineNumber: i + 1,
+                        snippet: trimmed.length > 80
+                            ? trimmed.substring(0, 80)
+                            : trimmed));
+                    if (results.length >= 200) break;
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   Future<String> readFile(String path) async {
@@ -894,6 +1199,7 @@ class WorkbenchProvider extends ChangeNotifier {
 
   void openSettings() {
     _isSettingsOpen = true;
+    loadEditorSettings();
     
     final existingIndex = _openedFiles.indexWhere((f) => f.path == 'settings://');
     if (existingIndex >= 0) {
