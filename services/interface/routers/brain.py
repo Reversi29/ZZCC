@@ -460,7 +460,7 @@ async def observe(
         signal=signal.to_dict(),
         context=signal.context,
         execute_actions=True,
-    ), user=user)
+    ))
 
 
 @router.post("/process-queue")
