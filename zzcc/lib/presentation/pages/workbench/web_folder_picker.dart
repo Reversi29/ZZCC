@@ -70,6 +70,41 @@ Future<WebFolderResult?> pickWebFolder() async {
   return completer.future;
 }
 
+/// 弹出文件选择器（多选），返回选中的文件列表；用户取消时返回 null。
+Future<List<WebPickedFile>?> pickWebFiles() async {
+  final completer = Completer<List<WebPickedFile>?>();
+  final input = web.document.createElement('input') as web.HTMLInputElement;
+
+  input.type = 'file';
+  input.multiple = true;
+  input.style.display = 'none';
+
+  void onChanged(web.Event _) {
+    final files = input.files;
+    input.remove();
+
+    if (files == null || files.length == 0) {
+      completer.complete(null);
+      return;
+    }
+
+    _readFilesGeneric(files, completer);
+  }
+
+  web.document.body?.append(input);
+  input.addEventListener('change', onChanged.toJS);
+  input.click();
+
+  Future.delayed(const Duration(seconds: 60), () {
+    if (!completer.isCompleted) {
+      input.remove();
+      completer.complete(null);
+    }
+  });
+
+  return completer.future;
+}
+
 Future<void> _readFiles(
     web.FileList files, Completer<WebFolderResult?> completer) async {
   String rootName = '文件夹';
@@ -118,6 +153,47 @@ Future<void> _readFiles(
   }
 
   completer.complete(WebFolderResult(rootName: rootName, files: picked));
+}
+
+/// 通用读取：把 FileList 读成 WebPickedFile 列表（文本读 content，其他读 bytes）。
+Future<void> _readFilesGeneric(
+    web.FileList files, Completer<List<WebPickedFile>?> completer) async {
+  final picked = <WebPickedFile>[];
+
+  for (var i = 0; i < files.length; i++) {
+    final file = files.item(i);
+    if (file == null) continue;
+
+    final name = file.name;
+    final ext = name.toLowerCase().split('.').last;
+
+    if (_isTextExt(ext)) {
+      try {
+        final text = (await file.text().toDart).toDart;
+        picked.add(WebPickedFile(
+          relativePath: name,
+          name: name,
+          content: text,
+        ));
+      } catch (_) {
+        picked.add(WebPickedFile(relativePath: name, name: name));
+      }
+    } else {
+      try {
+        final jsBuf = await file.arrayBuffer().toDart;
+        final buf = jsBuf.toDart;
+        picked.add(WebPickedFile(
+          relativePath: name,
+          name: name,
+          bytes: Uint8List.view(buf),
+        ));
+      } catch (_) {
+        picked.add(WebPickedFile(relativePath: name, name: name));
+      }
+    }
+  }
+
+  completer.complete(picked);
 }
 
 bool _isTextExt(String ext) {

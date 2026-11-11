@@ -309,11 +309,7 @@ class WorkbenchProvider extends ChangeNotifier {
   Future<void> openFile(BuildContext context) async {
     try {
       if (kIsWeb) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Web 端暂不支持打开本地文件')),
-          );
-        }
+        await _openFileWeb(context);
         return;
       }
       FilePickerResult? result = await FilePicker.platform.pickFiles();
@@ -328,6 +324,62 @@ class WorkbenchProvider extends ChangeNotifier {
           SnackBar(content: Text('打开文件失败: $e')),
         );
       }
+    }
+  }
+
+  /// Web 版打开文件：用 `<input type="file" multiple>` 选择多个文件。
+  ///
+  /// 浏览器沙箱无法拿到绝对路径，只能拿到 File 对象。文本文件读内容直接
+  /// 打开，其他文件（图片/音频/视频等）读 bytes 后可预览。
+  Future<void> _openFileWeb(BuildContext context) async {
+    try {
+      _isLoading = true;
+      notifyListeners();
+
+      final picked = await pickWebFiles();
+      if (picked == null || picked.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未选择文件')),
+          );
+        }
+        return;
+      }
+
+      _currentFilePath = '';
+      _currentFileContent = '';
+      _currentFileBytes = null;
+
+      // 新打开的文件加入列表
+      for (final f in picked) {
+        _openedFiles.add(OpenedFile(
+          path: f.relativePath,
+          content: f.content ?? '',
+          bytes: f.bytes,
+          originalContent: f.content ?? '',
+        ));
+      }
+
+      // 激活最后一个新打开的文件
+      setActiveFile(_openedFiles.length - picked.length);
+
+      notifyListeners();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已打开 ${picked.length} 个文件')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Web 打开文件失败: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('打开文件失败: $e')),
+        );
+      }
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 

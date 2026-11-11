@@ -24,3 +24,6 @@ class WebFolderResult {
 
 /// 非 Web 平台返回 null（openFolder 只在 kIsWeb 分支调用，非 Web 不会真调）。
 Future<WebFolderResult?> pickWebFolder() async => null;
+
+/// 非 Web 平台返回 null（openFile 只在 kIsWeb 分支调用，非 Web 不会真调）。
+Future<List<WebPickedFile>?> pickWebFiles() async => null;

@@ -854,7 +854,9 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
                   child: Text('粘贴', style: TextStyle(fontSize: 12)),
                 ),
               ],
-              onSelected: (value) {},
+              onSelected: (value) async {
+                await provider.performEditAction(value);
+              },
               child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Text('编辑', style: TextStyle(fontSize: 12)),
@@ -889,7 +891,20 @@ class _WorkbenchPageState extends ConsumerState<WorkbenchPage> {
                   child: Text('重置缩放', style: TextStyle(fontSize: 12)),
                 ),
               ],
-              onSelected: (value) {},
+              onSelected: (value) async {
+                switch (value) {
+                  case 'zoom_in':
+                    provider.setEditorFontSize(provider.editorFontSize + 2);
+                    break;
+                  case 'zoom_out':
+                    provider.setEditorFontSize(
+                        (provider.editorFontSize - 2).clamp(8, 48));
+                    break;
+                  case 'reset_zoom':
+                    provider.setEditorFontSize(16.0);
+                    break;
+                }
+              },
               child: const MouseRegion(cursor: SystemMouseCursors.click, child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Text('视图', style: TextStyle(fontSize: 12)),
