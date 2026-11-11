@@ -11,6 +11,8 @@ import 'package:get_it/get_it.dart';
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/di/service_locator.dart';
 import 'dart:convert';
+import 'package:zzcc/presentation/pages/workbench/web_folder_picker_stub.dart'
+    if (dart.library.js_interop) 'package:zzcc/presentation/pages/workbench/web_folder_picker.dart';
 import 'package:charset_converter/charset_converter.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
@@ -524,11 +526,7 @@ class WorkbenchProvider extends ChangeNotifier {
   Future<void> openFolder(BuildContext context) async {
     try {
       if (kIsWeb) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Web 端暂不支持打开本地目录')),
-          );
-        }
+        await _openFolderWeb(context);
         return;
       }
       _isLoading = true;
@@ -573,6 +571,130 @@ class WorkbenchProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  /// Web 版打开文件夹：用 webkitdirectory 选择目录，构建虚拟文件树 + 打开文件。
+  Future<void> _openFolderWeb(BuildContext context) async {
+    try {
+      _isLoading = true;
+      notifyListeners();
+
+      final result = await pickWebFolder();
+      if (result == null || result.files.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未选择文件夹')),
+          );
+        }
+        return;
+      }
+
+      _currentFilePath = '';
+      _currentFileContent = '';
+      _currentFileBytes = null;
+      _currentFolderPath = result.rootName;
+
+      // 构建虚拟文件树（按相对路径拆分）
+      final rootNode = buildFileTreeFromRelativePaths(
+        result.files,
+        result.rootName,
+      );
+
+      setFileTree([rootNode]);
+
+      // 打开所有文件（文本文件自动加入，其他文件可点击预览）
+      _openedFiles.clear();
+      for (final f in result.files) {
+        final content = f.content ?? '';
+        final bytes = f.bytes;
+        _openedFiles.add(OpenedFile(
+          path: f.relativePath,
+          content: content,
+          bytes: bytes,
+          originalContent: content,
+        ));
+      }
+      if (_openedFiles.isNotEmpty) {
+        setActiveFile(0);
+      }
+
+      notifyListeners();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已打开文件夹: ${result.rootName} (${result.files.length} 个文件)')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Web 打开文件夹失败: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('打开文件夹失败: $e')),
+        );
+      }
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 根据 Web 相对路径构建虚拟文件树（可测的纯函数）。
+  static FileNode buildFileTreeFromRelativePaths(
+    List<WebPickedFile> files,
+    String rootName,
+  ) {
+    final rootNode = FileNode(
+      name: rootName,
+      path: rootName,
+      isDirectory: true,
+      isExpanded: true,
+      children: <FileNode>[],
+    );
+
+    final dirMap = <String, FileNode>{};
+    dirMap[''] = rootNode;
+
+    // 先建目录节点（跳过第一段根文件夹名）
+    for (final f in files) {
+      final parts = f.relativePath.split('/');
+      if (parts.length < 2) continue;
+      var currentPath = '';
+      // 从第 2 段开始（第 1 段是根文件夹名）
+      for (var i = 1; i < parts.length - 1; i++) {
+        final segment = parts[i];
+        final dirPath = currentPath.isEmpty ? segment : '$currentPath/$segment';
+        if (!dirMap.containsKey(dirPath)) {
+          final node = FileNode(
+            name: segment,
+            path: dirPath,
+            isDirectory: true,
+            children: <FileNode>[],
+          );
+          dirMap[dirPath] = node;
+          final parent = dirMap[currentPath];
+          if (parent != null) {
+            parent.children.add(node);
+          }
+        }
+        currentPath = dirPath;
+      }
+    }
+
+    // 挂文件节点（跳过第一段根文件夹名）
+    for (final f in files) {
+      final parts = f.relativePath.split('/');
+      if (parts.length < 2) continue;
+      final dirPath = parts.sublist(1, parts.length - 1).join('/');
+      final parent = dirMap[dirPath];
+      if (parent == null) continue;
+      parent.children.add(FileNode(
+        name: f.name,
+        path: f.relativePath,
+        isDirectory: false,
+      ));
+    }
+
+    return rootNode;
   }
 
   /// Open a folder by its absolute path (used by drag-drop).

@@ -7,6 +7,8 @@ import 'package:get_it/get_it.dart';
 import 'package:zzcc/core/services/storage_service.dart';
 import 'package:zzcc/core/services/net_service.dart';
 import 'package:zzcc/presentation/providers/workbench_provider.dart';
+import 'package:zzcc/presentation/pages/workbench/web_folder_picker_stub.dart'
+    show WebPickedFile;
 
 /// 测试用 StorageService：isAppBoxOpen=false → 设置方法安全跳过 Hive box
 class FakeStorageService extends StorageService {
@@ -113,5 +115,54 @@ void main() {
 
     provider.setAutoSave(true);
     expect(provider.autoSave, true);
+  });
+
+  test('buildFileTreeFromRelativePaths 构建多级目录树', () {
+    final root = WorkbenchProvider.buildFileTreeFromRelativePaths([
+      WebPickedFile(relativePath: 'proj/lib/a.dart', name: 'a.dart', content: ''),
+      WebPickedFile(relativePath: 'proj/lib/b.dart', name: 'b.dart', content: ''),
+      WebPickedFile(relativePath: 'proj/README.md', name: 'README.md', content: ''),
+    ], 'proj');
+
+    expect(root.name, 'proj');
+    expect(root.isDirectory, true);
+    expect(root.isExpanded, true);
+
+    // 根有 2 个子节点：lib 目录 + README.md 文件
+    expect(root.children.length, 2);
+
+    // lib 目录
+    final lib = root.children.firstWhere((n) => n.name == 'lib');
+    expect(lib.isDirectory, true);
+    expect(lib.path, 'lib');
+    expect(lib.children.length, 2);
+    expect(lib.children[0].name, 'a.dart');
+    expect(lib.children[0].path, 'proj/lib/a.dart');
+    expect(lib.children[1].name, 'b.dart');
+
+    // README.md 文件
+    final readme = root.children.firstWhere((n) => n.name == 'README.md');
+    expect(readme.isDirectory, false);
+    expect(readme.path, 'proj/README.md');
+  });
+
+  test('buildFileTreeFromRelativePaths 处理根目录文件', () {
+    final root = WorkbenchProvider.buildFileTreeFromRelativePaths([
+      WebPickedFile(relativePath: 'proj/main.dart', name: 'main.dart', content: ''),
+      WebPickedFile(relativePath: 'proj/sub/deep/x.txt', name: 'x.txt', content: ''),
+    ], 'proj');
+
+    expect(root.children.length, 2);
+
+    // main.dart 在根
+    final main = root.children.firstWhere((n) => n.name == 'main.dart');
+    expect(main.isDirectory, false);
+
+    // sub/deep 嵌套目录
+    final sub = root.children.firstWhere((n) => n.name == 'sub');
+    expect(sub.children.length, 1);
+    final deep = sub.children.firstWhere((n) => n.name == 'deep');
+    expect(deep.children.length, 1);
+    expect(deep.children[0].name, 'x.txt');
   });
 }
