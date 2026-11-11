@@ -1,9 +1,12 @@
 // lib/core/services/hardware_info_service_web.dart
 //
-// Web 实现：用 universal_html 的 navigator 读取浏览器信息，不崩溃。
+// Web 实现：用 package:web（dart:js_interop）读取真实浏览器信息。
+//   - hardwareConcurrency：真实 CPU 逻辑核心数。
+//   - deviceMemory：真实内存 GB（仅 Chromium 系提供）。
+//   - userAgent：真实浏览器 UA。
 // 定义抽象接口 HardwareInfoService 与实现 HardwareInfoServiceImpl。
 
-import 'package:universal_html/html.dart' as html;
+import 'package:web/web.dart' as web;
 
 /// 硬件信息服务抽象接口（须与 stub/io 实现一致）。
 abstract class HardwareInfoService {
@@ -25,7 +28,7 @@ class HardwareInfoServiceImpl extends HardwareInfoService {
     if (_cachedInfo != null) return _cachedInfo!;
 
     try {
-      final nav = html.window.navigator;
+      final nav = web.window.navigator;
       final ua = nav.userAgent;
 
       final info = <String, String>{
@@ -35,7 +38,7 @@ class HardwareInfoServiceImpl extends HardwareInfoService {
         '内存': _detectMemory(nav),
         '存储': '浏览器环境',
         '显卡': '浏览器渲染',
-        '分辨率': '${html.window.innerWidth}×${html.window.innerHeight}',
+        '分辨率': '${web.window.innerWidth}×${web.window.innerHeight}',
       };
       _cachedInfo = info;
       return info;
@@ -64,9 +67,9 @@ class HardwareInfoServiceImpl extends HardwareInfoService {
     return '未知系统';
   }
 
-  String _detectMemory(html.Navigator nav) {
+  String _detectMemory(web.Navigator nav) {
     final mem = nav.deviceMemory;
-    if (mem != null && mem > 0) return '${mem.toStringAsFixed(1)} GB';
+    if (mem > 0) return '${mem.toStringAsFixed(1)} GB';
     return '未知';
   }
 

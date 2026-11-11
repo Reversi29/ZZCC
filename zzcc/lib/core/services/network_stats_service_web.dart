@@ -1,10 +1,11 @@
 // lib/core/services/network_stats_service_web.dart
 //
-// Web 实现：用 universal_html 的 navigator.connection 探测在线状态。
-// 不依赖 dart:io，Web 端不崩溃。真实收发字节统计在浏览器不可用，
-// 返回 null（Widget 层回退到模拟/静态显示）。
+// Web 实现：用 package:web（dart:js_interop）读取真实浏览器信息。
+//   - checkInternet：读 window.navigator.onLine（真实浏览器在线状态）。
+//   - getWifiName/getWifiIP：浏览器无法获取 SSID/IP，返回 null。
+// 定义抽象接口 NetworkStatsService 与实现 NetworkStatsServiceImpl。
 
-import 'package:universal_html/html.dart' as html;
+import 'package:web/web.dart' as web;
 
 import 'package:zzcc/core/services/network_stats_service_stub.dart'
     show NetworkStats;
@@ -35,8 +36,8 @@ class NetworkStatsServiceImpl implements NetworkStatsService {
   @override
   Future<bool> checkInternet() async {
     try {
-      // navigator.onLine 是浏览器内置的在线/离线状态。
-      return html.window.navigator.onLine ?? false;
+      // window.navigator.onLine 是浏览器内置在线/离线状态（真实值）。
+      return web.window.navigator.onLine;
     } catch (_) {
       return false;
     }

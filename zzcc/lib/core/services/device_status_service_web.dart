@@ -1,11 +1,13 @@
 // lib/core/services/device_status_service_web.dart
 //
-// Web 实现：用 universal_html 的 navigator 读取浏览器信息。
-//   - hardwareConcurrency：CPU 逻辑核心数（int，非空）。
-//   - deviceMemory：内存 GB（仅 Chromium 系提供，可能为 null）。
+// Web 实现：用 package:web（dart:js_interop）读取真实浏览器信息。
+//   - hardwareConcurrency：真实 CPU 逻辑核心数。
+//   - deviceMemory：真实内存 GB（仅 Chromium 系提供）。
+//   - userAgent：真实浏览器 UA。
 // 定义抽象接口 DeviceStatusService 与实现 DeviceStatusServiceImpl。
 
-import 'package:universal_html/html.dart' as html;
+import 'package:web/web.dart' as web;
+
 import 'package:zzcc/data/models/device_status_model.dart';
 
 /// 设备状态服务抽象接口（须与 stub/io 实现一致）。
@@ -19,18 +21,17 @@ class DeviceStatusServiceImpl implements DeviceStatusService {
   @override
   Future<DeviceStatusData> getDeviceStatus() async {
     try {
-      final nav = html.window.navigator;
+      final nav = web.window.navigator;
       final cores = nav.hardwareConcurrency;
-      final memGb = nav.deviceMemory?.toDouble();
+      final memGb = nav.deviceMemory;
 
       final ua = nav.userAgent;
       final osLabel = _detectOs(ua);
-      final platform = nav.platform ?? '浏览器';
 
       return DeviceStatusData(
         osName: osLabel,
         osVersion: '浏览器环境',
-        machine: platform,
+        machine: 'Web 浏览器',
         platformLabel: 'Web',
         isWeb: true,
         usages: [
@@ -43,7 +44,7 @@ class DeviceStatusServiceImpl implements DeviceStatusService {
           DeviceUsage(
             label: '内存',
             value: 0.0,
-            detail: memGb != null
+            detail: memGb > 0
                 ? '~${memGb.toStringAsFixed(0)} GB 可用'
                 : '浏览器未提供',
             colorKey: 'orange',
@@ -61,8 +62,7 @@ class DeviceStatusServiceImpl implements DeviceStatusService {
     }
   }
 
-  String _detectOs(String? ua) {
-    if (ua == null) return '未知系统';
+  String _detectOs(String ua) {
     if (ua.contains('Windows NT')) return 'Windows';
     if (ua.contains('Mac OS X')) return 'macOS';
     if (ua.contains('Android')) return 'Android';
