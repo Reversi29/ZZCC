@@ -287,9 +287,13 @@ def create_app() -> FastAPI:
     if os.path.isfile(_index_html):
         app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
+        # 静态资源用 no-cache：浏览器每次重新验证（If-Modified-Since/ETag），
+        # 构建产物更新后自动拉新，避免启发式缓存导致用户看到旧 JS。
+        _no_cache = {"Cache-Control": "no-cache"}
+
         @app.get("/")
         async def root():
-            return FileResponse(_index_html)
+            return FileResponse(_index_html, headers=_no_cache)
 
         # SPA fallback：非 API 路由回退到 index.html
         @app.get("/{full_path:path}")
@@ -298,8 +302,8 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404)
             candidate = os.path.join(_static_dir, full_path)
             if os.path.isfile(candidate):
-                return FileResponse(candidate)
-            return FileResponse(_index_html)
+                return FileResponse(candidate, headers=_no_cache)
+            return FileResponse(_index_html, headers=_no_cache)
     else:
         @app.get("/")
         async def root():
