@@ -5,6 +5,8 @@
 
 import 'dart:io';
 
+import 'package:network_info_plus/network_info_plus.dart';
+
 import 'package:zzcc/core/services/network_stats_service_stub.dart'
     show NetworkStats;
 
@@ -15,6 +17,12 @@ abstract class NetworkStatsService {
 
   /// 探测是否有真实互联网连接。失败返回 false。
   Future<bool> checkInternet();
+
+  /// 读取当前 WiFi 名称（SSID）。不支持返回 null。
+  Future<String?> getWifiName();
+
+  /// 读取当前 WiFi IP 地址。不支持返回 null。
+  Future<String?> getWifiIP();
 }
 
 /// Native 实现。
@@ -43,6 +51,24 @@ class NetworkStatsServiceImpl implements NetworkStatsService {
       return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
     } catch (_) {
       return false;
+    }
+  }
+
+  @override
+  Future<String?> getWifiName() async {
+    try {
+      return await NetworkInfo().getWifiName();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<String?> getWifiIP() async {
+    try {
+      return await NetworkInfo().getWifiIP();
+    } catch (_) {
+      return null;
     }
   }
 

@@ -16,6 +16,12 @@ abstract class NetworkStatsService {
 
   /// 探测是否有真实互联网连接。失败返回 false。
   Future<bool> checkInternet();
+
+  /// 读取当前 WiFi 名称（SSID）。不支持返回 null。
+  Future<String?> getWifiName();
+
+  /// 读取当前 WiFi IP 地址。不支持返回 null。
+  Future<String?> getWifiIP();
 }
 
 /// Web 实现。
@@ -34,5 +40,17 @@ class NetworkStatsServiceImpl implements NetworkStatsService {
     } catch (_) {
       return false;
     }
+  }
+
+  @override
+  Future<String?> getWifiName() async {
+    // 浏览器无法获取 SSID。
+    return null;
+  }
+
+  @override
+  Future<String?> getWifiIP() async {
+    // 浏览器无法获取 WiFi IP。
+    return null;
   }
 }

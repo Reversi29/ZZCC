@@ -2,7 +2,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:network_info_plus/network_info_plus.dart';
 import 'package:zzcc/core/services/network_stats_service.dart';
 import 'package:zzcc/core/utils/color_utils.dart';
 
@@ -15,7 +14,6 @@ class NetworkStatusWidget extends StatefulWidget {
 
 class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
   final Connectivity _connectivity = Connectivity();
-  final NetworkInfo _networkInfo = NetworkInfo();
   final NetworkStatsService _statsService = NetworkStatsServiceImpl();
   
   StreamSubscription<dynamic>? _connectivitySubscription;
@@ -159,7 +157,7 @@ class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
 
   Future<void> _checkInternetConnectionByIP() async {
     try {
-      final ipAddress = await _networkInfo.getWifiIP();
+      final ipAddress = await _statsService.getWifiIP();
       if (!mounted) return;
       setState(() {
         _hasInternet = ipAddress != null && ipAddress != '未知' && ipAddress != '0.0.0.0';
@@ -206,8 +204,8 @@ class _NetworkStatusWidgetState extends State<NetworkStatusWidget> {
     try {
       final connectivityResultRaw = await _connectivity.checkConnectivity();
       final connectivityResult = _normalizeConnectivityResult(connectivityResultRaw);
-      final wifiName = await _networkInfo.getWifiName() ?? '未知';
-      final ipAddress = await _networkInfo.getWifiIP() ?? '未知';
+      final wifiName = await _statsService.getWifiName() ?? '未知';
+      final ipAddress = await _statsService.getWifiIP() ?? '未知';
       if (!mounted) return;
       setState(() {
         _connectionStatus = connectivityResult;
