@@ -160,6 +160,47 @@ def _infer_signal_type(question: str) -> str:
     return "user_request"
 
 
+def _llm_teach_snn(signal, cognition) -> dict:
+    """LLM 当老师：知识蒸馏——用 LLM 决策指导 SNN 学习。
+
+    每次 /brain/ask 推理后自动调用。
+    1. 从 coordinator results 提取 llm 和 snn 的决策
+    2. LLM 无决策（has_result=False / 超时 / 失败）→ 跳过（无老师可教）
+    3. was_correct = (snn == llm)：一致→温和强化；分歧→惩罚 SNN 错误 + 向 LLM 纠偏
+    4. 异常保护：蒸馏失败不影响主流程
+    """
+    try:
+        coord = (cognition.memory_updates or {}).get("coordinator", {}) or {}
+        results = coord.get("results", []) or []
+        llm_decision = None
+        snn_decision = None
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            if r.get("region") == "llm" and r.get("has_result"):
+                llm_decision = r.get("decision")
+            if r.get("region") == "snn" and r.get("has_result"):
+                snn_decision = r.get("decision")
+        if not llm_decision:
+            return {"ok": False, "skipped": True, "reason": "no llm teacher decision"}
+        was_correct = (snn_decision == llm_decision)
+        train = snn_mod.snn_region.train_from_feedback(
+            signal=signal,
+            correct_decision=llm_decision,
+            was_correct=was_correct,
+            wrong_decision=snn_decision or llm_decision,
+        )
+        return {
+            "ok": True,
+            "llm_decision": llm_decision,
+            "snn_decision": snn_decision,
+            "was_correct": was_correct,
+            "train": train,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ═══════════════════════════════════════════════════════════
 # 请求模型
 # ═══════════════════════════════════════════════════════════
@@ -372,6 +413,9 @@ async def ask(
         await broker.remember_signal_and_cognition(db, signal.to_dict(), cognition.to_dict(), action_results)
         await db.commit()
 
+    # LLM 老师：知识蒸馏——用 LLM 决策指导 SNN 学习
+    llm_teach = _llm_teach_snn(signal, cognition)
+
     return {
         "ok": True,
         "signal_id": signal.id,
@@ -381,6 +425,7 @@ async def ask(
         "action_results": action_results,
         "session_id": session_id,
         "memory_context": memory_context,
+        "llm_teach": llm_teach,
     }
 
 
