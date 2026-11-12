@@ -74,8 +74,17 @@ class ReasoningEngineV2:
         # 感知特征 → 统一概念向量。不同模态（视觉/语言/音频）对同一
         # 概念（如苹果/危险/紧急）激活收敛到统一概念空间，实现跨模态认知。
         raw_text = perception.raw_text
+        # 从 payload 提取视觉/音频字段（多模态输入经 signal.payload 传入）
+        visual_feat = payload.get("visual")
+        if not isinstance(visual_feat, dict):
+            visual_feat = None
+        audio_feat = payload.get("audio")
+        if not isinstance(audio_feat, dict):
+            audio_feat = None
         concept_vector = self.cognitive_coder.encode(
             text=raw_text,
+            visual=visual_feat,
+            audio=audio_feat,
             payload=payload,
         )
         self._stats["concept_calls"] += 1
