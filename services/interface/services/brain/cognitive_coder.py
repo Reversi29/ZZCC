@@ -596,6 +596,10 @@ class CognitiveCoder:
         self._pending_training_samples: List[Dict[str, Any]] = []
         self._training_batch_size: int = 10
         self._training_eta: float = 0.05
+        # 方向2：训练样本持久化钩子（注入 db 后跨重启保留）
+        self._db = None
+        self._pending_memory_key = "training_samples"
+        self._load_pending_samples()
 
     def register_concept(self, name: str, prior_features: Optional[Dict[str, List[str]]] = None,
                          aliases: Optional[List[str]] = None) -> int:
@@ -981,6 +985,72 @@ class CognitiveCoder:
         self._stats["learn_feedback_calls"] = self._stats.get("learn_feedback_calls", 0) + 1
         return stats
 
+    # ── 方向2：训练样本持久化（DB 钩子，跨重启保留） ──
+    def set_db(self, db):
+        """注入 DB 会话（异步）。有 db 时训练样本持久化到 brain_memory。"""
+        self._db = db
+        self._load_pending_samples()
+
+    def _load_pending_samples(self):
+        """从 brain_memory 加载持久化训练样本（跨重启保留）。"""
+        if not self._db:
+            return
+        try:
+            import asyncio
+            entry = asyncio.run(self._db_load())
+            if entry and entry.get("value"):
+                # memory_get 返回 value 为 json 字符串（value_json），需解析
+                import json as _json
+                value = entry["value"]
+                if isinstance(value, str):
+                    value = _json.loads(value)
+                if isinstance(value, dict):
+                    samples = value.get("samples", [])
+                    if isinstance(samples, list) and samples:
+                        self._pending_training_samples = samples
+        except Exception:
+            pass
+
+    async def _db_load(self):
+        from services.brain.memory import memory_get
+        return await memory_get(self._db, "cognitive_pending", "training", self._pending_memory_key)
+
+    async def _db_persist(self):
+        from services.brain.memory import memory_set
+        await memory_set(self._db, {
+            "type": "cognitive_pending",
+            "module": "training",
+            "key": self._pending_memory_key,
+            "value": {"samples": self._pending_training_samples},
+            "confidence": 1.0,
+            "hit_count": 0,
+            "miss_count": 0,
+        })
+
+    async def _db_clear(self):
+        from services.brain.memory import memory_delete
+        await memory_delete(self._db, "cognitive_pending", "training", self._pending_memory_key)
+
+    def _persist_pending_sync(self):
+        """持久化当前训练样本（有 db 时同步落库）。"""
+        if not self._db:
+            return
+        try:
+            import asyncio
+            asyncio.run(self._db_persist())
+        except Exception:
+            pass
+
+    def _clear_pending_sync(self):
+        """清空持久化训练样本。"""
+        if not self._db:
+            return
+        try:
+            import asyncio
+            asyncio.run(self._db_clear())
+        except Exception:
+            pass
+
     def _accumulate_feedback_sample(self, visual: Optional[Dict[str, float]] = None,
                                     audio: Optional[Dict[str, float]] = None,
                                     decision_concept: str = "",
@@ -1009,12 +1079,14 @@ class CognitiveCoder:
         if text:
             sample["text"] = text
         self._pending_training_samples.append(sample)
+        self._persist_pending_sync()  # 方向2：持久化（跨重启保留）
         result = {"accumulated": len(self._pending_training_samples), "trained": 0}
         # 批量阈值：达到后自动训练
         if len(self._pending_training_samples) >= self._training_batch_size:
             stats = self.train_supervised(self._pending_training_samples, eta=self._training_eta)
             result["trained"] = stats.get("visual", 0) + stats.get("audio", 0) + stats.get("text", 0)
             self._pending_training_samples.clear()
+            self._clear_pending_sync()  # 方向2：训练后清空持久化
         return result
 
     def to_sentience_input(self, concept_vector: ConceptVector) -> Dict[str, float]:
