@@ -252,67 +252,103 @@ class ModalSNNEncoder:
         return self.num_features - 1
 
     def _init_network(self):
-        """初始化轻量脉冲网络。
+        """初始化完整 SNN 实例（升级：真正的脉冲动力学 + STDP）。
 
-        简化脉冲模型（Phase 2 可换用完整 SNN）：
-        - 每个神经元有膜电位、阈值、不应期
-        - 输入特征注入 → 概念检测神经元积分 → 超过阈值放电 → 输出激活
+        神经元布局：
+        - 0..F-1 输入层（特征，阈值 0.5）
+        - F..F+C-1 概念检测层（阈值 0.5，先验连接）
+        - F+C..F+2C-1 概念输出层（阈值 0.3）
+
+        用 snn.py 的完整 SNN 类建拓扑，enable_hebbian 控制 STDP。
+        蒸馏（有监督）用 set_weight 直接更新，推理时 enable_hebbian=False
+        防意外 LTD（主 SNN 的 Hebbian bug 教训）。
         """
-        self.membrane = [0.0] * self.num_neurons
-        self.threshold = [1.0] * self.num_neurons
-        self.last_fire = [-100] * self.num_neurons
-        self.refractory = 3
-        self.decay = 0.85
-        # 权重矩阵：source → {target: weight}
-        self.weights: Dict[int, Dict[int, float]] = {}
-        # 先验连接：特征 → 概念检测（遍历 registry 全部概念，含动态注册）
+        from services.brain.snn import SNN, NeuronType
+
+        self._input_start = 0
+        self._hidden_start = self.num_features
+        self._output_start = self.num_features + len(self.registry)
+        total = self._output_start + len(self.registry)
+        self.num_neurons = total
+
+        # 完整 SNN 实例
+        self.snn = SNN(num_neurons=total)
+        # 输入层：特征神经元
+        for i in range(self.num_features):
+            self.snn.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+        # 概念检测层（阈值 1.0：AND 门，靠连接权重区分单/多特征）
+        for i in range(self._hidden_start, self._output_start):
+            self.snn.add_neuron(i, NeuronType.EXCITATORY, threshold=1.0)
+        # 概念输出层
+        for i in range(self._output_start, total):
+            self.snn.add_neuron(i, NeuronType.OUTPUT, threshold=0.3)
+
+        # 先验连接：特征 → 概念检测（权重适应先验特征数）
+        # 单特征概念（如 novelty=[bright]）：权重 1.5，单特征放电
+        # 多特征概念（如 apple=[red,green,round]）：权重 0.9，需≥2 特征放电（AND）
         for cidx, concept in enumerate(self.registry.all()):
             feats = self.concept_prior.get(concept, [])
+            w = 1.5 if len(feats) <= 1 else 0.9
             for feat in feats:
                 if feat in self.feature_names:
                     fidx = self.feature_names.index(feat)
-                    self._set_weight(fidx, self._hidden_start + cidx, 0.8)
-        # 建立所有概念的 hidden→output 连接
+                    self.snn.connect(fidx, self._hidden_start + cidx, weight=w)
+        # 概念检测 → 概念输出
         self._rebuild_hidden_output()
+        # 推理时禁用 Hebbian（防意外 LTD）
+        self.snn.enable_hebbian = False
 
     def _set_weight(self, src: int, tgt: int, w: float):
-        self.weights.setdefault(src, {})[tgt] = w
+        """更新完整 SNN 权重（连接不存在则新建，兼容轻量模型 setdefault）。"""
+        if hasattr(self, "snn"):
+            conn = self.snn.out_edges.get(src, {}).get(tgt)
+            if conn:
+                self.snn.set_weight(src, tgt, w)
+            else:
+                # 新连接：connect 建连接（延迟 1，默认阈值传播）
+                self.snn.connect(src, tgt, weight=max(0, min(3.0, w)), delay=1)
+        else:
+            self.weights.setdefault(src, {})[tgt] = w
+
+    def _get_weight(self, src: int, tgt: int) -> float:
+        """读取完整 SNN 权重（兼容轻量模型回退）。"""
+        if hasattr(self, "snn"):
+            conn = self.snn.out_edges.get(src, {}).get(tgt)
+            return conn.weight if conn else 0.0
+        return self.weights.get(src, {}).get(tgt, 0.0)
 
     def encode(self, features: Dict[str, float]) -> Dict[str, float]:
-        """模态特征 → 概念激活。
+        """模态特征 → 概念激活（完整 SNN 脉冲传播）。
 
-        输入特征注入 → 概念检测神经元积分 → 放电 → 概念激活。
+        输入特征注入 → 概念检测神经元积分 → 放电 → 概念输出激活。
         返回 {concept: activation}。
         """
-        # 重置膜电位（单次推理）
-        self.membrane = [0.0] * self.num_neurons
-        self.last_fire = [-100] * self.num_neurons
-
-        # 1. 注入输入特征（强度=特征值）
+        # 推理时禁用 Hebbian（防意外 LTD）
+        self.snn.enable_hebbian = False
+        # 重置状态（清前次编码残留膜电位/事件，不清权重）
+        self.snn.reset()
+        # 1. 注入输入特征（增益中性：概念编码不需连续通道 gain，
+        # 避免 gain(1+s*0.55) 放大传播导致单特征误激活）
         for fname, fval in features.items():
             if fname in self.feature_names:
-                fidx = self.feature_names.index(fname)
-                self.membrane[fidx] = max(self.membrane[fidx], fval)
+                self.snn.inject_input(self.feature_names.index(fname), fval)
 
-        # 2. 传播 2 步（输入→概念检测→概念输出）
+        # 2. 脉冲传播（输入→概念检测→概念输出）
         activations: Dict[str, float] = {}
-        for step in range(2):
-            new_membrane = list(self.membrane)
-            for src, targets in self.weights.items():
-                if self.membrane[src] < 0.3:  # 源未激活
-                    continue
-                src_strength = self.membrane[src]
-                for tgt, w in targets.items():
-                    # 膜电位积分
-                    new_membrane[tgt] += src_strength * w
-            # 衰减 + 不应期
-            self.membrane = [m * self.decay for m in new_membrane]
-            # 概念输出检测
-            for cidx in range(self._concept_count()):
-                out_nid = self._output_start + cidx
-                if self.membrane[out_nid] > 0.3:
-                    activations[self.registry.all()[cidx]] = min(1.0, self.membrane[out_nid])
-
+        max_act: Dict[int, float] = {}
+        for _ in range(5):
+            self.snn.step()
+            out = self.snn.get_outputs()
+            for nid, firing in out.items():
+                if firing:
+                    cidx = nid - self._output_start
+                    if 0 <= cidx < self._concept_count():
+                        max_act[nid] = max(max_act.get(nid, 0.0), 1.0)
+        # 3. 概念激活（放电即激活；膜电位已清零，用放电记录）
+        for cidx in range(self._concept_count()):
+            out_nid = self._output_start + cidx
+            if out_nid in max_act:
+                activations[self.registry.all()[cidx]] = 1.0
         return activations
 
     def distill_step(self, features: Dict[str, float], teacher: Dict[str, float], eta: float = 0.05):
@@ -340,7 +376,7 @@ class ModalSNNEncoder:
                 for feat in feats:
                     if feat in self.feature_names:
                         fidx = self.feature_names.index(feat)
-                        cur = self.weights.get(fidx, {}).get(hid, 0.0)
+                        cur = self._get_weight(fidx, hid)
                         self._set_weight(fidx, hid, min(3.0, cur + eta))
             else:
                 # 教师未激活：削弱该概念连接（如果过高）
@@ -348,7 +384,7 @@ class ModalSNNEncoder:
                 for feat in feats:
                     if feat in self.feature_names:
                         fidx = self.feature_names.index(feat)
-                        cur = self.weights.get(fidx, {}).get(hid, 0.0)
+                        cur = self._get_weight(fidx, hid)
                         if cur > 0.3:
                             self._set_weight(fidx, hid, max(0.1, cur - eta * 0.5))
 
@@ -364,25 +400,29 @@ class ModalSNNEncoder:
         Returns:
             新概念维度索引
         """
+        from services.brain.snn import NeuronType
         cidx = self.registry.register(name)
         # 更新输出层起始位置：隐藏层容量 = 概念数，输出层紧随其后
         # 关键：保证隐藏层与输出层不重叠（_output_start >= _hidden_start + len(registry)）
         self._output_start = self.num_features + len(self.registry)
-        # 扩展神经元容量
+        # 扩展神经元容量（完整 SNN：add_neuron）
         new_num_neurons = self._output_start + len(self.registry)
         if new_num_neurons > self.num_neurons:
-            while len(self.membrane) < new_num_neurons:
-                self.membrane.append(0.0)
-                self.threshold.append(1.0)
-                self.last_fire.append(-100)
+            # 新增概念检测神经元（阈值 1.0：AND 门）
+            for i in range(self.num_neurons, new_num_neurons):
+                if i >= self._hidden_start and i < self._output_start:
+                    self.snn.add_neuron(i, NeuronType.EXCITATORY, threshold=1.0)
+                else:
+                    self.snn.add_neuron(i, NeuronType.OUTPUT, threshold=0.3)
             self.num_neurons = new_num_neurons
 
-        # 建立先验连接
+        # 建立先验连接（权重适配先验特征数：单特征 1.5，多特征 0.9）
         if prior_features:
+            w = 1.5 if len(prior_features) <= 1 else 0.9
             for feat in prior_features:
                 if feat in self.feature_names:
                     fidx = self.feature_names.index(feat)
-                    self._set_weight(fidx, self._hidden_start + cidx, 0.8)
+                    self._set_weight(fidx, self._hidden_start + cidx, w)
         # 重建所有 hidden→output 连接（用新的 _output_start，保证不重叠）
         self._rebuild_hidden_output()
         return cidx
@@ -393,11 +433,17 @@ class ModalSNNEncoder:
         保证隐藏层神经元（_hidden_start + cidx）连到正确的输出
         （_output_start + cidx），避免概念数变化后错位。
         """
-        # 移除旧 hidden→output 连接
-        for src in list(self.weights.keys()):
-            for tgt in list(self.weights[src].keys()):
-                if self._hidden_start <= src < self._output_start and tgt >= self._output_start:
-                    del self.weights[src][tgt]
+        # 移除旧 hidden→output 连接（完整 SNN 用 disconnect）
+        if hasattr(self, "snn"):
+            for src in list(self.snn.out_edges.keys()):
+                for tgt in list(self.snn.out_edges[src].keys()):
+                    if self._hidden_start <= src < self._output_start and tgt >= self._output_start:
+                        self.snn.disconnect(src, tgt)
+        else:
+            for src in list(self.weights.keys()):
+                for tgt in list(self.weights[src].keys()):
+                    if self._hidden_start <= src < self._output_start and tgt >= self._output_start:
+                        del self.weights[src][tgt]
         # 重建
         for cidx in range(len(self.registry)):
             hid = self._hidden_start + cidx

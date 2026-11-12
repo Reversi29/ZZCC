@@ -78,4 +78,4 @@ class TestLearnFromFeedback:
         )
         # 反馈后 red/bright→escalation 连接存在
         red_idx = vs.feature_names.index("red")
-        assert vs.weights.get(red_idx, {}).get(esc_hid, 0) > 0, "red→escalation should exist"
+        assert vs._get_weight(red_idx, esc_hid) > 0, "red→escalation should exist"
