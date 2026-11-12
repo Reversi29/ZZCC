@@ -534,6 +534,10 @@ class CognitiveCoder:
         self.text_snn = ModalSNNEncoder("text", TEXT_FEATURES, _TEXT_CONCEPT_PRIOR, registry=self.registry)
         # Phase 2 开关：默认用 SNN 编码（有先验初始化，冷启动可用）
         self.use_snn_encoding = True
+        # 真实标注训练样本积累（方向3：反馈驱动）
+        self._pending_training_samples: List[Dict[str, Any]] = []
+        self._training_batch_size: int = 10
+        self._training_eta: float = 0.05
 
     def register_concept(self, name: str, prior_features: Optional[Dict[str, List[str]]] = None,
                          aliases: Optional[List[str]] = None) -> int:
@@ -905,8 +909,48 @@ class CognitiveCoder:
             self.audio_snn.distill_step(audio, teacher, eta)
             stats["audio"] += 1
 
+        # 真实标注数据积累：feedback 的正确决策作为教师，
+        # 积累样本供批量有监督训练（方向3：真实标注数据积累）
+        self._accumulate_feedback_sample(visual, audio, decision_concept)
+
         self._stats["learn_feedback_calls"] = self._stats.get("learn_feedback_calls", 0) + 1
         return stats
+
+    def _accumulate_feedback_sample(self, visual: Optional[Dict[str, float]] = None,
+                                    audio: Optional[Dict[str, float]] = None,
+                                    decision_concept: str = "",
+                                    text: Optional[str] = None) -> Dict[str, int]:
+        """积累真实标注训练样本（反馈驱动）。
+
+        把 learn 反馈的正确决策作为真实标签，积累样本。
+        达到批量阈值后自动调用 train_supervised（有监督训练）。
+
+        Args:
+            visual: 视觉特征
+            audio: 音频特征
+            decision_concept: 正确决策对应概念
+            text: 文本（可选）
+
+        Returns:
+            {accumulated: n, trained: n}
+        """
+        if not decision_concept:
+            return {"accumulated": len(self._pending_training_samples), "trained": 0}
+        sample: Dict[str, Any] = {"concepts": {decision_concept: 0.9}}
+        if visual:
+            sample["visual"] = visual
+        if audio:
+            sample["audio"] = audio
+        if text:
+            sample["text"] = text
+        self._pending_training_samples.append(sample)
+        result = {"accumulated": len(self._pending_training_samples), "trained": 0}
+        # 批量阈值：达到后自动训练
+        if len(self._pending_training_samples) >= self._training_batch_size:
+            stats = self.train_supervised(self._pending_training_samples, eta=self._training_eta)
+            result["trained"] = stats.get("visual", 0) + stats.get("audio", 0) + stats.get("text", 0)
+            self._pending_training_samples.clear()
+        return result
 
     def to_sentience_input(self, concept_vector: ConceptVector) -> Dict[str, float]:
         """概念向量 → 感受层输入映射。
