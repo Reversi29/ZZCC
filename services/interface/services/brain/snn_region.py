@@ -38,7 +38,9 @@ from typing import Any, Dict, List, Optional
 
 from models.brain import Action, CognitionResult, NeuralSignal
 from services.brain.snn import SNN, NeuronType
-from services.brain.neuro_registry import InputRegistry, OutputRegistry
+from services.brain.neuro_registry import (
+    InputRegistry, OutputRegistry, ConceptRegistry,
+)
 
 logger = logging.getLogger("brain.snn_region")
 
@@ -140,6 +142,18 @@ _RELAY_OUT_WEIGHT = 0.3    # 中继 → 既有隐藏层(亚阈值调制,不触�
 # (实测阈值 0.95→8/12),选择性保持 12/12。
 # 生物上感觉中继(丘脑)选择性投射到语义相关皮层层,非无差别撒网。
 _RELAY_HIDDEN_TARGETS = (17, 18, 20, 21, 26)  # escalate 相关隐藏层
+
+
+# ── 概念认知通道（通用认知学习）────────────────────────────
+# 概念向量（开放集）的每个概念动态注册为概念输入神经元，
+# 经独立概念中继子网接入既有隐藏层。概念槽与连续通道（200/201）、
+# 动态类型槽（40+）、动态动作槽（100+）分属不同 ID 区，互不冲突。
+# 概念→决策连接靠 STDP/反馈学习收敛，而非硬编码语义映射。
+_CONCEPT_NEURON_BASE = 220    # 概念输入神经元起点
+_CONCEPT_RELAY_BASE = 230     # 概念中继神经元起点
+_CONCEPT_RELAY_THRESHOLD = 0.95   # 概念中继阈值（大强度放电）
+_CONCEPT_RELAY_IN_WEIGHT = 0.4    # 概念 → 中继
+_CONCEPT_RELAY_OUT_WEIGHT = 0.25  # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
 
 
 def _normalize_magnitude(amount: float) -> float:
@@ -244,8 +258,12 @@ class SNNRegion:
         self._decision_log_path = self.save_path.replace(".json", "_decision_log.jsonl")
 
         # ── 通用输入/输出槽注册器(新类型有新槽)────────────
-        self.input_registry = InputRegistry()
-        self.output_registry = OutputRegistry()
+        # registry 路径与 save_path 同目录（生产在 config_dir，测试在临时目录）
+        _registry_path = os.path.join(os.path.dirname(self.save_path), "neuro_registry.json")
+        self.input_registry = InputRegistry(_registry_path)
+        self.output_registry = OutputRegistry(_registry_path)
+        # 概念槽注册器（开放集概念 → 概念输入神经元）
+        self.concept_registry = ConceptRegistry(_registry_path)
 
     def _register_signal_type(self, sig_type: str) -> int:
         """注册信号类型到动态输入槽(新类型有新槽,不挤占旧槽)。
@@ -399,9 +417,12 @@ class SNNRegion:
             w[_URGENCY_CONT_NEURON] = 1.0 + (urg / 100.0) * 2.0
 
         # 概念向量连续通道：概念直接驱动主 SNN 决策
-        # 概念激活映射到决策相关通道：
-        #   escalation/danger/urgency → 增强 urgency 通道（escalate 倾向）
-        #   approval → 增强 mag 通道（approve 倾向）
+        # 两层机制：
+        #   1. 硬映射（方向3，可学习权重）：escalation/danger/urgency→urg 通道、
+        #      approval→mag 通道（兼容 12 eval 的档位决策语义）
+        #   2. 通用认知通道（新增）：**任意概念**（含开放集新概念）动态注册
+        #      为概念输入神经元（220+），经独立概念中继子网接入隐藏层，
+        #      概念→决策连接靠 STDP/反馈学习收敛，不硬编码语义映射。
         cv = (signal.payload or {}).get("_concept_vector")
         if isinstance(cv, dict) and cv:
             # 方向3：概念→通道权重可学习（默认 = 旧固定系数）
@@ -418,6 +439,18 @@ class SNNRegion:
             boost_appr = cv.get("approval", 0) * cdw.get("approval", {}).get("mag", 0.4)
             if boost_appr > 0.05:
                 w[_MAG_NEURON] = w.get(_MAG_NEURON, 1.0) + boost_appr * 1.0
+
+            # 通用认知通道：任意激活概念（含开放集新概念）→ 概念输入神经元
+            for concept_name, act in cv.items():
+                if not concept_name or not isinstance(concept_name, str):
+                    continue
+                act = float(act or 0)
+                if act <= 0.05:
+                    continue
+                cnid = self._ensure_concept_channel(concept_name)
+                if cnid is not None:
+                    # 概念激活强度映射到 1.0-3.0（越过隐藏层阈值，但走独立中继不污染 AND 门）
+                    w[cnid] = max(w.get(cnid, 0.0), 1.0 + act * 2.0)
 
         return w
 
@@ -517,6 +550,48 @@ class SNNRegion:
         """
         # 不预建连接:让训练时突触发生针对性创建(避免劫持)
         logger.info(f"snn_region: dynamic output {output_nid} exploration (lazy, synaptogenesis)")
+
+    # ── 概念认知通道（通用认知学习）────────────────────────
+
+    def _ensure_concept_channel(self, concept: str) -> Optional[int]:
+        """确保概念有认知通道：概念输入神经元 + 概念中继子网。
+
+        通用认知学习核心：概念向量（开放集）的每个概念动态注册
+        为概念输入神经元，经独立概念中继子网接入既有隐藏层。
+        - 概念 → 概念中继（权重 _CONCEPT_RELAY_IN_WEIGHT）
+        - 概念中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
+        - 概念→决策连接靠 STDP/反馈学习收敛，不硬编码语义映射
+
+        返回概念输入神经元 ID；失败返回 None。
+        """
+        try:
+            concept = (concept or "").lower()
+            if not concept:
+                return None
+            nid = self.concept_registry.get(concept)
+            if nid is None:
+                nid = self.concept_registry.register(concept)
+                # 确保概念输入神经元存在（INPUT 类型，阈值 0.5）
+                self._ensure_dynamic_neuron(nid, NeuronType.INPUT)
+                # 建立概念中继神经元（EXCITATORY，阈值 _CONCEPT_RELAY_THRESHOLD）
+                relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+                self._ensure_dynamic_neuron(relay_nid, NeuronType.EXCITATORY)
+                self.snn.neurons[relay_nid].threshold = _CONCEPT_RELAY_THRESHOLD
+                # 概念 → 中继
+                if len(self.snn.out_edges.get(nid, ())) == 0:
+                    self.snn.connect(nid, relay_nid, weight=_CONCEPT_RELAY_IN_WEIGHT, delay=1)
+                # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
+                if len(self.snn.out_edges.get(relay_nid, ())) == 0:
+                    for hid in _RELAY_HIDDEN_TARGETS:
+                        if hid < self.snn.num_neurons:
+                            self.snn.connect(relay_nid, hid, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
+                # 立即持久化：概念槽 + 神经元 + 连接不丢失
+                self._auto_save()
+                logger.info(f"snn_region: concept channel {concept} → {nid} (relay {relay_nid})")
+            return nid
+        except Exception as e:
+            logger.warning(f"snn_region: concept channel failed for '{concept}': {e}")
+            return None
 
     def _decode_output(self, outputs: Dict[int, bool],
                         active: List[int]) -> Optional[CognitionResult]:

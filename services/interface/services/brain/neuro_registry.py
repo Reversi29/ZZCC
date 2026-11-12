@@ -62,6 +62,13 @@ _EXPLORE_CONNECT_PROB = 0.7                  # 连接概率
 _MAX_INPUT_SLOTS = 96
 _MAX_OUTPUT_SLOTS = 196
 
+# 概念槽（开放集感知维度）：概念 → 概念输入神经元
+# 概念槽与类型/动作槽分属不同 ID 区：概念是连续感知维度（如 apple/danger/banana），
+# 经独立概念中继子网接入，避免污染档位槽 AND 门。
+_CONCEPT_START = 220          # 概念输入神经元起点
+_CONCEPT_RELAY_START = 230    # 概念中继神经元起点
+_MAX_CONCEPT_SLOTS = 320      # 概念槽上限
+
 
 class InputRegistry:
     """输入槽注册器：新信号类型自动分配新的输入神经元。
@@ -295,3 +302,83 @@ class NeuroRegistry:
 def build_registry(snn: SNN) -> NeuroRegistry:
     """构建组合注册器（便捷工厂）。"""
     return NeuroRegistry(snn)
+
+
+class ConceptRegistry:
+    """概念槽注册器：开放集概念自动分配概念输入神经元。
+
+    概念（如 apple/danger/banana/任何新概念）是连续感知维度，
+    每个概念有自己的输入神经元 + 概念中继子网，经 STDP/反馈学习
+    学会"概念→决策"连接。概念槽走独立 ID 区（220+），
+    不与类型槽（40+）/动作槽（100+）/连续通道（200/201）冲突。
+
+    哲学：概念空间开放，网络自己长出感知槽，靠学习收敛语义。
+    """
+
+    def __init__(self, registry_path: Optional[str] = None):
+        config_dir = os.environ.get("BRAIN_CONFIG_DIR", "/app/config_data")
+        self.registry_path = registry_path or os.path.join(config_dir, "neuro_registry.json")
+        self._concept_to_neuron: Dict[str, int] = {}
+        self._neuron_to_concept: Dict[int, str] = {}
+        self._next_slot = _CONCEPT_START
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(self.registry_path):
+                with open(self.registry_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._concept_to_neuron = data.get("concept_slots", {})
+                self._neuron_to_concept = {v: k for k, v in self._concept_to_neuron.items()}
+                self._next_slot = data.get("next_concept_slot", _CONCEPT_START)
+                if self._next_slot < _CONCEPT_START:
+                    self._next_slot = _CONCEPT_START
+                used = set(self._neuron_to_concept.keys())
+                while self._next_slot in used:
+                    self._next_slot += 1
+        except Exception as e:
+            logger.warning(f"neuro_registry: concept load failed ({e})")
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.registry_path), exist_ok=True)
+            with open(self.registry_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "concept_slots": self._concept_to_neuron,
+                    "next_concept_slot": self._next_slot,
+                }, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"neuro_registry: concept save failed ({e})")
+
+    def register(self, concept: str) -> int:
+        """注册概念，返回其概念输入神经元 ID。
+
+        若已存在返回原槽；否则分配下一个空闲概念神经元。
+        """
+        concept = (concept or "").lower()
+        if concept in self._concept_to_neuron:
+            return self._concept_to_neuron[concept]
+
+        if self._next_slot >= _MAX_CONCEPT_SLOTS:
+            logger.warning(f"neuro_registry: concept slots exhausted ({_MAX_CONCEPT_SLOTS})")
+            return self._next_slot - 1
+
+        nid = self._next_slot
+        self._next_slot += 1
+        self._concept_to_neuron[concept] = nid
+        self._neuron_to_concept[nid] = concept
+        self._save()
+        logger.info(f"neuro_registry: new concept slot {nid} for '{concept}'")
+        return nid
+
+    def get(self, concept: str) -> Optional[int]:
+        return self._concept_to_neuron.get((concept or "").lower())
+
+    def get_concept(self, neuron_id: int) -> Optional[str]:
+        return self._neuron_to_concept.get(neuron_id)
+
+    def all_concepts(self) -> Dict[str, int]:
+        return dict(self._concept_to_neuron)
+
+    def count(self) -> int:
+        return len(self._concept_to_neuron)
