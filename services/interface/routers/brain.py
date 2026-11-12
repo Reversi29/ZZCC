@@ -740,6 +740,18 @@ async def learn(
                     st = v2.sentience.sense(perception)
                     learn_stats = v2.sentience.learn(perception, st.sentiments, feedback_dir)
                     sentience_result = {"ok": True, "skipped": False, "learned": learn_stats}
+                # ── 概念层持续学习：反馈驱动模态 SNN 概念对齐 ──
+                if eff and v2.cognitive_coder is not None:
+                    visual_feat = request.payload.get("visual")
+                    audio_feat = request.payload.get("audio")
+                    if isinstance(visual_feat, dict) or isinstance(audio_feat, dict):
+                        concept_learn = v2.cognitive_coder.learn_from_feedback(
+                            visual=visual_feat if isinstance(visual_feat, dict) else None,
+                            audio=audio_feat if isinstance(audio_feat, dict) else None,
+                            correct_decision=eff,
+                        )
+                        if concept_learn.get("visual") or concept_learn.get("audio"):
+                            sentience_result["concept_learned"] = concept_learn
     except Exception as exc:
         sentience_result = {"ok": False, "error": str(exc)}
 

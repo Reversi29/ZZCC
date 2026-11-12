@@ -232,6 +232,10 @@ class ModalSNNEncoder:
             # 概念检测 → 概念输出（固定，检测放电即概念激活）
             self._set_weight(self._hidden_start + cidx, self._output_start + cidx, 1.0)
 
+        # 建立所有概念的 hidden→output 连接（不只 concept_prior）
+        # 无先验概念（如 escalation/rejection/query）也需可激活路径
+        self._rebuild_hidden_output()
+
     def _set_weight(self, src: int, tgt: int, w: float):
         self.weights.setdefault(src, {})[tgt] = w
 
@@ -289,8 +293,11 @@ class ModalSNNEncoder:
                 continue
             hid = self._hidden_start + cidx
             if t_val > 0.3:
-                # 教师激活：加强该概念的先验特征连接
+                # 教师激活：加强该概念的特征连接
                 feats = self.concept_prior.get(concept, [])
+                # 无先验特征 → 突触发生：用输入高幅值特征建立连接
+                if not feats:
+                    feats = [f for f, v in features.items() if v > 0.5]
                 for feat in feats:
                     if feat in self.feature_names:
                         fidx = self.feature_names.index(feat)
@@ -689,6 +696,54 @@ class CognitiveCoder:
             concepts["urgency"] = 0.9
 
         return concepts
+
+    def learn_from_feedback(self, visual: Optional[Dict[str, float]] = None,
+                            audio: Optional[Dict[str, float]] = None,
+                            correct_decision: str = "",
+                            eta: float = 0.05) -> Dict[str, int]:
+        """概念层持续学习：根据决策反馈更新模态 SNN。
+
+        反馈的正确决策 → 概念教师（approve→approval, reject→rejection,
+        escalate→escalation），用蒸馏更新视觉/音频 SNN 的概念路径。
+
+        这样当系统学到"视觉红+亮应升级"时，视觉 SNN 的 escalation
+        概念路径被加强（跨模态对齐的持续学习）。
+
+        Args:
+            visual: 视觉特征（如 {red:0.9, round:0.9}）
+            audio: 音频特征
+            correct_decision: 正确决策（approve/reject/escalate/flag/no_action）
+            eta: 学习率
+
+        Returns:
+            {visual: n, audio: n} 更新步数
+        """
+        # 决策 → 概念教师映射
+        decision_concept = {
+            "auto_approve": "approval",
+            "approve": "approval",
+            "reject": "rejection",
+            "escalate": "escalation",
+            "flag": "escalation",
+            "no_action": "novelty",
+            "chat": "chitchat",
+        }.get(correct_decision, "")
+
+        stats = {"visual": 0, "audio": 0}
+        if not decision_concept:
+            return stats
+
+        teacher: Dict[str, float] = {decision_concept: 0.9}
+
+        if visual:
+            self.visual_snn.distill_step(visual, teacher, eta)
+            stats["visual"] += 1
+        if audio:
+            self.audio_snn.distill_step(audio, teacher, eta)
+            stats["audio"] += 1
+
+        self._stats["learn_feedback_calls"] = self._stats.get("learn_feedback_calls", 0) + 1
+        return stats
 
     def to_sentience_input(self, concept_vector: ConceptVector) -> Dict[str, float]:
         """概念向量 → 感受层输入映射。
