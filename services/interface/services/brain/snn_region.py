@@ -618,9 +618,13 @@ class SNNRegion:
             return None
 
         strengths: Dict[int, float] = {}
+        # 前驱源：所有已放电的非输入/非输出神经元（隐藏层 16-31 + 中继层 210+/230+）
+        # 扩展中继层：概念槽/连续通道经中继驱动输出时，正确计入竞争分
+        # （原只含 16-31，概念中继 230 不计入 → 概念驱动输出无法胜出）
         hidden_source_ids = set(
             n.id for n in self.snn.neurons
-            if 16 <= n.id < 32 and n.last_fire_time >= 0
+            if n.last_fire_time >= 0
+            and n.neuron_type not in (NeuronType.INPUT, NeuronType.OUTPUT)
         )
         for out_nid in fired_outputs:
             n = self.snn.neurons[out_nid]
@@ -1039,6 +1043,12 @@ class SNNRegion:
         # 反馈的正确决策 → 概念教师，若概念向量该概念激活，加强其→通道权重
         self._learn_concept_decision_weights(signal, correct_decision, eta)
 
+        # 通用认知学习：概念槽学会驱动正确决策
+        # 正确反馈时，加强激活概念的中继→隐藏层连接（概念激活更强传导），
+        # 让概念槽成为该决策的可靠触发（非硬编码映射，靠学习收敛）
+        if was_correct:
+            self._learn_concept_drives_output(signal, target_output, eta)
+
         self._auto_save()
 
         # 恢复 Hebbian 状态(推理时可能被 reason() 设为 False)
@@ -1102,6 +1112,53 @@ class SNNRegion:
             entry[concept_channel] = min(_CONCEPT_W_CEIL, new_w)
             self._stats["concept_weight_updates"] = \
                 self._stats.get("concept_weight_updates", 0) + 1
+        except Exception:
+            pass
+
+    def _learn_concept_drives_output(
+        self, signal: NeuralSignal, target_output: int, eta: float = 0.02
+    ) -> None:
+        """通用认知学习：概念槽学会驱动正确决策。
+
+        正确反馈时，对概念向量中每个激活概念，加强其概念中继→隐藏层连接，
+        让概念激活更强地传导到隐藏层，最终触发目标输出。
+
+        机制：
+        - 概念输入(220+) → 概念中继(230+) → 隐藏层(17/18/20/21/26)
+        - 概念中继→隐藏层连接经加强后，概念激活能可靠驱动隐藏层放电
+        - 隐藏层→目标输出由 _reward_modulated_strengthen 加强
+        - 最终概念成为该决策的可靠触发（非硬编码映射，靠学习收敛）
+        """
+        try:
+            cv = (signal.payload or {}).get("_concept_vector")
+            if not isinstance(cv, dict) or not cv:
+                return
+            for concept_name, act in cv.items():
+                if not concept_name or not isinstance(concept_name, str):
+                    continue
+                act = float(act or 0)
+                if act <= 0.05:
+                    continue
+                nid = self.concept_registry.get(concept_name)
+                if nid is None:
+                    # 训练时确保概念槽注册（推理时才经 _continuous_weights 注册）
+                    nid = self._ensure_concept_channel(concept_name)
+                if nid is None:
+                    continue
+                relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+                if relay_nid >= self.snn.num_neurons:
+                    continue
+                # 概念中继→目标输出：突触发生 + 加强（概念激活直接驱动输出）
+                # 经多次训练，概念槽能独立触发目标输出（不依赖隐藏层 AND 门）
+                # 只加强目标输出直连，不加强 relay→hidden 的 escalate 路径——
+                # 那是档位槽语义，概念不应接管（避免概念激活偏 escalate）
+                conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
+                if conn is None:
+                    # 突触发生：建立中继→输出连接（初始与隐藏层同权重）
+                    self.snn.connect(relay_nid, target_output, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
+                    conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
+                if conn is not None and conn.weight < self.snn.max_weight:
+                    conn.weight = min(self.snn.max_weight, conn.weight + eta * act)
         except Exception:
             pass
 

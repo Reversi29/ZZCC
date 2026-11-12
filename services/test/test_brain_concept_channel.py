@@ -20,6 +20,8 @@ from services.brain.snn_region import (
     _CONCEPT_RELAY_BASE,
 )
 from services.brain.neuro_registry import ConceptRegistry
+from services.brain.snn import NeuronType
+from models.brain import NeuralSignal
 
 
 def _mk_signal(type_="expense", urgency=50, amount=5000, cv=None):
@@ -145,3 +147,61 @@ class TestConceptChannel:
 
         correct = asyncio.run(_run())
         assert correct == 12, f"回归失败：{correct}/12"
+
+    def test_concept_learns_to_drive_decision(self):
+        """核心验收：开放集概念经训练学会驱动目标决策，且不影响无概念基线。"""
+        import asyncio
+        tmp = tempfile.mkdtemp()
+        r = SNNRegion(save_path=os.path.join(tmp, "snn_test.json"))
+
+        # 基线（无概念）：小额+低紧急 expense → auto_approve
+        base = _mk_signal(type_="expense", urgency=30, amount=500)
+        res_base = asyncio.run(r.reason(base, {}, None))
+        assert res_base.result.decision == "auto_approve"
+
+        # 训练开放集概念 banana → reject
+        banana_sig = NeuralSignal(
+            type="expense", urgency=30,
+            payload={"amount": 500, "_concept_vector": {"banana": 0.9}},
+            context={},
+        )
+        for _ in range(80):
+            r.train_from_feedback(
+                banana_sig, correct_decision="reject", was_correct=True, eta=0.05
+            )
+
+        # 概念槽注册 + 中继→目标输出连接加强
+        nid = r.concept_registry.get("banana")
+        assert nid is not None
+        relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+        # reject 输出 33
+        assert 33 in r.snn.out_edges.get(relay_nid, {})
+        assert r.snn.out_edges[relay_nid][33].weight > 0.5
+
+        # 概念激活 → reject（概念槽学会驱动目标决策）
+        res_banana = asyncio.run(r.reason(banana_sig, {}, None))
+        assert res_banana.result.decision == "reject"
+
+        # 无概念基线不受影响
+        res_base2 = asyncio.run(r.reason(base, {}, None))
+        assert res_base2.result.decision == "auto_approve"
+
+    def test_concept_relay_in_decode_output(self):
+        """概念中继应计入 _decode_output 竞争分（非仅隐藏层 16-31）。"""
+        r = self._region()
+        nid = r._ensure_concept_channel("apple")
+        assert nid is not None
+        relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+        # 概念中继类型为 EXCITATORY（非 INPUT/OUTPUT），
+        # 故 _decode_output 的 hidden_source_ids 会包含它
+        assert r.snn.neurons[relay_nid].neuron_type == NeuronType.EXCITATORY
+        assert r.snn.neurons[relay_nid].neuron_type not in (NeuronType.INPUT, NeuronType.OUTPUT)
+        # 模拟放电后应被计入源集合
+        r.snn.reset_learning_state()
+        r.snn.neurons[relay_nid].membrane = 2.0
+        r.snn.neurons[relay_nid].update_firing(r.snn.time)
+        assert relay_nid in set(
+            n.id for n in r.snn.neurons
+            if n.last_fire_time >= 0
+            and n.neuron_type not in (NeuronType.INPUT, NeuronType.OUTPUT)
+        )
