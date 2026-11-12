@@ -65,6 +65,61 @@ CONCEPT_DIMS = len(CONCEPT_NAMES)
 CONCEPT_IDX: Dict[str, int] = {name: i for i, name in enumerate(CONCEPT_NAMES)}
 
 
+class ConceptRegistry:
+    """概念空间开放集注册表。
+
+    初始概念空间固定（CONCEPT_NAMES），但支持动态注册新概念
+    （如视觉认出'香蕉'→register('banana')→分配新维度）。
+
+    参照 neuro_registry.InputRegistry 模式：
+    - 初始固定概念
+    - register(name) 动态分配新维度
+    - get/all 查询
+    """
+
+    def __init__(self, initial: Optional[List[str]] = None):
+        self.names: List[str] = list(initial or CONCEPT_NAMES)
+        self.idx: Dict[str, int] = {name: i for i, name in enumerate(self.names)}
+        self._next_slot = len(self.names)
+        # 概念别名（中文名等）：alias → canonical name
+        self.aliases: Dict[str, str] = {}
+
+    def register(self, name: str, aliases: Optional[List[str]] = None) -> int:
+        """注册新概念，返回维度索引。已存在则返回原索引。
+
+        Args:
+            name: 规范概念名（如 banana）
+            aliases: 别名列表（如 ["香蕉"]），用于多语言/多模态匹配
+        """
+        if name in self.idx:
+            return self.idx[name]
+        idx = self._next_slot
+        self._next_slot += 1
+        self.names.append(name)
+        self.idx[name] = idx
+        if aliases:
+            for a in aliases:
+                self.aliases[a] = name
+        return idx
+
+    def resolve(self, token: str) -> Optional[str]:
+        """解析 token 到规范概念名（含别名）。"""
+        if token in self.idx:
+            return token
+        return self.aliases.get(token)
+
+    def get(self, name: str) -> Optional[int]:
+        """查询概念维度索引。"""
+        return self.idx.get(name)
+
+    def all(self) -> List[str]:
+        """全部概念名。"""
+        return list(self.names)
+
+    def __len__(self) -> int:
+        return len(self.names)
+
+
 @dataclass
 class ConceptVector:
     """统一概念向量：多模态对齐后的认知表征。
@@ -131,19 +186,25 @@ class ModalSNNEncoder:
     使用本地轻量脉冲网络（复用 SNN 类，纯 Python，无重依赖）。
     """
 
-    def __init__(self, modality: str, feature_names: List[str], concept_prior: Dict[str, List[str]]):
+    def __init__(self, modality: str, feature_names: List[str], concept_prior: Dict[str, List[str]],
+                 registry: Optional[ConceptRegistry] = None):
         self.modality = modality
         self.feature_names = feature_names
         self.concept_prior = concept_prior
+        self.registry = registry or ConceptRegistry()
         self.num_features = len(feature_names)
-        # 神经元布局：0..num_features-1 输入，num_features..num_features+CONCEPT_DIMS-1 概念检测，+CONCEPT_DIMS 输出
+        # 神经元布局：0..num_features-1 输入，num_features..num_features+len(registry)-1 概念检测，+len 输出
         self._input_start = 0
         self._hidden_start = self.num_features
-        self._output_start = self.num_features + CONCEPT_DIMS
-        self.num_neurons = self._output_start + CONCEPT_DIMS
+        self._output_start = self.num_features + len(self.registry)
+        self.num_neurons = self._output_start + len(self.registry)
 
         # 纯 Python 脉冲网络状态（轻量，不依赖 SNN 类避免循环依赖）
         self._init_network()
+
+    def _concept_count(self) -> int:
+        """当前概念数（实例级，支持动态注册）。"""
+        return len(self.registry)
 
     def _init_network(self):
         """初始化轻量脉冲网络。
@@ -161,7 +222,7 @@ class ModalSNNEncoder:
         self.weights: Dict[int, Dict[int, float]] = {}
         # 先验连接：特征 → 概念检测
         for concept, feats in self.concept_prior.items():
-            cidx = CONCEPT_IDX.get(concept)
+            cidx = self.registry.get(concept)
             if cidx is None:
                 continue
             for feat in feats:
@@ -204,10 +265,10 @@ class ModalSNNEncoder:
             # 衰减 + 不应期
             self.membrane = [m * self.decay for m in new_membrane]
             # 概念输出检测
-            for cidx in range(CONCEPT_DIMS):
+            for cidx in range(self._concept_count()):
                 out_nid = self._output_start + cidx
                 if self.membrane[out_nid] > 0.3:
-                    activations[CONCEPT_NAMES[cidx]] = min(1.0, self.membrane[out_nid])
+                    activations[self.registry.all()[cidx]] = min(1.0, self.membrane[out_nid])
 
         return activations
 
@@ -223,7 +284,7 @@ class ModalSNNEncoder:
             eta: 学习率
         """
         for concept, t_val in teacher.items():
-            cidx = CONCEPT_IDX.get(concept)
+            cidx = self.registry.get(concept)
             if cidx is None:
                 continue
             hid = self._hidden_start + cidx
@@ -244,6 +305,58 @@ class ModalSNNEncoder:
                         cur = self.weights.get(fidx, {}).get(hid, 0.0)
                         if cur > 0.3:
                             self._set_weight(fidx, hid, max(0.1, cur - eta * 0.5))
+
+    def register_concept(self, name: str, prior_features: Optional[List[str]] = None) -> int:
+        """动态注册新概念（开放集）。
+
+        新概念分配新维度，并建立先验特征→概念检测连接。
+
+        Args:
+            name: 概念名（如 banana）
+            prior_features: 先验特征列表（如 ["yellow", "curved"]）
+
+        Returns:
+            新概念维度索引
+        """
+        cidx = self.registry.register(name)
+        # 更新输出层起始位置：隐藏层容量 = 概念数，输出层紧随其后
+        # 关键：保证隐藏层与输出层不重叠（_output_start >= _hidden_start + len(registry)）
+        self._output_start = self.num_features + len(self.registry)
+        # 扩展神经元容量
+        new_num_neurons = self._output_start + len(self.registry)
+        if new_num_neurons > self.num_neurons:
+            while len(self.membrane) < new_num_neurons:
+                self.membrane.append(0.0)
+                self.threshold.append(1.0)
+                self.last_fire.append(-100)
+            self.num_neurons = new_num_neurons
+
+        # 建立先验连接
+        if prior_features:
+            for feat in prior_features:
+                if feat in self.feature_names:
+                    fidx = self.feature_names.index(feat)
+                    self._set_weight(fidx, self._hidden_start + cidx, 0.8)
+        # 重建所有 hidden→output 连接（用新的 _output_start，保证不重叠）
+        self._rebuild_hidden_output()
+        return cidx
+
+    def _rebuild_hidden_output(self):
+        """重建所有 hidden→output 连接（概念数变化后调用）。
+
+        保证隐藏层神经元（_hidden_start + cidx）连到正确的输出
+        （_output_start + cidx），避免概念数变化后错位。
+        """
+        # 移除旧 hidden→output 连接
+        for src in list(self.weights.keys()):
+            for tgt in list(self.weights[src].keys()):
+                if self._hidden_start <= src < self._output_start and tgt >= self._output_start:
+                    del self.weights[src][tgt]
+        # 重建
+        for cidx in range(len(self.registry)):
+            hid = self._hidden_start + cidx
+            out = self._output_start + cidx
+            self._set_weight(hid, out, 1.0)
 
 
 # ── 模态特征提取（Phase 1 规则式） ──
@@ -329,17 +442,43 @@ class CognitiveCoder:
             "alignment_strength": 0.0,
             "distill_calls": 0,
         }
+        # 概念空间开放集注册表（视觉/音频 SNN 共享）
+        self.registry = ConceptRegistry()
         # 模态权重（可学习，Phase 2 自动调整）
         self.modality_weights: Dict[str, float] = {
             "visual": 1.0,
             "text": 1.0,
             "audio": 1.0,
         }
-        # 模态专用 SNN 编码器（Phase 2）
-        self.visual_snn = ModalSNNEncoder("visual", VISUAL_FEATURES, _VISUAL_CONCEPT_PRIOR)
-        self.audio_snn = ModalSNNEncoder("audio", AUDIO_FEATURES, _AUDIO_CONCEPT_PRIOR)
+        # 模态专用 SNN 编码器（Phase 2，共享概念注册表）
+        self.visual_snn = ModalSNNEncoder("visual", VISUAL_FEATURES, _VISUAL_CONCEPT_PRIOR, registry=self.registry)
+        self.audio_snn = ModalSNNEncoder("audio", AUDIO_FEATURES, _AUDIO_CONCEPT_PRIOR, registry=self.registry)
         # Phase 2 开关：默认用 SNN 编码（有先验初始化，冷启动可用）
         self.use_snn_encoding = True
+
+    def register_concept(self, name: str, prior_features: Optional[Dict[str, List[str]]] = None,
+                         aliases: Optional[List[str]] = None) -> int:
+        """动态注册新概念（开放集）。
+
+        新概念在视觉/音频 SNN 中同步注册，分配新维度。
+
+        Args:
+            name: 概念名（如 banana）
+            prior_features: 各模态先验特征 {"visual": [...], "audio": [...]}
+            aliases: 概念别名（如 ["香蕉"]），用于多语言匹配
+
+        Returns:
+            新概念维度索引
+        """
+        idx = self.registry.register(name, aliases=aliases)
+        # 视觉 SNN 同步注册
+        vis_priors = (prior_features or {}).get("visual")
+        self.visual_snn.register_concept(name, vis_priors)
+        # 音频 SNN 同步注册
+        aud_priors = (prior_features or {}).get("audio")
+        self.audio_snn.register_concept(name, aud_priors)
+        self._stats["registered_concepts"] = self._stats.get("registered_concepts", 0) + 1
+        return idx
 
     def encode(
         self,
@@ -368,7 +507,7 @@ class CognitiveCoder:
         # 文本模态
         text_src = text or str(payload.get("question", "")) or str(payload.get("description", ""))
         if text_src:
-            modal_concepts["text"] = _text_to_concepts(text_src)
+            modal_concepts["text"] = self._text_to_concepts_registry(text_src)
 
         # 视觉模态（Phase 2：SNN 编码）
         if visual:
@@ -503,6 +642,27 @@ class CognitiveCoder:
         self._stats["contrastive_calls"] = self._stats.get("contrastive_calls", 0) + len(samples)
         return stats
 
+
+    def _text_to_concepts_registry(self, text: str) -> Dict[str, float]:
+        """文本 → 概念（含动态注册概念检测）。
+
+        先跑模块级关键词规则（固定概念），再检测 registry 中
+        动态注册的概念名是否出现在文本（开放集）。
+        """
+        concepts = _text_to_concepts(text)
+        t = text.lower()
+        # 动态注册概念：概念名/别名出现在文本 → 激活
+        for name in self.registry.all():
+            if name in concepts:
+                continue
+            if name in t:
+                concepts[name] = 0.9
+                continue
+            # 别名匹配（中文等）
+            for alias, canonical in self.registry.aliases.items():
+                if canonical == name and alias in text:
+                    concepts[name] = 0.9
+        return concepts
 
     def _payload_to_concepts(self, payload: Dict[str, Any]) -> Dict[str, float]:
         """结构化 payload 字段 → 概念。
