@@ -362,6 +362,18 @@ class ModalSNNEncoder:
             teacher: 规则式教师编码 {concept: strength}
             eta: 学习率
         """
+        # ── 脉冲前向 + STDP（方向2：真正的脉冲学习） ──
+        # 训练时启用 Hebbian：特征放电→概念检测跟随（delay+2 窗口）→LTP
+        # 时序因果强化教师概念的路径；delta 规则下方补突触发生（新连接）
+        self.snn.enable_hebbian = True
+        self.snn.reset()
+        for fname, fval in features.items():
+            if fname in self.feature_names:
+                self.snn.inject_input(self.feature_names.index(fname), fval)
+        for _ in range(4):
+            self.snn.step()
+        self.snn.enable_hebbian = False
+
         for concept, t_val in teacher.items():
             cidx = self.registry.get(concept)
             if cidx is None:
