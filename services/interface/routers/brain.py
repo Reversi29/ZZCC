@@ -237,6 +237,18 @@ class LearnRequest(BaseModel):
     correct_decision: Optional[str] = None  # correct=false 时，客户端指定正确的决策类型（如 auto_approve/reject/escalate/flag）
 
 
+class CognitiveTrainRequest(BaseModel):
+    samples: List[dict] = Field(..., description="训练样本列表，每个含 visual/audio/text + concepts 标签")
+    eta: float = Field(0.05, ge=0.0, le=1.0, description="学习率")
+    method: str = Field("supervised", description="训练方法: supervised/contrastive/distill")
+
+
+class CognitiveRegisterRequest(BaseModel):
+    name: str = Field(..., description="新概念名（如 banana）")
+    aliases: Optional[List[str]] = None  # 中文别名等
+    prior_features: Optional[dict] = None  # {"visual": [...], "audio": [...]}
+
+
 class RuleCreateRequest(BaseModel):
     id: str
     module: str = "custom"
@@ -756,6 +768,56 @@ async def learn(
         sentience_result = {"ok": False, "error": str(exc)}
 
     return {"ok": True, "updated": updated, "skill": skill, "semantic": semantic_result, "snn": snn_result, "sentience": sentience_result}
+
+
+@router.post("/cognitive/train")
+async def cognitive_train(request: CognitiveTrainRequest):
+    """多模态认知训练：真实标注数据训练模态 SNN。
+
+    接收训练样本（visual/audio/text + concepts 标签），
+    用有监督/对比/蒸馏方法更新视觉/音频 SNN 的概念路径。
+
+    - supervised: 用真实标注 concepts 作为教师
+    - contrastive: 跨模态对比学习（其他模态作为软教师）
+    - distill: 规则式教师蒸馏
+    """
+    try:
+        v2 = _get_v2_engine()
+        if v2 is None or v2.cognitive_coder is None:
+            return {"ok": False, "error": "v2 引擎未初始化"}
+        coder = v2.cognitive_coder
+        if request.method == "contrastive":
+            stats = coder.contrastive_align(request.samples, eta=request.eta)
+        elif request.method == "distill":
+            stats = coder.distill(request.samples, eta=request.eta)
+        else:
+            stats = coder.train_supervised(request.samples, eta=request.eta)
+        return {"ok": True, "stats": stats, "concepts": coder.registry.all()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@router.post("/cognitive/register")
+async def cognitive_register(request: CognitiveRegisterRequest):
+    """动态注册新概念（开放集）。
+
+    - name: 概念名（如 banana）
+    - aliases: 中文别名等
+    - prior_features: 各模态先验特征
+    """
+    try:
+        v2 = _get_v2_engine()
+        if v2 is None or v2.cognitive_coder is None:
+            return {"ok": False, "error": "v2 引擎未初始化"}
+        coder = v2.cognitive_coder
+        idx = coder.register_concept(
+            name=request.name,
+            prior_features=request.prior_features,
+            aliases=request.aliases,
+        )
+        return {"ok": True, "index": idx, "concepts": coder.registry.all()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.get("/semantic/status")

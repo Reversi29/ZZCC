@@ -632,6 +632,38 @@ class CognitiveCoder:
         self._stats["distill_calls"] += len(samples)
         return stats
 
+    def train_supervised(self, samples: List[Dict[str, Any]], eta: float = 0.05) -> Dict[str, int]:
+        """有监督训练：用真实标注（concepts 标签）训练模态 SNN。
+
+        区别于 distill（规则式教师），train_supervised 用**真实标注**
+        作为教师——接收人工标注或外部知识库的概念标签，直接驱动
+        模态 SNN 学习（真实数据训练）。
+
+        Args:
+            samples: 训练样本列表，每个含 visual/audio + concepts 标签
+                {"visual": {...}, "concepts": {"apple": 0.9, ...}}
+            eta: 学习率
+
+        Returns:
+            {visual: n, audio: n} 训练步数
+        """
+        stats = {"visual": 0, "audio": 0}
+        for sample in samples:
+            concepts = sample.get("concepts")
+            if not isinstance(concepts, dict) or not concepts:
+                continue
+            visual = sample.get("visual")
+            if visual:
+                # 真实标注 concepts 作为教师
+                self.visual_snn.distill_step(visual, concepts, eta)
+                stats["visual"] += 1
+            audio = sample.get("audio")
+            if audio:
+                self.audio_snn.distill_step(audio, concepts, eta)
+                stats["audio"] += 1
+        self._stats["supervised_calls"] = self._stats.get("supervised_calls", 0) + len(samples)
+        return stats
+
     def contrastive_align(self, samples: List[Dict[str, Any]], eta: float = 0.05) -> Dict[str, int]:
         """对比学习对齐：跨模态互信息对齐（InfoNCE 风格）。
 
