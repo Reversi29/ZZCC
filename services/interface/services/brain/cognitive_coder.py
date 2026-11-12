@@ -189,10 +189,10 @@ class ModalSNNEncoder:
     def __init__(self, modality: str, feature_names: List[str], concept_prior: Dict[str, List[str]],
                  registry: Optional[ConceptRegistry] = None):
         self.modality = modality
-        self.feature_names = feature_names
+        self.feature_names = list(feature_names)
         self.concept_prior = concept_prior
         self.registry = registry or ConceptRegistry()
-        self.num_features = len(feature_names)
+        self.num_features = len(self.feature_names)
         # 神经元布局：0..num_features-1 输入，num_features..num_features+len(registry)-1 概念检测，+len 输出
         self._input_start = 0
         self._hidden_start = self.num_features
@@ -205,6 +205,30 @@ class ModalSNNEncoder:
     def _concept_count(self) -> int:
         """当前概念数（实例级，支持动态注册）。"""
         return len(self.registry)
+
+    def register_feature(self, name: str) -> int:
+        """动态注册新感知特征（开放集）。
+
+        新物体特征（如 yellow/curved）动态注册，扩展输入层维度。
+        注册后重建网络（输入→概念检测→输出），概念先验连接重建。
+
+        Args:
+            name: 特征名（如 yellow）
+
+        Returns:
+            特征索引（已存在则返回原索引）
+        """
+        if name in self.feature_names:
+            return self.feature_names.index(name)
+        # 追加特征，重建网络布局
+        self.feature_names.append(name)
+        self.num_features = len(self.feature_names)
+        self._hidden_start = self.num_features
+        self._output_start = self.num_features + len(self.registry)
+        self.num_neurons = self._output_start + len(self.registry)
+        # 重建网络（保留 registry 概念，先验连接重建）
+        self._init_network()
+        return self.num_features - 1
 
     def _init_network(self):
         """初始化轻量脉冲网络。
@@ -220,20 +244,14 @@ class ModalSNNEncoder:
         self.decay = 0.85
         # 权重矩阵：source → {target: weight}
         self.weights: Dict[int, Dict[int, float]] = {}
-        # 先验连接：特征 → 概念检测
-        for concept, feats in self.concept_prior.items():
-            cidx = self.registry.get(concept)
-            if cidx is None:
-                continue
+        # 先验连接：特征 → 概念检测（遍历 registry 全部概念，含动态注册）
+        for cidx, concept in enumerate(self.registry.all()):
+            feats = self.concept_prior.get(concept, [])
             for feat in feats:
                 if feat in self.feature_names:
                     fidx = self.feature_names.index(feat)
                     self._set_weight(fidx, self._hidden_start + cidx, 0.8)
-            # 概念检测 → 概念输出（固定，检测放电即概念激活）
-            self._set_weight(self._hidden_start + cidx, self._output_start + cidx, 1.0)
-
-        # 建立所有概念的 hidden→output 连接（不只 concept_prior）
-        # 无先验概念（如 escalation/rejection/query）也需可激活路径
+        # 建立所有概念的 hidden→output 连接
         self._rebuild_hidden_output()
 
     def _set_weight(self, src: int, tgt: int, w: float):
@@ -478,14 +496,38 @@ class CognitiveCoder:
             新概念维度索引
         """
         idx = self.registry.register(name, aliases=aliases)
-        # 视觉 SNN 同步注册
+        # 视觉 SNN 同步注册（先注册未知特征，再注册概念）
         vis_priors = (prior_features or {}).get("visual")
+        if vis_priors:
+            for feat in vis_priors:
+                if feat not in self.visual_snn.feature_names:
+                    self.visual_snn.register_feature(feat)
         self.visual_snn.register_concept(name, vis_priors)
         # 音频 SNN 同步注册
         aud_priors = (prior_features or {}).get("audio")
+        if aud_priors:
+            for feat in aud_priors:
+                if feat not in self.audio_snn.feature_names:
+                    self.audio_snn.register_feature(feat)
         self.audio_snn.register_concept(name, aud_priors)
         self._stats["registered_concepts"] = self._stats.get("registered_concepts", 0) + 1
         return idx
+
+    def register_feature(self, modality: str, name: str) -> int:
+        """动态注册新感知特征（开放集）。
+
+        Args:
+            modality: 模态（visual/audio）
+            name: 特征名（如 yellow/curved）
+
+        Returns:
+            特征索引
+        """
+        if modality == "visual":
+            return self.visual_snn.register_feature(name)
+        elif modality == "audio":
+            return self.audio_snn.register_feature(name)
+        raise ValueError(f"unknown modality: {modality}")
 
     def encode(
         self,
