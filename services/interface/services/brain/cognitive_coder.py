@@ -156,6 +156,17 @@ class ConceptVector:
 VISUAL_FEATURES = ["red", "green", "blue", "round", "square", "large", "small", "bright", "dark"]
 # 音频特征维度
 AUDIO_FEATURES = ["loudness", "pitch", "rhythm"]
+# 文本语义特征维度（低层特征，非概念；SNN 学习特征→概念推理）
+TEXT_FEATURES = [
+    "urgent_marker",   # 紧急标记（urgent/asap/立即/加急）
+    "risk_marker",     # 风险标记（danger/risk/critical/违规）
+    "has_number",      # 数值存在（有金额/数量）
+    "query_marker",    # 疑问句（?/请问/查询）
+    "approval_marker", # 审批标记（批准/同意/通过）
+    "rejection_marker",# 拒绝标记（拒绝/驳回）
+    "greeting_marker", # 问候标记（hello/hi/你好）
+    "apple_marker",    # 苹果标记（apple/苹果）
+]
 
 # 概念的先验特征（规则式初始化用，Phase 2 可被 SNN 学习替代）
 # 视觉：红+圆→apple，暗+红→danger，亮→novelty
@@ -168,6 +179,16 @@ _VISUAL_CONCEPT_PRIOR = {
 _AUDIO_CONCEPT_PRIOR = {
     "danger": ["loudness", "pitch"],
     "urgency": ["loudness", "pitch"],
+}
+# 文本：低层语义特征→概念（三模态对称）
+_TEXT_CONCEPT_PRIOR = {
+    "urgency": ["urgent_marker"],
+    "danger": ["risk_marker"],
+    "approval": ["approval_marker"],
+    "rejection": ["rejection_marker"],
+    "query": ["query_marker"],
+    "chitchat": ["greeting_marker"],
+    "apple": ["apple_marker"],
 }
 
 
@@ -419,7 +440,7 @@ def _text_to_concepts(text: str) -> Dict[str, float]:
         concepts["danger"] = 0.9
     if any(k in t for k in ("紧急", "立即", "马上", "加急", "urgent", "asap")):
         concepts["urgency"] = 0.9
-    if any(k in t for k in ("批准", "同意", "通过", "approve", "approved", "ok")):
+    if any(k in t for k in ("批准", "同意", "通过", "审批", "approve", "approved", "ok")):
         concepts["approval"] = 0.8
     if any(k in t for k in ("拒绝", "驳回", "reject", "deny")):
         concepts["rejection"] = 0.8
@@ -431,6 +452,37 @@ def _text_to_concepts(text: str) -> Dict[str, float]:
         concepts["chitchat"] = 0.7
 
     return concepts
+
+
+def _text_to_features(text: str) -> Dict[str, float]:
+    """文本 → 低层语义特征（非概念，供 text_snn 编码）。
+
+    提取低层语义指示器：紧急/风险/数值/疑问/审批/拒绝/问候/苹果。
+    这些是原始信号（非概念），SNN 学习特征→概念推理。
+    """
+    feats: Dict[str, float] = {}
+    if not text:
+        return feats
+    t = text.lower()
+    if any(k in t for k in ("紧急", "立即", "马上", "加急", "urgent", "asap")):
+        feats["urgent_marker"] = 0.9
+    if any(k in t for k in ("危险", "风险", "违规", "danger", "risk", "critical")):
+        feats["risk_marker"] = 0.9
+    if any(k in t for k in ("?", "？", "查询", "请问", "query", "how", "where", "when")):
+        feats["query_marker"] = 0.7
+    if any(k in t for k in ("批准", "同意", "通过", "审批", "approve", "approved", "ok")):
+        feats["approval_marker"] = 0.8
+    if any(k in t for k in ("拒绝", "驳回", "reject", "deny")):
+        feats["rejection_marker"] = 0.8
+    if any(k in t for k in ("hello", "hi", "你好", "哈哈", "呵呵", "nice", "great")):
+        feats["greeting_marker"] = 0.7
+    if any(k in t for k in ("苹果", "apple")):
+        feats["apple_marker"] = 0.9
+    # 数值存在（金额/数量）
+    import re
+    if re.search(r"\d", text):
+        feats["has_number"] = 0.6
+    return feats
 
 
 def _audio_to_concepts(audio_features: Dict[str, float]) -> Dict[str, float]:
@@ -478,6 +530,8 @@ class CognitiveCoder:
         # 模态专用 SNN 编码器（Phase 2，共享概念注册表）
         self.visual_snn = ModalSNNEncoder("visual", VISUAL_FEATURES, _VISUAL_CONCEPT_PRIOR, registry=self.registry)
         self.audio_snn = ModalSNNEncoder("audio", AUDIO_FEATURES, _AUDIO_CONCEPT_PRIOR, registry=self.registry)
+        # 文本模态 SNN（三模态对称）：低层语义特征 → 概念
+        self.text_snn = ModalSNNEncoder("text", TEXT_FEATURES, _TEXT_CONCEPT_PRIOR, registry=self.registry)
         # Phase 2 开关：默认用 SNN 编码（有先验初始化，冷启动可用）
         self.use_snn_encoding = True
 
@@ -510,6 +564,13 @@ class CognitiveCoder:
                 if feat not in self.audio_snn.feature_names:
                     self.audio_snn.register_feature(feat)
         self.audio_snn.register_concept(name, aud_priors)
+        # 文本 SNN 同步注册
+        txt_priors = (prior_features or {}).get("text")
+        if txt_priors:
+            for feat in txt_priors:
+                if feat not in self.text_snn.feature_names:
+                    self.text_snn.register_feature(feat)
+        self.text_snn.register_concept(name, txt_priors)
         self._stats["registered_concepts"] = self._stats.get("registered_concepts", 0) + 1
         return idx
 
@@ -553,10 +614,25 @@ class CognitiveCoder:
         # ── 1. 各模态独立编码 ──
         modal_concepts: Dict[str, Dict[str, float]] = {}
 
-        # 文本模态
+        # 文本模态（Phase 2：SNN 编码，三模态对称）
         text_src = text or str(payload.get("question", "")) or str(payload.get("description", ""))
         if text_src:
-            modal_concepts["text"] = self._text_to_concepts_registry(text_src)
+            # 规则式概念提取（含动态概念）
+            rule_concepts = self._text_to_concepts_registry(text_src)
+            if self.use_snn_encoding:
+                # SNN 编码：低层语义特征 → 概念
+                text_feats = _text_to_features(text_src)
+                if text_feats:
+                    snn_concepts = self.text_snn.encode(text_feats)
+                    # 融合：同概念取高（SNN 学习 + 规则式先验）
+                    merged = dict(rule_concepts)
+                    for c, v in snn_concepts.items():
+                        merged[c] = max(merged.get(c, 0.0), v)
+                    modal_concepts["text"] = merged
+                else:
+                    modal_concepts["text"] = rule_concepts
+            else:
+                modal_concepts["text"] = rule_concepts
 
         # 视觉模态（Phase 2：SNN 编码）
         if visual:
@@ -615,9 +691,9 @@ class CognitiveCoder:
             eta: 学习率
 
         Returns:
-            {visual_distill: n, audio_distill: n}
+            {visual_distill: n, audio_distill: n, text_distill: n}
         """
-        stats = {"visual_distill": 0, "audio_distill": 0}
+        stats = {"visual_distill": 0, "audio_distill": 0, "text_distill": 0}
         for sample in samples:
             visual = sample.get("visual")
             if visual:
@@ -629,6 +705,13 @@ class CognitiveCoder:
                 teacher = _audio_to_concepts(audio)
                 self.audio_snn.distill_step(audio, teacher, eta)
                 stats["audio_distill"] += 1
+            text = sample.get("text")
+            if text:
+                text_feats = _text_to_features(text)
+                if text_feats:
+                    teacher = _text_to_concepts(text)
+                    self.text_snn.distill_step(text_feats, teacher, eta)
+                    stats["text_distill"] += 1
         self._stats["distill_calls"] += len(samples)
         return stats
 
@@ -647,7 +730,7 @@ class CognitiveCoder:
         Returns:
             {visual: n, audio: n} 训练步数
         """
-        stats = {"visual": 0, "audio": 0}
+        stats = {"visual": 0, "audio": 0, "text": 0}
         for sample in samples:
             concepts = sample.get("concepts")
             if not isinstance(concepts, dict) or not concepts:
@@ -661,6 +744,12 @@ class CognitiveCoder:
             if audio:
                 self.audio_snn.distill_step(audio, concepts, eta)
                 stats["audio"] += 1
+            text = sample.get("text")
+            if text:
+                text_feats = _text_to_features(text)
+                if text_feats:
+                    self.text_snn.distill_step(text_feats, concepts, eta)
+                    stats["text"] += 1
         self._stats["supervised_calls"] = self._stats.get("supervised_calls", 0) + len(samples)
         return stats
 
