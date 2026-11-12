@@ -14,12 +14,17 @@
     （CONCEPT_DIMS），每个维度代表一个抽象概念（如 apple/danger/
     urgency/approval...）。
 
-    编码方式：每个模态有一个独立 SNN（模态专用网络），把该模态的
-    原始特征编码为"模态概念激活"。所有模态概念激活通过对齐层融合
-    到统一概念空间。
+    编码方式（Phase 2）：每个模态有一个独立 SNN（ModalSNNEncoder），
+    把该模态的原始特征编码为"模态概念激活"。所有模态概念激活通过
+    对齐层融合到统一概念空间。
+
+    Phase 1：规则式编码（_text_to_concepts/_visual_to_concepts/
+    _audio_to_concepts）+ 加权融合，可解释、无需训练。
+    Phase 2：模态专用 SNN 编码（ModalSNNEncoder），用规则式编码
+    作为教师信号蒸馏初始化，再通过对比学习（跨模态互信息）微调。
 
     对齐层是学习的主战场：不同模态对同一概念的激活通过对比学习
-    （模态间互信息最大化）收敛到同一概念维度。
+    收敛到同一概念维度。
 
     这样：
     - 视觉"苹果图片" → 概念向量 [apple=0.9, ...]
@@ -28,10 +33,6 @@
 
     输出对齐后的概念向量直接喂给感受层（sentience），感受层对概念
     响应（如 apple 概念 → familiarity 升高），实现跨模态统一感受。
-
-    CognitiveCoder 不替代 perception/sentience，而是**桥接**它们：
-    perception 提取模态原始特征 → CognitiveCoder 对齐到统一概念 →
-    sentience 产生感受。
 """
 
 from __future__ import annotations
@@ -45,7 +46,6 @@ logger = logging.getLogger("brain.cognitive_coder")
 
 # ── 概念维度配置 ──
 # 每个维度是一个抽象概念。概念空间是开放集，可动态扩展。
-# 固定概念（Phase 1）：常见认知原型，后续可学习扩展
 CONCEPT_NAMES: List[str] = [
     "apple",        # 0: 苹果
     "danger",       # 1: 危险
@@ -96,19 +96,159 @@ class ConceptVector:
         ]
 
 
-# ── 模态特征提取（Phase 1：规则式，后续替换为模态专用 SNN） ──
+# ── 模态特征定义 ──
+# 视觉特征维度
+VISUAL_FEATURES = ["red", "green", "blue", "round", "square", "large", "small", "bright", "dark"]
+# 音频特征维度
+AUDIO_FEATURES = ["loudness", "pitch", "rhythm"]
 
-# 视觉模态：颜色/形状/纹理特征 → 概念假设
-# 视觉特征维度：红/绿/蓝/圆/方/大/小/亮/暗
-_VISUAL_FEATURES = ["red", "green", "blue", "round", "square", "large", "small", "bright", "dark"]
+# 概念的先验特征（规则式初始化用，Phase 2 可被 SNN 学习替代）
+# 视觉：红+圆→apple，暗+红→danger，亮→novelty
+_VISUAL_CONCEPT_PRIOR = {
+    "apple": ["red", "green", "round"],
+    "danger": ["dark", "red"],
+    "novelty": ["bright"],
+}
+# 音频：响度+音调→danger/urgency
+_AUDIO_CONCEPT_PRIOR = {
+    "danger": ["loudness", "pitch"],
+    "urgency": ["loudness", "pitch"],
+}
 
 
-def _visual_to_concepts(visual_features: Dict[str, float]) -> Dict[str, float]:
-    """视觉特征 → 概念假设（规则式，Phase 1）。
+# ── 模态专用 SNN 编码器 ──
+class ModalSNNEncoder:
+    """模态专用 SNN 编码器。
 
-    红色圆形 → 苹果假设；红/暗 → 危险假设。
-    真实系统应训练视觉 SNN 学习这些映射。
+    每个模态一个小 SNN：
+    - 输入层 = 模态特征维度（视觉 9 / 音频 3）
+    - 隐藏层 = 每个概念一个检测神经元
+    - 输出层 = 概念激活（CONCEPT_DIMS）
+
+    用规则式先验初始化连接（特征→概念的先验映射），
+    再用蒸馏/对比学习训练。Phase 2 核心。
+
+    使用本地轻量脉冲网络（复用 SNN 类，纯 Python，无重依赖）。
     """
+
+    def __init__(self, modality: str, feature_names: List[str], concept_prior: Dict[str, List[str]]):
+        self.modality = modality
+        self.feature_names = feature_names
+        self.concept_prior = concept_prior
+        self.num_features = len(feature_names)
+        # 神经元布局：0..num_features-1 输入，num_features..num_features+CONCEPT_DIMS-1 概念检测，+CONCEPT_DIMS 输出
+        self._input_start = 0
+        self._hidden_start = self.num_features
+        self._output_start = self.num_features + CONCEPT_DIMS
+        self.num_neurons = self._output_start + CONCEPT_DIMS
+
+        # 纯 Python 脉冲网络状态（轻量，不依赖 SNN 类避免循环依赖）
+        self._init_network()
+
+    def _init_network(self):
+        """初始化轻量脉冲网络。
+
+        简化脉冲模型（Phase 2 可换用完整 SNN）：
+        - 每个神经元有膜电位、阈值、不应期
+        - 输入特征注入 → 概念检测神经元积分 → 超过阈值放电 → 输出激活
+        """
+        self.membrane = [0.0] * self.num_neurons
+        self.threshold = [1.0] * self.num_neurons
+        self.last_fire = [-100] * self.num_neurons
+        self.refractory = 3
+        self.decay = 0.85
+        # 权重矩阵：source → {target: weight}
+        self.weights: Dict[int, Dict[int, float]] = {}
+        # 先验连接：特征 → 概念检测
+        for concept, feats in self.concept_prior.items():
+            cidx = CONCEPT_IDX.get(concept)
+            if cidx is None:
+                continue
+            for feat in feats:
+                if feat in self.feature_names:
+                    fidx = self.feature_names.index(feat)
+                    self._set_weight(fidx, self._hidden_start + cidx, 0.8)
+            # 概念检测 → 概念输出（固定，检测放电即概念激活）
+            self._set_weight(self._hidden_start + cidx, self._output_start + cidx, 1.0)
+
+    def _set_weight(self, src: int, tgt: int, w: float):
+        self.weights.setdefault(src, {})[tgt] = w
+
+    def encode(self, features: Dict[str, float]) -> Dict[str, float]:
+        """模态特征 → 概念激活。
+
+        输入特征注入 → 概念检测神经元积分 → 放电 → 概念激活。
+        返回 {concept: activation}。
+        """
+        # 重置膜电位（单次推理）
+        self.membrane = [0.0] * self.num_neurons
+        self.last_fire = [-100] * self.num_neurons
+
+        # 1. 注入输入特征（强度=特征值）
+        for fname, fval in features.items():
+            if fname in self.feature_names:
+                fidx = self.feature_names.index(fname)
+                self.membrane[fidx] = max(self.membrane[fidx], fval)
+
+        # 2. 传播 2 步（输入→概念检测→概念输出）
+        activations: Dict[str, float] = {}
+        for step in range(2):
+            new_membrane = list(self.membrane)
+            for src, targets in self.weights.items():
+                if self.membrane[src] < 0.3:  # 源未激活
+                    continue
+                src_strength = self.membrane[src]
+                for tgt, w in targets.items():
+                    # 膜电位积分
+                    new_membrane[tgt] += src_strength * w
+            # 衰减 + 不应期
+            self.membrane = [m * self.decay for m in new_membrane]
+            # 概念输出检测
+            for cidx in range(CONCEPT_DIMS):
+                out_nid = self._output_start + cidx
+                if self.membrane[out_nid] > 0.3:
+                    activations[CONCEPT_NAMES[cidx]] = min(1.0, self.membrane[out_nid])
+
+        return activations
+
+    def distill_step(self, features: Dict[str, float], teacher: Dict[str, float], eta: float = 0.05):
+        """蒸馏训练：让 SNN 逼近规则式教师编码。
+
+        对教师激活的概念，加强其特征→概念检测的连接；
+        对教师未激活的概念，削弱（如果误激活）。
+
+        Args:
+            features: 模态特征
+            teacher: 规则式教师编码 {concept: strength}
+            eta: 学习率
+        """
+        for concept, t_val in teacher.items():
+            cidx = CONCEPT_IDX.get(concept)
+            if cidx is None:
+                continue
+            hid = self._hidden_start + cidx
+            if t_val > 0.3:
+                # 教师激活：加强该概念的先验特征连接
+                feats = self.concept_prior.get(concept, [])
+                for feat in feats:
+                    if feat in self.feature_names:
+                        fidx = self.feature_names.index(feat)
+                        cur = self.weights.get(fidx, {}).get(hid, 0.0)
+                        self._set_weight(fidx, hid, min(3.0, cur + eta))
+            else:
+                # 教师未激活：削弱该概念连接（如果过高）
+                feats = self.concept_prior.get(concept, [])
+                for feat in feats:
+                    if feat in self.feature_names:
+                        fidx = self.feature_names.index(feat)
+                        cur = self.weights.get(fidx, {}).get(hid, 0.0)
+                        if cur > 0.3:
+                            self._set_weight(fidx, hid, max(0.1, cur - eta * 0.5))
+
+
+# ── 模态特征提取（Phase 1 规则式） ──
+def _visual_to_concepts(visual_features: Dict[str, float]) -> Dict[str, float]:
+    """视觉特征 → 概念假设（规则式，Phase 1）。"""
     concepts: Dict[str, float] = {}
     red = visual_features.get("red", 0.0)
     green = visual_features.get("green", 0.0)
@@ -116,50 +256,39 @@ def _visual_to_concepts(visual_features: Dict[str, float]) -> Dict[str, float]:
     bright = visual_features.get("bright", 0.0)
     dark = visual_features.get("dark", 0.0)
 
-    # 苹果：红/绿 + 圆形
     apple = (red + green) / 2.0 * round_s
     if apple > 0.1:
         concepts["apple"] = min(1.0, apple)
-    # 危险：暗 + 红（血/警报）
     danger = (dark * 0.5 + red * 0.3)
     if danger > 0.1:
         concepts["danger"] = min(1.0, danger)
+    if bright > 0.6:
+        concepts["novelty"] = min(1.0, bright * 0.7)
 
     return concepts
 
 
 def _text_to_concepts(text: str) -> Dict[str, float]:
-    """文本特征 → 概念假设（关键词规则，Phase 1）。
-
-    真实系统应训练语言 SNN 学习这些映射。
-    """
+    """文本特征 → 概念假设（关键词规则，Phase 1）。"""
     concepts: Dict[str, float] = {}
     if not text:
         return concepts
     t = text.lower()
 
-    # 苹果
     if any(k in t for k in ("苹果", "apple")):
         concepts["apple"] = 0.9
-    # 危险
     if any(k in t for k in ("危险", "风险", "违规", "danger", "risk", "critical")):
         concepts["danger"] = 0.9
-    # 紧急
     if any(k in t for k in ("紧急", "立即", "马上", "加急", "urgent", "asap")):
         concepts["urgency"] = 0.9
-    # 审批通过
     if any(k in t for k in ("批准", "同意", "通过", "approve", "approved", "ok")):
         concepts["approval"] = 0.8
-    # 拒绝
     if any(k in t for k in ("拒绝", "驳回", "reject", "deny")):
         concepts["rejection"] = 0.8
-    # 升级
     if any(k in t for k in ("升级", "上报", "escalate", "escalation")):
         concepts["escalation"] = 0.8
-    # 查询
     if any(k in t for k in ("?", "？", "查询", "请问", "query", "how", "where", "when")):
         concepts["query"] = 0.7
-    # 闲聊
     if any(k in t for k in ("hello", "hi", "你好", "哈哈", "呵呵", "nice", "great")):
         concepts["chitchat"] = 0.7
 
@@ -167,17 +296,11 @@ def _text_to_concepts(text: str) -> Dict[str, float]:
 
 
 def _audio_to_concepts(audio_features: Dict[str, float]) -> Dict[str, float]:
-    """音频特征 → 概念假设（规则式，Phase 1）。
-
-    音调/响度/节奏特征。高响度+高频 → 警报（危险/紧急）。
-    真实系统应训练音频 SNN 学习这些映射。
-    """
+    """音频特征 → 概念假设（规则式，Phase 1）。"""
     concepts: Dict[str, float] = {}
     loudness = audio_features.get("loudness", 0.0)
     pitch = audio_features.get("pitch", 0.0)
-    rhythm = audio_features.get("rhythm", 0.0)
 
-    # 警报：高响度 + 高音调
     alarm = loudness * pitch
     if alarm > 0.2:
         concepts["danger"] = min(1.0, alarm)
@@ -197,13 +320,14 @@ class CognitiveCoder:
     4. 输出 ConceptVector（统一概念向量）
 
     Phase 1：规则式编码 + 加权融合（可学习）。
-    Phase 2：每模态专用 SNN 编码 + 对比学习对齐。
+    Phase 2：模态专用 SNN 编码（ModalSNNEncoder）+ 蒸馏/对比学习。
     """
 
     def __init__(self):
         self._stats = {
             "encode_calls": 0,
             "alignment_strength": 0.0,
+            "distill_calls": 0,
         }
         # 模态权重（可学习，Phase 2 自动调整）
         self.modality_weights: Dict[str, float] = {
@@ -211,6 +335,11 @@ class CognitiveCoder:
             "text": 1.0,
             "audio": 1.0,
         }
+        # 模态专用 SNN 编码器（Phase 2）
+        self.visual_snn = ModalSNNEncoder("visual", VISUAL_FEATURES, _VISUAL_CONCEPT_PRIOR)
+        self.audio_snn = ModalSNNEncoder("audio", AUDIO_FEATURES, _AUDIO_CONCEPT_PRIOR)
+        # Phase 2 开关：默认用 SNN 编码（有先验初始化，冷启动可用）
+        self.use_snn_encoding = True
 
     def encode(
         self,
@@ -241,13 +370,19 @@ class CognitiveCoder:
         if text_src:
             modal_concepts["text"] = _text_to_concepts(text_src)
 
-        # 视觉模态
+        # 视觉模态（Phase 2：SNN 编码）
         if visual:
-            modal_concepts["visual"] = _visual_to_concepts(visual)
+            if self.use_snn_encoding:
+                modal_concepts["visual"] = self.visual_snn.encode(visual)
+            else:
+                modal_concepts["visual"] = _visual_to_concepts(visual)
 
-        # 音频模态
+        # 音频模态（Phase 2：SNN 编码）
         if audio:
-            modal_concepts["audio"] = _audio_to_concepts(audio)
+            if self.use_snn_encoding:
+                modal_concepts["audio"] = self.audio_snn.encode(audio)
+            else:
+                modal_concepts["audio"] = _audio_to_concepts(audio)
 
         # 结构化字段 → 概念（金额/风险注入）
         struct_concepts = self._payload_to_concepts(payload)
@@ -262,7 +397,6 @@ class CognitiveCoder:
             for concept, strength in concepts.items():
                 contrib = strength * w
                 if concept not in unified or contrib > unified[concept]:
-                    # 同概念多模态 → 取最强激活（跨模态对齐：任一模态激活即概念成立）
                     if concept not in unified:
                         sources[concept] = []
                     unified[concept] = contrib
@@ -285,6 +419,31 @@ class CognitiveCoder:
             aligned_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    def distill(self, samples: List[Dict[str, Any]], eta: float = 0.05) -> Dict[str, int]:
+        """蒸馏训练：用规则式编码作为教师，训练模态 SNN。
+
+        Args:
+            samples: 训练样本列表，每个含 visual/audio 特征
+            eta: 学习率
+
+        Returns:
+            {visual_distill: n, audio_distill: n}
+        """
+        stats = {"visual_distill": 0, "audio_distill": 0}
+        for sample in samples:
+            visual = sample.get("visual")
+            if visual:
+                teacher = _visual_to_concepts(visual)
+                self.visual_snn.distill_step(visual, teacher, eta)
+                stats["visual_distill"] += 1
+            audio = sample.get("audio")
+            if audio:
+                teacher = _audio_to_concepts(audio)
+                self.audio_snn.distill_step(audio, teacher, eta)
+                stats["audio_distill"] += 1
+        self._stats["distill_calls"] += len(samples)
+        return stats
+
     def _payload_to_concepts(self, payload: Dict[str, Any]) -> Dict[str, float]:
         """结构化 payload 字段 → 概念。
 
@@ -296,7 +455,6 @@ class CognitiveCoder:
         if amount is None:
             amount = payload.get("price") or payload.get("value") or payload.get("total")
         if isinstance(amount, (int, float)) and amount > 0:
-            # 高金额 → 升级/危险假设
             if amount >= 50000:
                 concepts["escalation"] = min(1.0, concepts.get("escalation", 0) + 0.7)
                 concepts["danger"] = min(1.0, concepts.get("danger", 0) + 0.4)
@@ -317,20 +475,13 @@ class CognitiveCoder:
 
         统一概念 → 感受维度的桥接。不同模态对同一概念激活，
         感受层对概念响应（如 apple 概念 → familiarity）。
-
-        Phase 1：概念→感受的规则映射（可学习）。
         """
         c = concept_vector.concepts
         sentience_input: Dict[str, float] = {}
-        # apple/familiarity/novelty → 熟悉感
         sentience_input["familiarity"] = min(1.0, c.get("familiarity", 0) + c.get("apple", 0) * 0.5)
-        # danger → 威胁感
         sentience_input["threat"] = c.get("danger", 0.0)
-        # urgency → 紧迫感
         sentience_input["urgency"] = c.get("urgency", 0.0)
-        # query → 困惑感
         sentience_input["confusion"] = c.get("query", 0.0) * 0.6
-        # chitchat → 安全+兴趣
         sentience_input["safety"] = c.get("chitchat", 0.0) * 0.7
         sentience_input["interest"] = min(1.0, c.get("novelty", 0) + c.get("query", 0) * 0.3)
         return sentience_input
