@@ -572,23 +572,23 @@ class SNNRegion:
             nid = self.concept_registry.get(concept)
             if nid is None:
                 nid = self.concept_registry.register(concept)
-                # 确保概念输入神经元存在（INPUT 类型，阈值 0.5）
-                self._ensure_dynamic_neuron(nid, NeuronType.INPUT)
-                # 建立概念中继神经元（EXCITATORY，阈值 _CONCEPT_RELAY_THRESHOLD）
-                relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
-                self._ensure_dynamic_neuron(relay_nid, NeuronType.EXCITATORY)
-                self.snn.neurons[relay_nid].threshold = _CONCEPT_RELAY_THRESHOLD
-                # 概念 → 中继
-                if len(self.snn.out_edges.get(nid, ())) == 0:
-                    self.snn.connect(nid, relay_nid, weight=_CONCEPT_RELAY_IN_WEIGHT, delay=1)
-                # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
-                if len(self.snn.out_edges.get(relay_nid, ())) == 0:
-                    for hid in _RELAY_HIDDEN_TARGETS:
-                        if hid < self.snn.num_neurons:
-                            self.snn.connect(relay_nid, hid, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
-                # 立即持久化：概念槽 + 神经元 + 连接不丢失
-                self._auto_save()
-                logger.info(f"snn_region: concept channel {concept} → {nid} (relay {relay_nid})")
+            # 幂等：无论新注册还是已注册，都确保概念输入 + 中继 + 连接存在
+            # （旧网络可能注册表有映射但神经元未建，如 216 神经元旧版网络）
+            self._ensure_dynamic_neuron(nid, NeuronType.INPUT)
+            relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+            self._ensure_dynamic_neuron(relay_nid, NeuronType.EXCITATORY)
+            self.snn.neurons[relay_nid].threshold = _CONCEPT_RELAY_THRESHOLD
+            # 概念 → 中继
+            if len(self.snn.out_edges.get(nid, ())) == 0:
+                self.snn.connect(nid, relay_nid, weight=_CONCEPT_RELAY_IN_WEIGHT, delay=1)
+            # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
+            if len(self.snn.out_edges.get(relay_nid, ())) == 0:
+                for hid in _RELAY_HIDDEN_TARGETS:
+                    if hid < self.snn.num_neurons:
+                        self.snn.connect(relay_nid, hid, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
+            # 立即持久化：概念槽 + 神经元 + 连接不丢失
+            self._auto_save()
+            logger.info(f"snn_region: concept channel {concept} → {nid} (relay {relay_nid})")
             return nid
         except Exception as e:
             logger.warning(f"snn_region: concept channel failed for '{concept}': {e}")
@@ -1161,9 +1161,11 @@ class SNNRegion:
                 if act <= 0.05:
                     continue
                 nid = self.concept_registry.get(concept_name)
-                if nid is None:
-                    # 训练时确保概念槽注册（推理时才经 _continuous_weights 注册）
-                    nid = self._ensure_concept_channel(concept_name)
+                # 无条件确保概念槽存在（幂等）：即使注册表已有映射，
+                # 也确保输入神经元+中继+连接存在（旧网络可能映射有但神经元未建）
+                ensured = self._ensure_concept_channel(concept_name)
+                if ensured is not None:
+                    nid = ensured
                 if nid is None:
                     continue
                 relay_nid = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
@@ -1220,6 +1222,15 @@ class SNNRegion:
             "total_fires": 0, "last_decision": "",
             "last_confidence": 0.0, "training_count": 0,
             "edges_added": 0, "edges_strengthened": 0, "edges_penalized": 0,
+            # 持续学习统计（重置后 train_from_feedback 依赖这些键，缺失会 KeyError）
+            "exploration_rate": 0.1,
+            "boundary_detected_count": 0,
+            "ewc_protected_edges": 0,
+            "micro_learn_steps": 0,
+            # 概念→决策融合权重（深拷贝，避免内层共享）
+            "concept_decision_weights": {
+                k: dict(v) for k, v in _DEFAULT_CONCEPT_DECISION_WEIGHTS.items()
+            },
         }
         self._auto_save()
 
