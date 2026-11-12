@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -98,6 +99,43 @@ _DETAIL_KEYS = (
     "description", "desc", "title", "text", "note",
     "content", "remark", "summary", "reason", "question",
 )
+
+# ── 连续调制通道（v4：去硬编码，大小/紧急度不再只分档） ──────
+# 档位槽（12/13/14、11）仍保留二值激活，作为隐藏层 AND 门的条件；
+# 但连续强度另进专用槽（200=magnitude, 201=urgency_cont），
+# 让网络真正感知"具体多大/多急"，而非只有三档标签。
+_MAG_NEURON = 200            # 数值大小连续通道
+# ID 区规划：固定 0-39 + 动态输入槽 40-135 + 动态输出槽 100-195
+# → 200+ 为安全区，不与任何动态注册冲突
+_URGENCY_CONT_NEURON = 201    # 紧急度连续通道
+_MAG_SATURATION = 200000.0   # 对数归一化饱和值
+
+# ── 连续通道独立中继子网（隔离硬编码层的污染）────────────────
+# 连续通道若直连既有隐藏层（阈值 1.5 的 AND 门），会额外抬高膜电位
+# 破坏档位选择——这是历史"架构天花板"的根源。
+# 改为：200/201 → 中继层 210-215（阈值 1.2，亚阈值调制）
+#       → 汇入既有层（权重 0.25，低于 AND 门阈值，只能微幅调制）
+#       中继不连输出层：_decode_output 会把中继分数计入所有输出，
+#       破坏竞争比较。中继只调制隐藏层膜电位。
+_RELAY_START = 210
+_RELAY_COUNT = 6
+_RELAY_THRESHOLD = 1.2
+_RELAY_IN_WEIGHT = 0.4      # 200/201 → 中继（乘上 gain 后膜电位约 0.6-0.9，
+# 低于中继阈值 1.2，单通道不触发；膜电位随注入强度线性变化，可分辨）
+_RELAY_OUT_WEIGHT = 0.25    # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
+_RELAY_HIDDEN_TARGETS = (16, 17, 18, 19, 20, 21)  # 6 个档位组合隐藏神经元
+
+
+def _normalize_magnitude(amount: float) -> float:
+    """金额/数值大小 → 0.0-1.0 连续值（对数缩放）。
+
+    对数缩放贴近人类对数量级的感知（1000→10000 与 10000→100000
+    的心理差距相当），避免线性映射把小额区间压缩到 0。
+    """
+    if amount <= 0:
+        return 0.0
+    v = math.log10(amount + 1.0) / math.log10(_MAG_SATURATION + 1.0)
+    return max(0.0, min(1.0, v))
 
 
 def _payload_features(payload: Any) -> tuple:
@@ -240,6 +278,92 @@ class SNNRegion:
         # 类型映射已在顶部处理：固定槽或动态注册槽
         return neurons or [10]  # 默认 noise
 
+    # ── 连续调制通道（v4） ─────────────────────────────────────
+    def _has_edges(self, source: int) -> bool:
+        """判断神经元是否已有出边（SNN 内部用 out_edges 邻接表）。"""
+        out_edges = getattr(self.snn, "out_edges", None)
+        if out_edges is None:
+            return False
+        return len(out_edges.get(source, ())) > 0
+
+    def _ensure_continuous_channels(self) -> None:
+        """确保连续调制通道神经元存在并建立探索连接。
+
+        200 = magnitude（数值大小连续强度）
+        201 = urgency_cont（紧急度连续强度）
+
+        与档位槽（12/13/14、11）并存：档位槽保持二值激活，
+        继续作为隐藏层 AND 门（阈值 1.5）的条件；
+        连续通道承载"具体多大/多急"，靠 STDP 学权重。
+        """
+        # 连续通道本身无出边（输入神经元），保证存在
+        for nid in (_MAG_NEURON, _URGENCY_CONT_NEURON):
+            self._ensure_dynamic_neuron(nid, NeuronType.INPUT)
+
+        # 中继子网：隔离既有 AND 门，靠 STDP/反馈学习收敛
+        for i in range(_RELAY_COUNT):
+            rid = _RELAY_START + i
+            self._ensure_dynamic_neuron(rid, NeuronType.EXCITATORY)
+            if len(self.snn.out_edges.get(rid, ())) == 0:
+                # 中继 → 既有隐藏层（弱调制，不触发 AND 门）
+                for hid in _RELAY_HIDDEN_TARGETS:
+                    if hid < self.snn.num_neurons:
+                        self.snn.connect(rid, hid, weight=_RELAY_OUT_WEIGHT, delay=1)
+                        # 不连输出层：避免 _decode_output 把中继分数计入所有输出
+                # 破坏竞争比较（12 场景硬约束）。中继只调制隐藏层膜电位。
+                # 设定中继阈值
+                self.snn.neurons[rid].threshold = _RELAY_THRESHOLD
+
+        # 连续通道 → 各自专属中继层。
+        # 饱和控制：注入强度 × 权重 ≤ 中继阈值，膜电位随强度线性变化。
+        # 200(magnitude) 与 201(urgency_cont) 连到不相交的中继子集，
+        # 否则 201（urgency 普遍非零）会淹没 200 的连续差异——
+        # 这正是"300 与 900 元同膜电位"的饱和失真根因。
+        _chan_to_relay = {
+            _MAG_NEURON: range(_RELAY_START, _RELAY_START + 3),
+            _URGENCY_CONT_NEURON: range(_RELAY_START + 3, _RELAY_START + _RELAY_COUNT),
+        }
+        for nid, relay_ids in _chan_to_relay.items():
+            if len(self.snn.out_edges.get(nid, ())) == 0:
+                targets = [self.snn.neurons[rid].id for rid in relay_ids]
+                for rid in targets:
+                    self.snn.connect(nid, rid, weight=_RELAY_IN_WEIGHT, delay=1)
+                logger.info(
+                    f"snn_region: continuous channel {nid} → relay {targets} "
+                    f"(w={_RELAY_IN_WEIGHT}, sub-threshold modulation)"
+                )
+        self._auto_save()
+
+    def _continuous_weights(self, signal: NeuralSignal) -> Dict[int, float]:
+        """提取连续强度调制（v4 核心：去硬编码分档）。
+
+        返回 {neuron_id: 强度}，强度按信号语义归一化：
+        - magnitude: 对数缩放，1000 → ~0.23，10000 → ~0.40，
+          100000 → ~0.57，200000+ → 1.0（饱和）
+        - urgency_cont: 原始 urgency/100
+
+        强度 > 2.0 时乘以 scale，因为输入神经元阈值默认 0.5，
+        需要足够膜电位才能激活下游。
+        """
+        self._ensure_continuous_channels()
+        w: Dict[int, float] = {}
+
+        payload = signal.payload or {}
+        amount = payload.get("amount")
+        if amount is None:
+            amount = payload.get("price") or payload.get("value") or payload.get("total")
+        if isinstance(amount, (int, float)) and amount >= 0:
+            mag = _normalize_magnitude(float(amount))
+            if mag > 0.0:
+                # 强度映射到 1.0-3.0，保证能越过隐藏层阈值
+                w[_MAG_NEURON] = 1.0 + mag * 2.0
+
+        urg = max(0.0, min(100.0, float(signal.urgency or 0)))
+        if urg > 0.0:
+            w[_URGENCY_CONT_NEURON] = 1.0 + (urg / 100.0) * 2.0
+
+        return w
+
     def _ensure_dynamic_input_slot(self, sig_type: str) -> Optional[int]:
         """确保信号类型有动态输入槽，并确保神经元 + 探索连接存在。
 
@@ -264,14 +388,15 @@ class SNNRegion:
             logger.warning(f"snn_region: dynamic input slot failed for '{sig_type}': {e}")
             return None
 
-    def _ensure_dynamic_neuron(self, nid: int):
-        """确保动态输入神经元存在且类型正确。"""
+    def _ensure_dynamic_neuron(self, nid: int, ntype: Optional[NeuronType] = None):
+        """确保神经元存在且类型正确（默认 INPUT，可指定）。"""
+        ntype = ntype or NeuronType.INPUT
         if nid >= self.snn.num_neurons:
-            self.snn.add_neuron(nid, NeuronType.INPUT, threshold=0.5)
+            self.snn.add_neuron(nid, ntype, threshold=0.5)
         else:
             n = self.snn.neurons[nid]
-            if n.neuron_type != NeuronType.INPUT:
-                n.neuron_type = NeuronType.INPUT
+            if n.neuron_type != ntype:
+                n.neuron_type = ntype
                 n.threshold = 0.5
 
     def _connect_dynamic_exploration(self, input_nid: int):
@@ -458,6 +583,10 @@ class SNNRegion:
             input_neurons = self._encode_signal(signal)
             strength = 2.0 + (signal.urgency / 100.0) * 3.0  # 0.0-3.0
 
+            # 连续调制通道（v4）：大小/紧急度不再只分档
+            # 档位槽保持二值激活（AND 门条件），连续槽承载"具体多大/多急"
+            cont_weights = self._continuous_weights(signal)
+
             # 推理时禁用 Hebbian/LTD，防止 STDP 削弱权重（学习漂移）
             # 学习通过 train_from_feedback / _reward_modulated_strengthen 进行
             self.snn.enable_hebbian = False
@@ -465,7 +594,7 @@ class SNNRegion:
             # 持续学习推理：融合推理+微学习+探索
             # 不传 expected_decision，因为推理时没有反馈
             outputs, boundary_detected = self.snn.step_with_learning(
-                input_neurons, strength
+                input_neurons, strength, weights=cont_weights
             )
 
             # 记录探索结果

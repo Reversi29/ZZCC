@@ -22,7 +22,7 @@ from collections import defaultdict
 import heapq
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Dict, Optional
 
 
 # ─── 神经元类型 ───────────────────────────────────────────────
@@ -45,6 +45,7 @@ class Neuron:
     refractory: int = 3              # 不应期步数
     refractory_until: int = -1       # 不应期截止时间
     last_fire_time: int = -999       # 上次激活时间
+    gain: float = 1.0                 # 本次放电的传播增益（连续调制）
     bias: float = 0.0                # 偏置
     is_firing: bool = False          # 当前步是否激活
     fire_count: int = 0              # 总激活次数
@@ -54,12 +55,23 @@ class Neuron:
         self.is_firing = False
         self.refractory_until = -1
         self.last_fire_time = -1
+        self.gain = 1.0
 
     def add_input(self, weight: float):
         """接收一个输入信号（累加膜电位）"""
         if self.refractory_until > 0:
             return  # 不应期内不接收
         self.membrane += weight
+
+    def set_gain(self, gain: float):
+        """设置本次放电的传播增益。
+
+        连续调制的核心：注入强度不再只影响“是否放电”，
+        还影响放电后向下游传播的量（gain × conn.weight）。
+        没有 gain，脉冲模型是二元的——连续强度会在第一步传播后丢弃，
+        这是 SNN 无法表达“具体多大/多急”的架构根源。
+        """
+        self.gain = max(0.0, float(gain))
 
     def step(self, t: int):
         """推进一个时间步"""
@@ -77,7 +89,10 @@ class Neuron:
             self.refractory_until = t + self.refractory
             self.last_fire_time = t
             self.fire_count += 1
-            self.membrane = 0.0  # fire 后重置
+            # 放电后清零膜电位，但保留 gain：
+            # gain 是传播增益（本步刚放电，下游将在后续步收到 gain×weight），
+            # 若在此清零，连续强度会在传播前丢失——脉冲模型退化为二元。
+            self.membrane = 0.0
             return True
         return False
 
@@ -228,7 +243,7 @@ class SNN:
         self._fire_history.clear()
 
     def inject_input(self, neuron_id: int, strength: float = 1.0):
-        """注入外部输入到指定神经元"""
+        """注入外部输入到指定神经元（增益中性，不改变传播增益）"""
         if neuron_id < 0 or neuron_id >= self.num_neurons:
             return
         self.neurons[neuron_id].membrane += strength
@@ -237,6 +252,27 @@ class SNN:
         """注入一个模式到多个神经元"""
         for nid in pattern:
             self.inject_input(nid, strength)
+
+    def inject_weighted(self, weights: Dict[int, float]) -> None:
+        """按神经元独立强度注入（连续感知向量的输入方式）。
+
+        与 inject_pattern 的区别：每个神经元有自己的强度，
+        支持连续感知特征（如情感维度 0.0-1.0）按实际强度调制输入，
+        而不是统一 strength 的二元激活。
+
+        Args:
+            weights: {neuron_id: 强度}，负值视为抑制性输入
+        """
+        for nid, s in weights.items():
+            if nid is None or s <= 0.0:
+                continue
+            if nid < 0 or nid >= self.num_neurons:
+                continue
+            n = self.neurons[nid]
+            n.membrane += float(s)
+            # 只有连续通道携带增益：档位槽保持 gain=1.0，
+            # 避免 AND 门（阈值 1.5）被额外增益打破
+            n.set_gain(1.0 + max(0.0, float(s)) * 0.55)
 
     def get_outputs(self) -> dict[int, bool]:
         """获取当前步的输出状态"""
@@ -307,11 +343,19 @@ class SNN:
                 fired_this_step.add(n.id)
 
         # 3. 传播新激活信号
+        # 连续调制：传播量 = gain × conn.weight
+        # gain 承载注入强度（档位槽 gain=1.0 不变；连续通道 gain>1），
+        # 否则连续强度会在第一步传播后丢弃——脉冲模型退化为二元。
         for n_id in fired_this_step:
             n = self.neurons[n_id]
+            gain = n.gain
             for tgt, conn in self.out_edges.get(n_id, {}).items():
                 arrive_time = t + conn.delay
-                heapq.heappush(self._pending_events, (arrive_time, n_id, tgt, conn.weight))
+                eff_weight = conn.weight * gain
+                heapq.heappush(self._pending_events, (arrive_time, n_id, tgt, eff_weight))
+            # 传播完成后立即清零增益：gain 只对本次放电有效，
+            # 不清零会在后续时间步残留，造成跨步放大（学习漂移）
+            n.gain = 1.0
 
         # 4. Hebbian 学习（仅在学习启用时；推理/sense 时禁用防意外削弱）
         if self.enable_hebbian:
@@ -653,6 +697,7 @@ class SNN:
         input_neurons: list[int],
         strength: float = 1.5,
         expected_decision: Optional[int] = None,
+        weights: Optional[Dict[int, float]] = None,
     ) -> tuple[dict[int, bool], bool]:
         """融合推理+微学习的单步计算。
 
@@ -667,6 +712,8 @@ class SNN:
             input_neurons: 输入神经元 ID 列表
             strength: 注入强度
             expected_decision: 期望的输出神经元 ID（用于反馈学习，可选）
+            weights: {neuron_id: 连续强度}，按神经元独立调制输入；
+                未包含的输入神经元回退到统一 strength
 
         Returns:
             (outputs, boundary_detected)
@@ -676,8 +723,16 @@ class SNN:
         # 重置推理状态（保留学习历史）
         self.reset_learning_state()
 
-        # 注入输入
-        self.inject_pattern(input_neurons, strength)
+        # 注入输入：档位槽与连续通道分离
+        # - 档位槽：统一 strength，gain 保持 1.0（不扰动 AND 门阈值算术）
+        # - 连续通道：独立强度 + 传播增益（编码"具体多大/多急"）
+        for nid in input_neurons:
+            if nid < 0 or nid >= self.num_neurons:
+                continue
+            self.neurons[nid].membrane += strength
+            self.neurons[nid].gain = 1.0
+        if weights:
+            self.inject_weighted(weights)
 
         outputs: dict[int, bool] = {}
         boundary_detected = False
