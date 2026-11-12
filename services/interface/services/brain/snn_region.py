@@ -84,6 +84,18 @@ _OUTPUT_DECISION = {
     37: "chat",
 }
 
+# 方向3：概念→决策融合通道的可学习权重表
+# 结构: {概念: {通道: 权重}}，通道 ∈ {"urg", "mag"}
+# 默认系数与旧固定实现一致，训练后按反馈调整（上限 _CONCEPT_W_CEIL）
+_DEFAULT_CONCEPT_DECISION_WEIGHTS = {
+    "escalation": {"urg": 0.6},
+    "danger": {"urg": 0.5},
+    "urgency": {"urg": 0.5},
+    "approval": {"mag": 0.4},
+}
+_CONCEPT_W_CEIL = 1.5   # 概念→通道权重上限
+_CONCEPT_W_FLOOR = 0.1  # 概念→通道权重下限
+
 # ── 紧急度 → 输入神经元映射 ─────────────────────────────────
 def _urgency_neuron(urgency: int) -> Optional[int]:
     """紧急度 0-100 → 输入神经元 11(高位标记)"""
@@ -212,8 +224,21 @@ class SNNRegion:
             "boundary_detected_count": 0,
             "ewc_protected_edges": 0,
             "micro_learn_steps": 0,
+            # 方向3：概念→决策融合权重（可学习）
+            # 深拷贝：内层 dict 也独立，避免改一个实例污染全局默认
+            "concept_decision_weights": {
+                k: dict(v) for k, v in _DEFAULT_CONCEPT_DECISION_WEIGHTS.items()
+            },
         }
         self._load_stats()
+        # 兜底：合并默认与文件值（文件可能缺某些概念键，保留已学习的值）
+        if not isinstance(self._stats.get("concept_decision_weights"), dict):
+            self._stats["concept_decision_weights"] = {}
+        for _c, _ch in _DEFAULT_CONCEPT_DECISION_WEIGHTS.items():
+            _entry = self._stats["concept_decision_weights"].setdefault(_c, {})
+            for _ch_name, _w in _ch.items():
+                if _ch_name not in _entry:
+                    _entry[_ch_name] = _w
 
         # 决策日志路径
         self._decision_log_path = self.save_path.replace(".json", "_decision_log.jsonl")
@@ -379,16 +404,18 @@ class SNNRegion:
         #   approval → 增强 mag 通道（approve 倾向）
         cv = (signal.payload or {}).get("_concept_vector")
         if isinstance(cv, dict) and cv:
+            # 方向3：概念→通道权重可学习（默认 = 旧固定系数）
+            cdw = self._stats.get("concept_decision_weights") or {}
             # 升级/危险/紧急概念 → urgency 通道增强
             boost_urg = (
-                cv.get("escalation", 0) * 0.6
-                + cv.get("danger", 0) * 0.5
-                + cv.get("urgency", 0) * 0.5
+                cv.get("escalation", 0) * cdw.get("escalation", {}).get("urg", 0.6)
+                + cv.get("danger", 0) * cdw.get("danger", {}).get("urg", 0.5)
+                + cv.get("urgency", 0) * cdw.get("urgency", {}).get("urg", 0.5)
             )
             if boost_urg > 0.05:
                 w[_URGENCY_CONT_NEURON] = w.get(_URGENCY_CONT_NEURON, 1.0) + boost_urg * 1.5
             # 审批概念 → mag 通道增强（approve 倾向）
-            boost_appr = cv.get("approval", 0) * 0.4
+            boost_appr = cv.get("approval", 0) * cdw.get("approval", {}).get("mag", 0.4)
             if boost_appr > 0.05:
                 w[_MAG_NEURON] = w.get(_MAG_NEURON, 1.0) + boost_appr * 1.0
 
@@ -933,6 +960,10 @@ class SNNRegion:
                     )
                     self._stats["edges_strengthened"] += strengthened
 
+        # 方向3：概念→决策融合权重学习
+        # 反馈的正确决策 → 概念教师，若概念向量该概念激活，加强其→通道权重
+        self._learn_concept_decision_weights(signal, correct_decision, eta)
+
         self._auto_save()
 
         # 恢复 Hebbian 状态(推理时可能被 reason() 设为 False)
@@ -950,6 +981,54 @@ class SNNRegion:
             "edges_penalized": self._stats.get("edges_penalized", 0),
             "snn_stats": self.snn.stats(),
         }
+
+    def _learn_concept_decision_weights(
+        self, signal: NeuralSignal, correct_decision: str, eta: float = 0.02
+    ) -> None:
+        """方向3：概念→决策融合权重学习。
+
+        反馈的正确决策映射为概念教师（approve→approval、escalate→escalation），
+        若 signal.payload._concept_vector 中该概念激活，则上调该概念→通道权重，
+        让下次推理更偏向正确决策方向（非固定系数）。
+        """
+        try:
+            cv = (signal.payload or {}).get("_concept_vector")
+            if not isinstance(cv, dict) or not cv:
+                return
+            # 决策 → 概念（与 cognitive_coder.learn_from_feedback 一致）
+            decision_concept = {
+                "auto_approve": "approval",
+                "approve": "approval",
+                "reject": "rejection",
+                "escalate": "escalation",
+                "flag": "escalation",
+                "no_action": "novelty",
+                "chat": "chitchat",
+            }.get(correct_decision, "")
+            if not decision_concept:
+                return
+            act = float(cv.get(decision_concept, 0) or 0)
+            if act <= 0.05:
+                return
+            # 概念 → 通道（默认映射）
+            concept_channel = {
+                "approval": "mag",
+                "escalation": "urg",
+                "danger": "urg",
+                "urgency": "urg",
+            }.get(decision_concept, "")
+            if not concept_channel:
+                return
+            cdw = self._stats.setdefault("concept_decision_weights", {})
+            entry = cdw.setdefault(decision_concept, {})
+            old_w = float(entry.get(concept_channel, 0.4 if concept_channel == "mag" else 0.6))
+            # 学习率按概念激活强度缩放（激活越强越信任该反馈）
+            new_w = old_w + eta * act
+            entry[concept_channel] = min(_CONCEPT_W_CEIL, new_w)
+            self._stats["concept_weight_updates"] = \
+                self._stats.get("concept_weight_updates", 0) + 1
+        except Exception:
+            pass
 
     def _decision_to_output_neuron(self, decision: str) -> Optional[int]:
         """决策类型 → 输出神经元 ID。支持固定 + 动态注册输出槽。"""
