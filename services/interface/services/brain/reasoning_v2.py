@@ -121,6 +121,10 @@ class ReasoningEngineV2:
 
         # ── 6. 调用 v1 引擎的协调器（带 v2 context） ──
         # v1.reason() 内部会重新分配意图预算，这里直接调 coordinator
+        # 概念向量注入 signal.payload，供主 SNN 连续通道读取
+        if concept_vector and concept_vector.concepts:
+            signal.payload = dict(signal.payload or {})
+            signal.payload["_concept_vector"] = dict(concept_vector.concepts)
         if plan is not None:
             result = await self.base.coordinator.run(
                 signal, enhanced_context, plan=plan

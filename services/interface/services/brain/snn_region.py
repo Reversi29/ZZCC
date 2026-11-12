@@ -373,6 +373,25 @@ class SNNRegion:
         if urg > 0.0:
             w[_URGENCY_CONT_NEURON] = 1.0 + (urg / 100.0) * 2.0
 
+        # 概念向量连续通道：概念直接驱动主 SNN 决策
+        # 概念激活映射到决策相关通道：
+        #   escalation/danger/urgency → 增强 urgency 通道（escalate 倾向）
+        #   approval → 增强 mag 通道（approve 倾向）
+        cv = (signal.payload or {}).get("_concept_vector")
+        if isinstance(cv, dict) and cv:
+            # 升级/危险/紧急概念 → urgency 通道增强
+            boost_urg = (
+                cv.get("escalation", 0) * 0.6
+                + cv.get("danger", 0) * 0.5
+                + cv.get("urgency", 0) * 0.5
+            )
+            if boost_urg > 0.05:
+                w[_URGENCY_CONT_NEURON] = w.get(_URGENCY_CONT_NEURON, 1.0) + boost_urg * 1.5
+            # 审批概念 → mag 通道增强（approve 倾向）
+            boost_appr = cv.get("approval", 0) * 0.4
+            if boost_appr > 0.05:
+                w[_MAG_NEURON] = w.get(_MAG_NEURON, 1.0) + boost_appr * 1.0
+
         return w
 
     def _ensure_dynamic_input_slot(self, sig_type: str) -> Optional[int]:
