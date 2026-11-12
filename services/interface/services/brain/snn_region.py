@@ -154,6 +154,7 @@ _CONCEPT_RELAY_BASE = 230     # 概念中继神经元起点
 _CONCEPT_RELAY_THRESHOLD = 0.95   # 概念中继阈值（大强度放电）
 _CONCEPT_RELAY_IN_WEIGHT = 0.4    # 概念 → 中继
 _CONCEPT_RELAY_OUT_WEIGHT = 0.25  # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
+_CONCEPT_LEARN_ETA = 0.12    # 概念槽学习率（独立于微学习 eta，训练足够快）
 
 
 def _normalize_magnitude(amount: float) -> float:
@@ -1011,7 +1012,23 @@ class SNNRegion:
             # 错误决策 → 惩罚原始输出,同时轻微加强正确输出
             original_decision = wrong_decision or self._stats.get("last_decision", "")
             penalty_output = self._decision_to_output_neuron(original_decision)
-            if penalty_output is not None:
+            # 有概念向量时:惩罚也概念特异性(只削弱概念槽→原始输出),不碰全局——
+            # 概念槽独立学习,全局网络不被污染(否则无概念信号也偏目标决策)。
+            # 无概念向量时:传统全局惩罚(纠正全局路径)。
+            _has_concept = bool((signal.payload or {}).get("_concept_vector"))
+            if _has_concept and penalty_output is not None:
+                # 概念特异性惩罚:削弱概念中继→原始输出(若有)
+                cv = (signal.payload or {}).get("_concept_vector") or {}
+                for concept_name in cv:
+                    cnid = self.concept_registry.get(concept_name)
+                    if cnid is None:
+                        continue
+                    relay_nid = _CONCEPT_RELAY_BASE + (cnid - _CONCEPT_NEURON_BASE)
+                    conn = self.snn.out_edges.get(relay_nid, {}).get(penalty_output)
+                    if conn is not None:
+                        conn.weight = max(0.5, conn.weight * 0.95)
+                        self._stats["edges_penalized"] += 1
+            elif penalty_output is not None:
                 # 温和惩罚:削弱 5%(原来 20% 太狠导致权重净流失/灾难性遗忘)
                 # 且保留最小权重 0.5,避免关键决策路径被磨没
                 for src in list(self.snn.out_edges.keys()):
@@ -1020,34 +1037,38 @@ class SNNRegion:
                         conn.weight = max(0.5, conn.weight * 0.95)
                         self._stats["edges_penalized"] += 1
             # 少量加强正确输出(让下次推理偏向正确决策)
-            for _ in range(2):
-                self.snn.reset_learning_state()
-                self.snn.inject_pattern(input_neurons, strength)
-                self.snn.step()
-                self.snn.step()
-                self.snn.inject_input(target_output, inject_strength * 0.5)  # 较弱注入
-                outputs = self.snn.step()
-                if outputs.get(target_output, False):
-                    # 动态输出槽同样 restrict_to_hidden(避免输入→输出直连)
-                    is_dynamic_output = target_output >= 40
-                    strengthened = self.snn._reward_modulated_strengthen(
-                        target_output, eta=eta * 0.5,
-                        auto_create=False,
-                        auto_create_weight=0.10,
-                        restrict_to_hidden=is_dynamic_output,
-                        cap_weight=1.5 if is_dynamic_output else None,
-                    )
-                    self._stats["edges_strengthened"] += strengthened
+            # 有概念向量时跳过全局加强:概念槽学习应特异性(只加强概念→目标输出),
+            # 不污染全局网络(否则无概念信号也偏目标决策)。
+            # 无概念向量时保留传统纠错(全局加强)。
+            if not _has_concept:
+                for _ in range(2):
+                    self.snn.reset_learning_state()
+                    self.snn.inject_pattern(input_neurons, strength)
+                    self.snn.step()
+                    self.snn.step()
+                    self.snn.inject_input(target_output, inject_strength * 0.5)  # 较弱注入
+                    outputs = self.snn.step()
+                    if outputs.get(target_output, False):
+                        # 动态输出槽同样 restrict_to_hidden(避免输入→输出直连)
+                        is_dynamic_output = target_output >= 40
+                        strengthened = self.snn._reward_modulated_strengthen(
+                            target_output, eta=eta * 0.5,
+                            auto_create=False,
+                            auto_create_weight=0.10,
+                            restrict_to_hidden=is_dynamic_output,
+                            cap_weight=1.5 if is_dynamic_output else None,
+                        )
+                        self._stats["edges_strengthened"] += strengthened
 
         # 方向3：概念→决策融合权重学习
         # 反馈的正确决策 → 概念教师，若概念向量该概念激活，加强其→通道权重
         self._learn_concept_decision_weights(signal, correct_decision, eta)
 
         # 通用认知学习：概念槽学会驱动正确决策
-        # 正确反馈时，加强激活概念的中继→隐藏层连接（概念激活更强传导），
-        # 让概念槽成为该决策的可靠触发（非硬编码映射，靠学习收敛）
-        if was_correct:
-            self._learn_concept_drives_output(signal, target_output, eta)
+        # 无论 was_correct 与否，correct_decision 就是学习目标（用户纠正的决策）。
+        # 错误路径下原始决策≠correct_decision，但概念槽仍应学会正确决策——
+        # 否则概念永远学不会（生产 learn 场景多数是纠正错误，was_correct=False）
+        self._learn_concept_drives_output(signal, target_output, eta)
 
         self._auto_save()
 
@@ -1158,7 +1179,7 @@ class SNNRegion:
                     self.snn.connect(relay_nid, target_output, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
                     conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
                 if conn is not None and conn.weight < self.snn.max_weight:
-                    conn.weight = min(self.snn.max_weight, conn.weight + eta * act)
+                    conn.weight = min(self.snn.max_weight, conn.weight + _CONCEPT_LEARN_ETA * act)
         except Exception:
             pass
 
