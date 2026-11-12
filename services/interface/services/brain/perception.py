@@ -347,6 +347,25 @@ class Perception:
             str(payload.get("title", "")),
         ]).strip()
 
+        # ── 结构化字段注入感知（认知对齐前提） ──
+        # 金额/风险/紧急度等结构化字段必须进入感知，否则感受层对金额无响应。
+        # 金额→数字文本（numeric 通道提取 magnitude）；风险/紧急→关键词。
+        # 这样感知层能"看到"payload 的结构化语义，而非只依赖自然语言。
+        struct_inject = []
+        amount = payload.get("amount")
+        if amount is None:
+            amount = payload.get("price") or payload.get("value") or payload.get("total")
+        if isinstance(amount, (int, float)) and amount > 0:
+            struct_inject.append(str(int(amount)))  # numeric 通道提取 magnitude
+        risk = str(payload.get("risk_level", "") or payload.get("risk", "")).lower()
+        if risk and any(k in risk for k in ("critical", "high", "严重", "高风险", "紧急")):
+            struct_inject.append("危险 紧急")
+        deadline = str(payload.get("deadline", "")).lower()
+        if deadline and any(k in deadline for k in ("today", "今天", "immediate", "立即", "now")):
+            struct_inject.append("紧急 立即")
+        if struct_inject:
+            raw_text = raw_text + " " + " ".join(struct_inject)
+
         # 文本感知
         text_result = self.text_channel.perceive(raw_text)
 

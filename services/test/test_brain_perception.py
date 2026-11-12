@@ -82,6 +82,35 @@ class TestPerception:
         assert r.token_count > 0, "expected tokens from payload"
         assert r.raw_text != "", "expected raw text"
 
+    def test_structured_amount_injection(self):
+        """结构化字段注入：payload 的 amount 应进入感知向量（认知对齐前提）。
+
+        amount 不依赖文本描述，只靠 payload 结构字段就应产生 numeric magnitude。
+        这样感知层能"看到"金额，感受层才能对金额产生语义响应。
+        """
+        # 无文本、仅 amount 字段 → 感知应提取金额幅度
+        r = self.perception.perceive({"amount": 88000, "category": "equipment"})
+        numeric = r.features["numeric"]
+        assert numeric[1] > 0.5, f"expected high magnitude from amount, got {numeric[1]}"
+
+        # 小额 → 幅度低
+        low_r = self.perception.perceive({"amount": 500, "category": "office"})
+        low_numeric = low_r.features["numeric"]
+        assert low_numeric[1] < numeric[1], f"expected {low_numeric[1]} < {numeric[1]}"
+
+        # 无金额 → 幅度 0
+        empty_r = self.perception.perceive({"question": "hello"})
+        assert empty_r.features["numeric"][1] == 0.0, "expected no magnitude"
+
+    def test_structured_risk_injection(self):
+        """结构化风险字段注入：risk_level=critical → 负面+紧急标记。"""
+        r = self.perception.perceive({"amount": 5000, "risk_level": "critical"})
+        sentiment = r.features["sentiment"]
+        formality = r.features["formality"]
+        # 风险 → 负面情感 + 紧急标记
+        assert sentiment[1] > 0.0, f"expected neg from risk, got {sentiment[1]}"
+        assert formality[2] > 0.0, f"expected urgency marker, got {formality[2]}"
+
 
 class TestTemporalPerception:
     """时序感知测试。"""
