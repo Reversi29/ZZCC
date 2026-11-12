@@ -150,6 +150,17 @@ class ReasoningEngineV2:
             "consistency_flags": self._stats["consistency_flags"],
         }
 
+        # 主导概念注入 reasoning 文本（可解释性）
+        dominant = concept_vector.dominant(top=3)
+        if dominant:
+            desc = ", ".join(
+                f"{d['concept']}({d['strength']:.2f})" for d in dominant
+            )
+            if result.reasoning:
+                result.reasoning += f" | [concepts] 主导概念: {desc}"
+            else:
+                result.reasoning = f"[concepts] 主导概念: {desc}"
+
         return result
 
     # ── 辅助 ──
