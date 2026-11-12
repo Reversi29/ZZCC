@@ -1,19 +1,19 @@
 """
-SNN 基底模块 — 带延迟的结构可塑脉冲神经网络。
+SNN 基底模块 - 带延迟的结构可塑脉冲神经网络。
 
-核心设计：
-- 步进式时间（整数计数器，非真实时间）
-- 稀疏连接矩阵（只存非零边）
-- Hebbian 学习（同步放电加强，不同步减弱）
-- 结构可塑（增删神经元/连接）
+核心设计:
+- 步进式时间(整数计数器,非真实时间)
+- 稀疏连接矩阵(只存非零边)
+- Hebbian 学习(同步放电加强,不同步减弱)
+- 结构可塑(增删神经元/连接)
 
-时间模型：
+时间模型:
     t=0:   neuron_A 激活
-    t=3:   信号到达 neuron_B（延迟3步）
-    t=4:   neuron_B 激活（如果阈值满足）
+    t=3:   信号到达 neuron_B(延迟3步)
+    t=4:   neuron_B 激活(如果阈值满足)
     ...
 
-每个 step() 推进一个时间步，不需要 sleep 或真实等待。
+每个 step() 推进一个时间步,不需要 sleep 或真实等待。
 """
 
 from __future__ import annotations
@@ -27,11 +27,11 @@ from typing import Dict, Optional
 
 # ─── 神经元类型 ───────────────────────────────────────────────
 class NeuronType(Enum):
-    INPUT = "input"        # 输入端：被动接收外部信号
-    EXCITATORY = "exc"    # 兴奋性计算：汇总入边，达到阈值后 fire
-    INHIBITORY = "inh"    # 抑制性计算：fire 时抑制下游
-    MODULATORY = "mod"    # 调节型：改变其他神经元的阈值/学习率
-    OUTPUT = "output"     # 输出端：将结果输出到外部
+    INPUT = "input"        # 输入端:被动接收外部信号
+    EXCITATORY = "exc"    # 兴奋性计算:汇总入边,达到阈值后 fire
+    INHIBITORY = "inh"    # 抑制性计算:fire 时抑制下游
+    MODULATORY = "mod"    # 调节型:改变其他神经元的阈值/学习率
+    OUTPUT = "output"     # 输出端:将结果输出到外部
 
 
 @dataclass
@@ -40,12 +40,12 @@ class Neuron:
     id: int
     neuron_type: NeuronType = NeuronType.EXCITATORY
     threshold: float = 1.0           # 激活阈值
-    membrane: float = 0.0            # 膜电位（累积输入）
+    membrane: float = 0.0            # 膜电位(累积输入)
     decay: float = 0.95              # 膜电位衰减率
     refractory: int = 3              # 不应期步数
     refractory_until: int = -1       # 不应期截止时间
     last_fire_time: int = -999       # 上次激活时间
-    gain: float = 1.0                 # 本次放电的传播增益（连续调制）
+    gain: float = 1.0                 # 本次放电的传播增益(连续调制)
     bias: float = 0.0                # 偏置
     is_firing: bool = False          # 当前步是否激活
     fire_count: int = 0              # 总激活次数
@@ -58,7 +58,7 @@ class Neuron:
         self.gain = 1.0
 
     def add_input(self, weight: float):
-        """接收一个输入信号（累加膜电位）"""
+        """接收一个输入信号(累加膜电位)"""
         if self.refractory_until > 0:
             return  # 不应期内不接收
         self.membrane += weight
@@ -66,10 +66,10 @@ class Neuron:
     def set_gain(self, gain: float):
         """设置本次放电的传播增益。
 
-        连续调制的核心：注入强度不再只影响“是否放电”，
-        还影响放电后向下游传播的量（gain × conn.weight）。
-        没有 gain，脉冲模型是二元的——连续强度会在第一步传播后丢弃，
-        这是 SNN 无法表达“具体多大/多急”的架构根源。
+        连续调制的核心:注入强度不再只影响"是否放电",
+        还影响放电后向下游传播的量(gain × conn.weight)。
+        没有 gain,脉冲模型是二元的--连续强度会在第一步传播后丢弃,
+        这是 SNN 无法表达"具体多大/多急"的架构根源。
         """
         self.gain = max(0.0, float(gain))
 
@@ -78,7 +78,7 @@ class Neuron:
         self.membrane *= self.decay  # 衰减
 
     def update_firing(self, t: int, inhibitory_input: float = 0.0):
-        """更新激活状态，返回是否激活"""
+        """更新激活状态,返回是否激活"""
         self.is_firing = False
         if self.refractory_until > t:
             return False
@@ -89,9 +89,9 @@ class Neuron:
             self.refractory_until = t + self.refractory
             self.last_fire_time = t
             self.fire_count += 1
-            # 放电后清零膜电位，但保留 gain：
-            # gain 是传播增益（本步刚放电，下游将在后续步收到 gain×weight），
-            # 若在此清零，连续强度会在传播前丢失——脉冲模型退化为二元。
+            # 放电后清零膜电位,但保留 gain:
+            # gain 是传播增益(本步刚放电,下游将在后续步收到 gain×weight),
+            # 若在此清零,连续强度会在传播前丢失--脉冲模型退化为二元。
             self.membrane = 0.0
             return True
         return False
@@ -103,7 +103,7 @@ class Connection:
     """神经元之间的有向连接"""
     source: int      # 源神经元
     target: int      # 目标神经元
-    weight: float = 1.0   # 权重（正=兴奋，负=抑制）
+    weight: float = 1.0   # 权重(正=兴奋,负=抑制)
     delay: int = 1        # 延迟步数
 
     def to_dict(self) -> dict:
@@ -117,7 +117,7 @@ class Connection:
 class SNN:
     """脉冲神经网络
 
-    用法：
+    用法:
         net = SNN(num_neurons=10)
         net.add_neuron(0, NeuronType.INPUT)
         net.add_neuron(9, NeuronType.OUTPUT, threshold=0.5)
@@ -128,7 +128,7 @@ class SNN:
             outputs = net.step()
     """
 
-    TOPOLOGY_VERSION = 2  # v2: 输入层 0-15（信号类型+紧急度+金额分桶+详情）
+    TOPOLOGY_VERSION = 2  # v2: 输入层 0-15(信号类型+紧急度+金额分桶+详情)
 
     def __init__(self, num_neurons: int = 50):
         self.num_neurons = num_neurons
@@ -148,7 +148,7 @@ class SNN:
         self.weight_decay: float = 0.0  # 全局权重衰减
         self.max_weight: float = 3.0
 
-        # 输出历史（用于 Hebbian 回溯）
+        # 输出历史(用于 Hebbian 回溯)
         self._fire_history: dict[int, list[int]] = defaultdict(list)
         self.history_window: int = 20  # 回溯窗口步数
 
@@ -159,7 +159,7 @@ class SNN:
 
     def add_neuron(self, neuron_id: int, ntype: NeuronType = NeuronType.EXCITATORY,
                    threshold: float = 1.0, decay: float = 0.95) -> Neuron:
-        """添加一个神经元（结构可塑：增加）"""
+        """添加一个神经元(结构可塑:增加)"""
         if neuron_id >= self.num_neurons:
             self.num_neurons = neuron_id + 1
             while len(self.neurons) <= neuron_id:
@@ -171,7 +171,7 @@ class SNN:
         return n
 
     def remove_neuron(self, neuron_id: int) -> bool:
-        """移除神经元（结构可塑：减少）"""
+        """移除神经元(结构可塑:减少)"""
         if neuron_id >= self.num_neurons or neuron_id < 0:
             return False
         n = self.neurons[neuron_id]
@@ -207,7 +207,7 @@ class SNN:
         return False
 
     def set_delay(self, source: int, target: int, delay: int) -> bool:
-        """修改连接延迟（路径长短调节）"""
+        """修改连接延迟(路径长短调节)"""
         if source < 0 or source >= self.num_neurons:
             return False
         if target < 0 or target >= self.num_neurons:
@@ -233,7 +233,7 @@ class SNN:
     # ── 输入输出 ─────────────────────────────────────────────
 
     def reset(self):
-        """重置所有神经元状态和待传播事件（用于训练后验证）"""
+        """重置所有神经元状态和待传播事件(用于训练后验证)"""
         for n in self.neurons:
             n.reset_state()
         self._pending_events.clear()
@@ -243,7 +243,7 @@ class SNN:
         self._fire_history.clear()
 
     def inject_input(self, neuron_id: int, strength: float = 1.0):
-        """注入外部输入到指定神经元（增益中性，不改变传播增益）"""
+        """注入外部输入到指定神经元(增益中性,不改变传播增益)"""
         if neuron_id < 0 or neuron_id >= self.num_neurons:
             return
         self.neurons[neuron_id].membrane += strength
@@ -254,14 +254,14 @@ class SNN:
             self.inject_input(nid, strength)
 
     def inject_weighted(self, weights: Dict[int, float]) -> None:
-        """按神经元独立强度注入（连续感知向量的输入方式）。
+        """按神经元独立强度注入(连续感知向量的输入方式)。
 
-        与 inject_pattern 的区别：每个神经元有自己的强度，
-        支持连续感知特征（如情感维度 0.0-1.0）按实际强度调制输入，
+        与 inject_pattern 的区别:每个神经元有自己的强度,
+        支持连续感知特征(如情感维度 0.0-1.0)按实际强度调制输入,
         而不是统一 strength 的二元激活。
 
         Args:
-            weights: {neuron_id: 强度}，负值视为抑制性输入
+            weights: {neuron_id: 强度},负值视为抑制性输入
         """
         for nid, s in weights.items():
             if nid is None or s <= 0.0:
@@ -270,8 +270,8 @@ class SNN:
                 continue
             n = self.neurons[nid]
             n.membrane += float(s)
-            # 只有连续通道携带增益：档位槽保持 gain=1.0，
-            # 避免 AND 门（阈值 1.5）被额外增益打破
+            # 只有连续通道携带增益:档位槽保持 gain=1.0,
+            # 避免 AND 门(阈值 1.5)被额外增益打破
             n.set_gain(1.0 + max(0.0, float(s)) * 0.55)
 
     def get_outputs(self) -> dict[int, bool]:
@@ -302,23 +302,23 @@ class SNN:
     def step(self) -> dict[int, bool]:
         """推进一个时间步。
 
-        流程：
-        1. 处理到达的事件（新信号累加到膜电位）
-        2. 检查激活（阈值判断）
+        流程:
+        1. 处理到达的事件(新信号累加到膜电位)
+        2. 检查激活(阈值判断)
         3. 传播新激活信号到出边
         4. Hebbian 学习更新权重
-        5. 膜电位衰减（为下一步准备）
+        5. 膜电位衰减(为下一步准备)
         6. 记录历史
 
-        关键顺序：事件先于衰减，确保新注入的信号以完整强度参与激活判断。
-        衰减在最后执行，削弱旧信号但不影响本步刚到达的信号。
+        关键顺序:事件先于衰减,确保新注入的信号以完整强度参与激活判断。
+        衰减在最后执行,削弱旧信号但不影响本步刚到达的信号。
 
-        返回：当前步的输出状态 {neuron_id: is_firing}
+        返回:当前步的输出状态 {neuron_id: is_firing}
         """
         self.time += 1
         t = self.time
 
-        # 1. 处理到达的事件（新信号累加）
+        # 1. 处理到达的事件(新信号累加)
         arrived = []
         while self._pending_events and self._pending_events[0][0] <= t:
             arrived.append(heapq.heappop(self._pending_events))
@@ -343,9 +343,9 @@ class SNN:
                 fired_this_step.add(n.id)
 
         # 3. 传播新激活信号
-        # 连续调制：传播量 = gain × conn.weight
-        # gain 承载注入强度（档位槽 gain=1.0 不变；连续通道 gain>1），
-        # 否则连续强度会在第一步传播后丢弃——脉冲模型退化为二元。
+        # 连续调制:传播量 = gain × conn.weight
+        # gain 承载注入强度(档位槽 gain=1.0 不变;连续通道 gain>1),
+        # 否则连续强度会在第一步传播后丢弃--脉冲模型退化为二元。
         for n_id in fired_this_step:
             n = self.neurons[n_id]
             gain = n.gain
@@ -353,15 +353,15 @@ class SNN:
                 arrive_time = t + conn.delay
                 eff_weight = conn.weight * gain
                 heapq.heappush(self._pending_events, (arrive_time, n_id, tgt, eff_weight))
-            # 传播完成后立即清零增益：gain 只对本次放电有效，
-            # 不清零会在后续时间步残留，造成跨步放大（学习漂移）
+            # 传播完成后立即清零增益:gain 只对本次放电有效,
+            # 不清零会在后续时间步残留,造成跨步放大(学习漂移)
             n.gain = 1.0
 
-        # 4. Hebbian 学习（仅在学习启用时；推理/sense 时禁用防意外削弱）
+        # 4. Hebbian 学习(仅在学习启用时;推理/sense 时禁用防意外削弱)
         if self.enable_hebbian:
             self._hebbian_update(t, fired_this_step)
 
-        # 5. 膜电位衰减（本步结束后，旧信号消退）
+        # 5. 膜电位衰减(本步结束后,旧信号消退)
         for n in self.neurons:
             n.step(t)
 
@@ -378,11 +378,11 @@ class SNN:
     def _hebbian_update(self, t: int, fired_now: set[int]):
         """STDP (Spike-Timing-Dependent Plasticity) 学习
 
-        在目标神经元激活时检查：源神经元是否在延迟窗口内先激活过？
+        在目标神经元激活时检查:源神经元是否在延迟窗口内先激活过?
 
-        规则：
-        - 目标激活，且源在 delay+2 窗口内先激活 → LTP（加强）
-        - 目标激活，但源太久没激活 → LTD（减弱）
+        规则:
+        - 目标激活,且源在 delay+2 窗口内先激活 → LTP(加强)
+        - 目标激活,但源太久没激活 → LTD(减弱)
         - 全局 weight decay 防止权重爆炸
         """
         for target_id in fired_now:
@@ -396,19 +396,19 @@ class SNN:
                 if src_fire_t >= 0 and tgt_fire_t > src_fire_t:
                     gap = tgt_fire_t - src_fire_t
                     if gap <= conn.delay + 2:
-                        # STDP LTP：源先激活，目标在窗口内跟随
+                        # STDP LTP:源先激活,目标在窗口内跟随
                         conn.weight = min(
                             self.max_weight,
                             conn.weight + self.eta_plus,
                         )
                     else:
-                        # 源太久没激活，目标自行激活 → 减弱
+                        # 源太久没激活,目标自行激活 → 减弱
                         conn.weight = max(0, conn.weight - self.eta_minus)
                 elif src_fire_t >= 0:
-                    # 源激活过但目标先激活（异常）→ 减弱
+                    # 源激活过但目标先激活(异常)→ 减弱
                     conn.weight = max(0, conn.weight - self.eta_minus)
 
-        # 全局权重衰减（防止权重爆炸）
+        # 全局权重衰减(防止权重爆炸)
         if self.weight_decay > 0:
             for src in list(self.out_edges.keys()):
                 for tgt, conn in list(self.out_edges[src].items()):
@@ -417,9 +417,9 @@ class SNN:
     # ── 高级接口 ─────────────────────────────────────────────
 
     def run(self, steps: int = 100, input_fn=None) -> list[dict[int, bool]]:
-        """运行多个时间步，返回每步的输出。
+        """运行多个时间步,返回每步的输出。
 
-        input_fn: callable(t, snn) -> None，每步开始前调用以注入输入
+        input_fn: callable(t, snn) -> None,每步开始前调用以注入输入
         """
         outputs_history = []
         for t in range(steps):
@@ -431,7 +431,7 @@ class SNN:
     def train_hebbian(self, pattern: list[int], steps: int = 50, strength: float = 1.0):
         """用 Hebbian 方式训练一个输入模式到输出。
 
-        反复注入 pattern，让神经元之间建立同步放电模式。
+        反复注入 pattern,让神经元之间建立同步放电模式。
         """
         for t in range(steps):
             self.inject_pattern(pattern, strength)
@@ -439,26 +439,26 @@ class SNN:
 
     def train_by_association(self, input_pattern: list[int],
                             output_neuron: int, steps: int = 50):
-        """奖励调制 Hebbian 训练：建立输入模式 -> 输出关联。
+        """奖励调制 Hebbian 训练:建立输入模式 -> 输出关联。
 
-        两阶段时序：
-        1. 注入输入模式 → 输入神经元激活（t 步）
-        2. 注入奖励信号 → 输出神经元激活（t+1 步）
-        3. 奖励调制 STDP：回溯先激活的源，加强/创建到目标的连接
+        两阶段时序:
+        1. 注入输入模式 → 输入神经元激活(t 步)
+        2. 注入奖励信号 → 输出神经元激活(t+1 步)
+        3. 奖励调制 STDP:回溯先激活的源,加强/创建到目标的连接
 
-        时序分离是关键——STDP 需要源先于目标激活才能识别因果关系。
-        效果：训练后输入模式无需奖励即可激活输出。
+        时序分离是关键--STDP 需要源先于目标激活才能识别因果关系。
+        效果:训练后输入模式无需奖励即可激活输出。
         """
         for _ in range(steps):
-            # 阶段1：注入输入模式，激活输入神经元
+            # 阶段1:注入输入模式,激活输入神经元
             self.inject_pattern(input_pattern, 1.5)
             self.step()
 
-            # 阶段2：注入奖励信号，激活输出神经元
+            # 阶段2:注入奖励信号,激活输出神经元
             self.inject_input(output_neuron, 2.0)
             outputs = self.step()
 
-            # 阶段3：奖励调制——加强所有先激活的源到目标的连接
+            # 阶段3:奖励调制--加强所有先激活的源到目标的连接
             if outputs.get(output_neuron, False):
                 self._reward_modulated_strengthen(
                     output_neuron, eta=0.05,
@@ -470,20 +470,20 @@ class SNN:
                                      auto_create_weight: float = 0.1,
                                      restrict_to_hidden: bool = False,
                                      cap_weight: Optional[float] = None):
-        """奖励调制加强：回溯所有先激活的神经元，加强到目标的连接。
+        """奖励调制加强:回溯所有先激活的神经元,加强到目标的连接。
 
-        类比：动物大脑中多巴胺奖励机制——当结果被奖励时，
+        类比:动物大脑中多巴胺奖励机制--当结果被奖励时,
         所有先于结果发生的活动都得到加强。
 
         Args:
             target_id: 被奖励的目标神经元 ID
             eta: 每次加强的权重增量
-            auto_create: 是否允许创建新的连接（突触发生）
+            auto_create: 是否允许创建新的连接(突触发生)
             auto_create_weight: 新连接的初始权重
-            restrict_to_hidden: 仅加强/创建隐藏层(16-31)→目标连接，
-                不碰输入神经元→输出直连（避免非选择性直连，LTD 实验教训）
-            cap_weight: 连接权重上限（默认 max_weight=3.0；动态输出用较低
-                上限避免劫持共享路径，如 1.5）
+            restrict_to_hidden: 仅加强/创建隐藏层(16-31)→目标连接,
+                不碰输入神经元→输出直连(避免非选择性直连,LTD 实验教训)
+            cap_weight: 连接权重上限(默认 max_weight=3.0;动态输出用较低
+                上限避免劫持共享路径,如 1.5)
         """
         cap = cap_weight if cap_weight is not None else self.max_weight
         tgt_neuron = self.neurons[target_id]
@@ -496,24 +496,24 @@ class SNN:
             if n.id == target_id:
                 continue
             if n.last_fire_time >= 0 and n.last_fire_time < tgt_fire_t:
-                # 限制只处理隐藏层源（避免输入→输出非选择性直连）
+                # 限制只处理隐藏层源(避免输入→输出非选择性直连)
                 if restrict_to_hidden and not (16 <= n.id < 32):
                     continue
-                # 源先激活，目标后被奖励 → 因果关系成立
+                # 源先激活,目标后被奖励 → 因果关系成立
                 conn = self.out_edges.get(n.id, {}).get(target_id)
                 if conn:
                     old_w = conn.weight
                     conn.weight = min(cap, conn.weight + eta)
                     strengthened += 1
                 elif auto_create:
-                    # 突触发生：创建新的直接连接
+                    # 突触发生:创建新的直接连接
                     self.connect(n.id, target_id, weight=auto_create_weight, delay=1)
                     strengthened += 1
 
-                # LTD 实验结论：竞争性 LTD 在当前架构下反效果。
-                # auto_create 的 input→output 直连是非选择性通道，
-                # LTD 削弱 hidden→output 后只剩非选择性直连，准确率暴减。
-                # 解决方案待定：需 winner-take-all 隐藏层或竞争性学习机制。
+                # LTD 实验结论:竞争性 LTD 在当前架构下反效果。
+                # auto_create 的 input→output 直连是非选择性通道,
+                # LTD 削弱 hidden→output 后只剩非选择性直连,准确率暴减。
+                # 解决方案待定:需 winner-take-all 隐藏层或竞争性学习机制。
 
         return strengthened
 
@@ -523,12 +523,12 @@ class SNN:
 
     # EWC (Elastic Weight Consolidation) 参数
     EWC_ALPHA = 100.0       # 重要性权重系数
-    EWC_IMPORTANCE_DECAY = 0.99  # 重要性衰减（防止全部饱和）
+    EWC_IMPORTANCE_DECAY = 0.99  # 重要性衰减(防止全部饱和)
 
-    # 探索参数（混乱权利）
+    # 探索参数(混乱权利)
     EXPLORATION_BASE_RATE = 0.1   # 基础探索率 10%
-    EXPLORATION_DECAY = 0.95      # 稳定性衰减（连续正确决策后探索率降低）
-    EXPLORATION_BOOST = 0.3       # 边界探测增强率（决策翻转时提升探索率）
+    EXPLORATION_DECAY = 0.95      # 稳定性衰减(连续正确决策后探索率降低)
+    EXPLORATION_BOOST = 0.3       # 边界探测增强率(决策翻转时提升探索率)
 
     def __init__(self, num_neurons: int = 50):
         self.num_neurons = num_neurons
@@ -547,10 +547,10 @@ class SNN:
         self.eta_minus: float = 0.05 # 不同步减弱率
         self.weight_decay: float = 0.0  # 全局权重衰减
         self.max_weight: float = 3.0
-        # Hebbian 学习开关：推理（sense）时禁用，防止意外削弱权重
+        # Hebbian 学习开关:推理(sense)时禁用,防止意外削弱权重
         self.enable_hebbian: bool = True
 
-        # 输出历史（用于 Hebbian 回溯）
+        # 输出历史(用于 Hebbian 回溯)
         self._fire_history: dict[int, list[int]] = defaultdict(list)
         self.history_window: int = 20  # 回溯窗口步数
 
@@ -565,7 +565,7 @@ class SNN:
         self._recent_decisions: list[bool] = []  # True=正确, False=错误
 
     def reset(self):
-        """重置所有神经元状态和待传播事件（用于训练后验证）"""
+        """重置所有神经元状态和待传播事件(用于训练后验证)"""
         for n in self.neurons:
             n.reset_state()
         self._pending_events.clear()
@@ -575,28 +575,28 @@ class SNN:
         self._fire_history.clear()
 
     def reset_learning_state(self):
-        """重置学习状态（不重置网络权重）。用于推理前清理。
+        """重置学习状态(不重置网络权重)。用于推理前清理。
 
-        与 reset() 不同：保留权重和 EWC 重要性，只清理事件队列和神经元状态。
-        这样学习历史可以跨推理保留，实现真正的持续学习。
+        与 reset() 不同:保留权重和 EWC 重要性,只清理事件队列和神经元状态。
+        这样学习历史可以跨推理保留,实现真正的持续学习。
         """
         for n in self.neurons:
             n.reset_state()
         self._pending_events.clear()
         self._inhibitory_inputs.clear()
         self._fire_history.clear()
-        # 不清空 time，让学习计数器继续累积
+        # 不清空 time,让学习计数器继续累积
 
     # ── EWC (Elastic Weight Consolidation) ────────────────────
 
     def _update_ewc_importance(self, fired_neurons: set[int]):
-        """更新权重重要性（EWC 核心）。
+        """更新权重重要性(EWC 核心)。
 
-        重要权重：被频繁激活的神经元参与的连接
-        重要性高的权重在后续学习中更新率降低，防止灾难性遗忘
+        重要权重:被频繁激活的神经元参与的连接
+        重要性高的权重在后续学习中更新率降低,防止灾难性遗忘
         """
         for n_id in fired_neurons:
-            # 出边重要性（该神经元的输出连接）
+            # 出边重要性(该神经元的输出连接)
             for tgt, conn in self.out_edges.get(n_id, {}).items():
                 key = (n_id, tgt)
                 self._ewc_importance[key] = min(
@@ -607,20 +607,20 @@ class SNN:
     def _get_ewc_multiplier(self, src: int, tgt: int) -> float:
         """获取 EWC 学习率乘数。
 
-        重要性越高，乘数越小（学习越慢）
-        重要性 0 → 乘数 1.0（正常学习）
-        重要性 10 → 乘数 0.1（强烈保护）
+        重要性越高,乘数越小(学习越慢)
+        重要性 0 → 乘数 1.0(正常学习)
+        重要性 10 → 乘数 0.1(强烈保护)
         """
         importance = self._ewc_importance.get((src, tgt), 0.0)
         return 1.0 / (1.0 + self.EWC_ALPHA * importance)
 
-    # ── 探索机制（混乱权利）────────────────────────────────
+    # ── 探索机制(混乱权利)────────────────────────────────
 
     def _adjust_exploration_rate(self, decision_was_correct: bool):
         """自动调节探索率。
 
         决策正确 → 稳定性提升 → 探索率衰减
-        决策错误/翻转 → 探索率提升（边界探测增强）
+        决策错误/翻转 → 探索率提升(边界探测增强)
         """
         if decision_was_correct:
             self._consecutive_correct += 1
@@ -634,24 +634,24 @@ class SNN:
                 self._exploration_rate + self.EXPLORATION_BOOST
             )
 
-        # 底线保护：探索率不低于 2%
+        # 底线保护:探索率不低于 2%
         self._exploration_rate = max(0.02, self._exploration_rate)
 
     def _explore(self, active_neurons: list[int]) -> bool:
-        """执行一次探索：随机扰动一条边，看决策是否翻转。
+        """执行一次探索:随机扰动一条边,看决策是否翻转。
 
-        返回 True 表示探索成功（发现了边界模式）
+        返回 True 表示探索成功(发现了边界模式)
 
-        探索方式：
+        探索方式:
         1. 随机选择一个已激活的隐藏神经元
         2. 随机抑制或增强其一条出边
-        3. 重新前向传播，观察输出是否变化
-        4. 如果输出翻转 → 边界模式，增强该连接的权重
+        3. 重新前向传播,观察输出是否变化
+        4. 如果输出翻转 → 边界模式,增强该连接的权重
         """
         if random.random() >= self._exploration_rate:
             return False
 
-        # 选择活跃的隐藏层神经元（16-31）
+        # 选择活跃的隐藏层神经元(16-31)
         hidden_active = [n for n in active_neurons if 16 <= n < 32]
         if not hidden_active:
             return False
@@ -666,14 +666,14 @@ class SNN:
         tgt, conn = random.choice(out_conns)
         original_weight = conn.weight
 
-        # 随机扰动：抑制或增强
+        # 随机扰动:抑制或增强
         if random.random() < 0.5:
             conn.weight *= 0.3  # 抑制
         else:
             conn.weight = min(self.max_weight, conn.weight * 2.0)  # 增强
 
-        # 重新前向传播（简化版：只看输出层）
-        # 注：完整重放成本高，这里用启发式：检查扰动后的有效输入
+        # 重新前向传播(简化版:只看输出层)
+        # 注:完整重放成本高,这里用启发式:检查扰动后的有效输入
         effective_input = sum(
             c.weight for c in self.out_edges.get(probe_neuron, {}).values()
         )
@@ -681,10 +681,10 @@ class SNN:
         # 恢复原始权重
         conn.weight = original_weight
 
-        # 如果有效输入接近输出阈值 → 边界模式，增强连接
+        # 如果有效输入接近输出阈值 → 边界模式,增强连接
         output_neuron = self.neurons[tgt]
         if abs(effective_input - output_neuron.threshold) < 0.5:
-            # 边界模式：增强这条边的权重
+            # 边界模式:增强这条边的权重
             conn.weight = min(self.max_weight, conn.weight + 0.1)
             return True
 
@@ -698,6 +698,7 @@ class SNN:
         strength: float = 1.5,
         expected_decision: Optional[int] = None,
         weights: Optional[Dict[int, float]] = None,
+        sustain_weights: Optional[Dict[int, float]] = None,
     ) -> tuple[dict[int, bool], bool]:
         """融合推理+微学习的单步计算。
 
@@ -714,6 +715,10 @@ class SNN:
             expected_decision: 期望的输出神经元 ID（用于反馈学习，可选）
             weights: {neuron_id: 连续强度}，按神经元独立调制输入；
                 未包含的输入神经元回退到统一 strength
+            sustain_weights: 连续通道每步持续注入的强度（速率编码）。
+                感觉输入在生物中是持续存在的（刺激持续→感受器持续放电），
+                一次性注入会让强度在传播后立即衰减——速率编码要求每步重新注入。
+                仅连续通道神经元（200/201 等）应被持续注入，档位槽保持一次性。
 
         Returns:
             (outputs, boundary_detected)
@@ -725,7 +730,7 @@ class SNN:
 
         # 注入输入：档位槽与连续通道分离
         # - 档位槽：统一 strength，gain 保持 1.0（不扰动 AND 门阈值算术）
-        # - 连续通道：独立强度 + 传播增益（编码"具体多大/多急"）
+        # - 连续通道：独立强度 + 传播增益（编码“具体多大/多急”）
         for nid in input_neurons:
             if nid < 0 or nid >= self.num_neurons:
                 continue
@@ -739,6 +744,10 @@ class SNN:
 
         # 运行多个时间步（信号需要传播）
         for step in range(10):
+            # 速率编码：每步重新注入连续通道（感觉输入持续存在）
+            # 但只在第一拍之后注入（首拍已有 inject_weighted），避免双倍叠加
+            if sustain_weights and step > 0:
+                self.inject_weighted(sustain_weights)
             outputs = self.step()
             active = self.get_active_neurons()
 
@@ -756,7 +765,7 @@ class SNN:
         active = self.get_active_neurons()
         self._update_ewc_importance(set(active))
 
-        # 2. 如果有反馈，进行强化学习
+        # 2. 如果有反馈,进行强化学习
         if expected_decision is not None:
             actual_output = [nid for nid, v in outputs.items() if v]
             is_correct = expected_decision in actual_output
@@ -770,7 +779,7 @@ class SNN:
             if len(self._recent_decisions) > 100:
                 self._recent_decisions.pop(0)
 
-            # 微学习：加强正确路径，削弱错误路径
+            # 微学习:加强正确路径,削弱错误路径
             self._micro_learn(expected_decision, actual_output, is_correct, active)
 
         return outputs, boundary_detected
@@ -782,28 +791,28 @@ class SNN:
         is_correct: bool,
         active_neurons: list[int],
     ):
-        """微学习：根据推理结果微调权重。
+        """微学习:根据推理结果微调权重。
 
-        与 _reward_modulated_strengthen 的区别：
-        - 步长更小（η=0.001 vs 0.05）
-        - 不创建新连接（避免破坏拓扑）
+        与 _reward_modulated_strengthen 的区别:
+        - 步长更小(η=0.001 vs 0.05)
+        - 不创建新连接(避免破坏拓扑)
         - EWC 保护重要权重
         """
         micro_eta = 0.001  # 微学习步长
 
         if is_correct:
-            # 正确：加强目标输出的入边
+            # 正确:加强目标输出的入边
             for src_id in active_neurons:
                 conn = self.out_edges.get(src_id, {}).get(target_output)
                 if conn and conn.weight > 0:
-                    # EWC 保护：重要权重学习更慢
+                    # EWC 保护:重要权重学习更慢
                     ewc_mult = self._get_ewc_multiplier(src_id, target_output)
                     conn.weight = min(
                         self.max_weight,
                         conn.weight + micro_eta * ewc_mult
                     )
         else:
-            # 错误：削弱实际输出（非目标）的入边
+            # 错误:削弱实际输出(非目标)的入边
             for wrong_out in actual_outputs:
                 if wrong_out == target_output:
                     continue
@@ -817,7 +826,7 @@ class SNN:
                             conn.weight - micro_eta * ewc_mult
                         )
 
-            # 同时轻微加强目标输出（即使错误，也要尝试靠近正确方向）
+            # 同时轻微加强目标输出(即使错误,也要尝试靠近正确方向)
             for src_id in active_neurons:
                 conn = self.out_edges.get(src_id, {}).get(target_output)
                 if conn:
@@ -932,18 +941,18 @@ class SNN:
     @classmethod
     def create_default(cls, seed: int = 7) -> "SNN":
         random.seed(seed)
-        """创建 Brain AI 默认拓扑（v2）。
+        """创建 Brain AI 默认拓扑(v2)。
 
-        三层结构：
+        三层结构:
         - 输入层 (0-15): 信号类型 0-10 + 紧急度高 11 + 金额分桶 12-14 + 有详情 15
         - 隐藏层 (16-31): 计算模式 16-27 + 抑制调节 28-31
-        - 输出层 (32-37): 6 种决策类型（ID 保持不变，兼容既有映射）
+        - 输出层 (32-37): 6 种决策类型(ID 保持不变,兼容既有映射)
 
-        设计原则：
-        - 信号类型与 payload 特征（金额/详情）共同编码输入，
+        设计原则:
+        - 信号类型与 payload 特征(金额/详情)共同编码输入,
           使同类型信号可按 payload 区分
-          （如 approval_pending 小额 -> flag / 大额 -> escalate）
-        - 隐藏层做交叉关联；抑制层抑制误触发的决策输出
+          (如 approval_pending 小额 -> flag / 大额 -> escalate)
+        - 隐藏层做交叉关联;抑制层抑制误触发的决策输出
         """
         net = cls(num_neurons=40)
 
@@ -970,8 +979,8 @@ class SNN:
         for name, nid in input_types:
             net.add_neuron(nid, NeuronType.INPUT, threshold=0.5)
 
-        # 隐藏层：计算(16-27) + 抑制(28-31)
-        # 多输入隐藏神经元用高阈值(1.5)实现 AND 逻辑，单输入用低阈值(0.8)
+        # 隐藏层:计算(16-27) + 抑制(28-31)
+        # 多输入隐藏神经元用高阈值(1.5)实现 AND 逻辑,单输入用低阈值(0.8)
         multi_input_threshold = 1.5  # 需要至少2个输入(0.9+0.9=1.8)才触发
         single_input_threshold = 0.8  # 单个输入(0.9)即可触发
         multi_input_ids = {16, 17, 18, 19, 20, 21, 26, 27}  # 有2+ structured inputs
@@ -982,7 +991,7 @@ class SNN:
         for nid in range(28, 32):
             net.add_neuron(nid, NeuronType.INHIBITORY, threshold=1.0)
 
-        # 输出层：决策类型
+        # 输出层:决策类型
         output_types = [
             ("auto_approve", 32),
             ("reject", 33),
@@ -994,8 +1003,8 @@ class SNN:
         for name, nid in output_types:
             net.add_neuron(nid, NeuronType.OUTPUT, threshold=1.0)
 
-        # 结构化隐藏层：每个神经元专检一个 (signal_type, amount_bucket) 组合
-        # 这样只有匹配的隐藏神经元才放电，提供组合特征选择性
+        # 结构化隐藏层:每个神经元专检一个 (signal_type, amount_bucket) 组合
+        # 这样只有匹配的隐藏神经元才放电,提供组合特征选择性
         # H16: expense + low    → 32 (auto_approve)
         # H17: expense + medium → 34 (escalate)
         # H18: expense + high   → 34 (escalate)
@@ -1008,7 +1017,7 @@ class SNN:
         # H25: chitchat         → 37 (chat)
         # H26: threshold_breach + high → 34 (escalate)
         # H27: system           → 36 (no_action)
-        # 注：noise 无专用计算神经元——NOISE intent 下 SNN 已禁用（compute_budget）
+        # 注:noise 无专用计算神经元--NOISE intent 下 SNN 已禁用(compute_budget)
         structured = [
             # (hid_id, [input_ids], [output_ids], out_weight)
             # out_weight > output threshold (1.0) to ensure single hidden neuron can activate output
@@ -1032,20 +1041,20 @@ class SNN:
                 net.connect(hid_id, out_id, weight=w, delay=1)
 
         # ── 补充缺失输入神经元出边 ────────────────────────────
-        # 高紧急度(11)放大 escalate 路径（与信号类型 AND 组合，阈值仍保持选择性）
+        # 高紧急度(11)放大 escalate 路径(与信号类型 AND 组合,阈值仍保持选择性)
         _escalate_hidden = {17, 18, 20, 21, 26}
         for inp_id in (4, 5, 11):
             for hid_id in sorted(_escalate_hidden):
                 net.connect(inp_id, hid_id, weight=0.9, delay=1)
 
         # ── v3 消歧标记路由 ───────────────────────────────────
-        # 38 (ap_low_marker): ap+低紧急度 → auto_approve，抑制 flag 误触
+        # 38 (ap_low_marker): ap+低紧急度 → auto_approve,抑制 flag 误触
         net.connect(38, 32, weight=1.5, delay=1)
         net.connect(38, 19, weight=-0.6, delay=1)
         # 39 (user_action_marker): user_request 带动作关键词 → escalate
         net.connect(39, 17, weight=0.9, delay=1)
         net.connect(3, 17, weight=0.9, delay=1)
-        # H19 阈值提升到 1.8（需 1+12 双输入 1.8 才 flag，38 抑制时 1.8-0.6=1.2 不触发）
+        # H19 阈值提升到 1.8(需 1+12 双输入 1.8 才 flag,38 抑制时 1.8-0.6=1.2 不触发)
         net.neurons[19].threshold = 1.8
         # ap 低紧急度直连 auto_approve 辅助路径
         net.connect(1, 32, weight=0.6, delay=1)
@@ -1053,9 +1062,9 @@ class SNN:
         # threshold_breach + 低紧急度 → auto_approve
         net.connect(2, 32, weight=1.5, delay=1)
 
-        # 无随机补充连接——避免非选择性激活
+        # 无随机补充连接--避免非选择性激活
 
-        # 抑制层 -> 输出层（抑制性）
+        # 抑制层 -> 输出层(抑制性)
         for inh_id in range(28, 32):
             for out_id in range(32, 38):
                 if random.random() < 0.3:

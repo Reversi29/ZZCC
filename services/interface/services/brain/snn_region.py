@@ -1,31 +1,31 @@
-"""services/brain/snn_region.py — SNN 脑区适配器
+"""services/brain/snn_region.py - SNN 脑区适配器
 
-将 NeuralSignal 编码为 SNN 输入模式，执行 SNN 持续学习推理，将输出解码为 CognitionResult。
+将 NeuralSignal 编码为 SNN 输入模式,执行 SNN 持续学习推理,将输出解码为 CognitionResult。
 
-架构位置：
+架构位置:
     ReasoningEngine._register_regions()
         → snn_region(signal, context, budget) → RegionResult
             → SNN.step_with_learning() → 融合推理+微学习+探索
-            → 决策日志自动记录（JSONL）
+            → 决策日志自动记录(JSONL)
             → 解码为 CognitionResult
 
-持续学习：
-    - 每个信号既是推理输入也是训练数据（在线学习）
-    - EWC 防灾难性遗忘（重要权重保护）
-    - 探索机制（混乱权利：随机扰动发现边界模式）
-    - 自动调节探索率（稳定性↑→探索率↓，错误→探索率↑）
+持续学习:
+    - 每个信号既是推理输入也是训练数据(在线学习)
+    - EWC 防灾难性遗忘(重要权重保护)
+    - 探索机制(混乱权利:随机扰动发现边界模式)
+    - 自动调节探索率(稳定性↑→探索率↓,错误→探索率↑)
 
-概率涌现：
-    - SNN 输出布尔值，不直接暴露概率
+概率涌现:
+    - SNN 输出布尔值,不直接暴露概率
     - 决策日志累积后查询 → 事后统计概率分布
     - 相同模式多次决策 → 准确率自然形成概率
 
-反馈学习：
-    /brain/learn → 反馈标注 → 微学习（不是批量训练）
+反馈学习:
+    /brain/learn → 反馈标注 → 微学习(不是批量训练)
 
-持久化：
-    SNN.save()/load() → JSON 文件（brain_config_dir/snn_network.json）
-    决策日志 → JSONL 文件（brain_config_dir/snn_decision_log.jsonl）
+持久化:
+    SNN.save()/load() → JSON 文件(brain_config_dir/snn_network.json)
+    决策日志 → JSONL 文件(brain_config_dir/snn_decision_log.jsonl)
 """
 from __future__ import annotations
 
@@ -86,13 +86,13 @@ _OUTPUT_DECISION = {
 
 # ── 紧急度 → 输入神经元映射 ─────────────────────────────────
 def _urgency_neuron(urgency: int) -> Optional[int]:
-    """紧急度 0-100 → 输入神经元 11（高位标记）"""
+    """紧急度 0-100 → 输入神经元 11(高位标记)"""
     if urgency >= 70:
         return 11
     return None
 
 
-# ── payload 特征 → 输入神经元映射（v2） ─────────────────────
+# ── payload 特征 → 输入神经元映射(v2) ─────────────────────
 _AMOUNT_LOW_MAX = 1000.0       # 金额 ≤ 此值 → amount_low (neuron 12)
 _AMOUNT_HIGH_MIN = 100000.0    # 金额 > 此值 → amount_high (neuron 14)
 _DETAIL_KEYS = (
@@ -100,37 +100,41 @@ _DETAIL_KEYS = (
     "content", "remark", "summary", "reason", "question",
 )
 
-# ── 连续调制通道（v4：去硬编码，大小/紧急度不再只分档） ──────
-# 档位槽（12/13/14、11）仍保留二值激活，作为隐藏层 AND 门的条件；
-# 但连续强度另进专用槽（200=magnitude, 201=urgency_cont），
-# 让网络真正感知"具体多大/多急"，而非只有三档标签。
+# ── 连续调制通道(v4:去硬编码,大小/紧急度不再只分档) ──────
+# 档位槽(12/13/14、11)仍保留二值激活,作为隐藏层 AND 门的条件;
+# 但连续强度另进专用槽(200=magnitude, 201=urgency_cont),
+# 让网络真正感知"具体多大/多急",而非只有三档标签。
 _MAG_NEURON = 200            # 数值大小连续通道
-# ID 区规划：固定 0-39 + 动态输入槽 40-135 + 动态输出槽 100-195
-# → 200+ 为安全区，不与任何动态注册冲突
+# ID 区规划:固定 0-39 + 动态输入槽 40-135 + 动态输出槽 100-195
+# → 200+ 为安全区,不与任何动态注册冲突
 _URGENCY_CONT_NEURON = 201    # 紧急度连续通道
 _MAG_SATURATION = 200000.0   # 对数归一化饱和值
 
-# ── 连续通道独立中继子网（隔离硬编码层的污染）────────────────
-# 连续通道若直连既有隐藏层（阈值 1.5 的 AND 门），会额外抬高膜电位
-# 破坏档位选择——这是历史"架构天花板"的根源。
-# 改为：200/201 → 中继层 210-215（阈值 1.2，亚阈值调制）
-#       → 汇入既有层（权重 0.25，低于 AND 门阈值，只能微幅调制）
-#       中继不连输出层：_decode_output 会把中继分数计入所有输出，
+# ── 连续通道独立中继子网(隔离硬编码层的污染)────────────────
+# 连续通道若直连既有隐藏层(阈值 1.5 的 AND 门),会额外抬高膜电位
+# 破坏档位选择--这是历史"架构天花板"的根源。
+# 改为:200/201 → 中继层 210-215(阈值 1.2,亚阈值调制)
+#       → 汇入既有层(权重 0.25,低于 AND 门阈值,只能微幅调制)
+#       中继不连输出层:_decode_output 会把中继分数计入所有输出,
 #       破坏竞争比较。中继只调制隐藏层膜电位。
 _RELAY_START = 210
 _RELAY_COUNT = 6
-_RELAY_THRESHOLD = 1.2
-_RELAY_IN_WEIGHT = 0.4      # 200/201 → 中继（乘上 gain 后膜电位约 0.6-0.9，
-# 低于中继阈值 1.2，单通道不触发；膜电位随注入强度线性变化，可分辨）
-_RELAY_OUT_WEIGHT = 0.25    # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
-_RELAY_HIDDEN_TARGETS = (16, 17, 18, 19, 20, 21)  # 6 个档位组合隐藏神经元
+_RELAY_THRESHOLD = 0.95
+_RELAY_IN_WEIGHT = 0.4      # 200/201 → 中继(乘上 gain 后膜电位约 0.6-1.0,
+# 低于中继阈值 0.95,单通道不触发;膜电位随注入强度线性变化,可分辨)
+_RELAY_OUT_WEIGHT = 0.3    # 中继 → 既有隐藏层(亚阈值调制,不触发 AND 门)
+# 选择性投射:中继只连 escalate 相关隐藏层(17/18/20/21/26),
+# 而非无差别撒网 16-21。无差别撒网下任何放电都破坏 12/12
+# (实测阈值 0.95→8/12),选择性保持 12/12。
+# 生物上感觉中继(丘脑)选择性投射到语义相关皮层层,非无差别撒网。
+_RELAY_HIDDEN_TARGETS = (17, 18, 20, 21, 26)  # escalate 相关隐藏层
 
 
 def _normalize_magnitude(amount: float) -> float:
-    """金额/数值大小 → 0.0-1.0 连续值（对数缩放）。
+    """金额/数值大小 → 0.0-1.0 连续值(对数缩放)。
 
-    对数缩放贴近人类对数量级的感知（1000→10000 与 10000→100000
-    的心理差距相当），避免线性映射把小额区间压缩到 0。
+    对数缩放贴近人类对数量级的感知(1000→10000 与 10000→100000
+    的心理差距相当),避免线性映射把小额区间压缩到 0。
     """
     if amount <= 0:
         return 0.0
@@ -147,7 +151,7 @@ def _payload_features(payload: Any) -> tuple:
     if not isinstance(payload, dict):
         return None, False
 
-    # 金额提取：兼容 amount / price / value / total
+    # 金额提取:兼容 amount / price / value / total
     amount = payload.get("amount")
     if amount is None:
         amount = payload.get("price") or payload.get("value") or payload.get("total")
@@ -166,18 +170,18 @@ def _payload_features(payload: Any) -> tuple:
 
 
 class SNNRegion:
-    """SNN 脑区：脉冲神经网络推理。
+    """SNN 脑区:脉冲神经网络推理。
 
-    特性：
-    - 步进式计算（非真实时间延迟）
-    - 奖励调制 Hebbian 学习（从反馈标注中学习）
-    - 状态持久化（JSON 文件）
-    - 结构可塑（增删神经元/连接）
+    特性:
+    - 步进式计算(非真实时间延迟)
+    - 奖励调制 Hebbian 学习(从反馈标注中学习)
+    - 状态持久化(JSON 文件)
+    - 结构可塑(增删神经元/连接)
     """
 
     _OUTPUT_NEURONS = [32, 33, 34, 35, 36, 37]
 
-    # 推理步数：SNN 运行的最大时间步数
+    # 推理步数:SNN 运行的最大时间步数
     INFERENCE_STEPS = 10
 
     def __init__(self, save_path: Optional[str] = None):
@@ -214,30 +218,30 @@ class SNNRegion:
         # 决策日志路径
         self._decision_log_path = self.save_path.replace(".json", "_decision_log.jsonl")
 
-        # ── 通用输入/输出槽注册器（新类型有新槽）────────────
+        # ── 通用输入/输出槽注册器(新类型有新槽)────────────
         self.input_registry = InputRegistry()
         self.output_registry = OutputRegistry()
 
     def _register_signal_type(self, sig_type: str) -> int:
-        """注册信号类型到动态输入槽（新类型有新槽，不挤占旧槽）。
+        """注册信号类型到动态输入槽(新类型有新槽,不挤占旧槽)。
 
-        返回输入神经元 ID。新类型会分配新的输入神经元，并通过
-        探索连接（弱随机连接）接入隐藏层，靠 STDP/强化学习收敛。
+        返回输入神经元 ID。新类型会分配新的输入神经元,并通过
+        探索连接(弱随机连接)接入隐藏层,靠 STDP/强化学习收敛。
         """
         return self.input_registry.register(sig_type)
 
     # ── 编码/解码 ────────────────────────────────────────────
 
     def _encode_signal(self, signal: NeuralSignal) -> List[int]:
-        """将 NeuralSignal 编码为 SNN 输入神经元列表（v2：含 payload 特征）。
+        """将 NeuralSignal 编码为 SNN 输入神经元列表(v2:含 payload 特征)。
 
-        编码维度：
+        编码维度:
         - 信号类型 → neuron 0-10
         - 紧急度高 → neuron 11
         - 金额分桶 → neuron 12 (low) / 13 (medium) / 14 (high)
         - 有详情字段 → neuron 15
 
-        同类型信号可通过 payload 特征区分（如 approval_pending 小额→flag / 大额→escalate）。
+        同类型信号可通过 payload 特征区分(如 approval_pending 小额→flag / 大额→escalate)。
         """
         neurons: List[int] = []
         sig_type = (signal.type or "").lower()
@@ -245,8 +249,8 @@ class SNNRegion:
         if nid is not None:
             neurons.append(nid)
         else:
-            # 类型未映射到固定槽 → 动态注册新槽（新类型有新槽）
-            # 无论 payload 是否产生金额/详情特征，类型信息都必须保留
+            # 类型未映射到固定槽 → 动态注册新槽(新类型有新槽)
+            # 无论 payload 是否产生金额/详情特征,类型信息都必须保留
             dynamic_nid = self._ensure_dynamic_input_slot(sig_type)
             if dynamic_nid is not None:
                 neurons.append(dynamic_nid)
@@ -256,7 +260,7 @@ class SNNRegion:
         if u_neuron is not None:
             neurons.append(u_neuron)
 
-        # payload 特征编码（v2）
+        # payload 特征编码(v2)
         payload = signal.payload or {}
         amount_neuron, has_detail = _payload_features(payload)
         if amount_neuron is not None:
@@ -264,7 +268,7 @@ class SNNRegion:
         if has_detail:
             neurons.append(15)
 
-        # ── 专用标记神经元（v3 编码消歧） ──────────────────
+        # ── 专用标记神经元(v3 编码消歧) ──────────────────
         # approval_pending + 低紧急度(<40) → 38 (ap_low_marker) → auto_approve
         # user_request + 动作关键词 → 39 (user_action_marker) → escalate
         if sig_type == "approval_pending" and signal.urgency < 40:
@@ -275,12 +279,12 @@ class SNNRegion:
                    ("cancel", "order", "delete", "refund", "urgent", "escalate")):
                 neurons.append(39)
 
-        # 类型映射已在顶部处理：固定槽或动态注册槽
+        # 类型映射已在顶部处理:固定槽或动态注册槽
         return neurons or [10]  # 默认 noise
 
-    # ── 连续调制通道（v4） ─────────────────────────────────────
+    # ── 连续调制通道(v4) ─────────────────────────────────────
     def _has_edges(self, source: int) -> bool:
-        """判断神经元是否已有出边（SNN 内部用 out_edges 邻接表）。"""
+        """判断神经元是否已有出边(SNN 内部用 out_edges 邻接表)。"""
         out_edges = getattr(self.snn, "out_edges", None)
         if out_edges is None:
             return False
@@ -289,35 +293,35 @@ class SNNRegion:
     def _ensure_continuous_channels(self) -> None:
         """确保连续调制通道神经元存在并建立探索连接。
 
-        200 = magnitude（数值大小连续强度）
-        201 = urgency_cont（紧急度连续强度）
+        200 = magnitude(数值大小连续强度)
+        201 = urgency_cont(紧急度连续强度)
 
-        与档位槽（12/13/14、11）并存：档位槽保持二值激活，
-        继续作为隐藏层 AND 门（阈值 1.5）的条件；
-        连续通道承载"具体多大/多急"，靠 STDP 学权重。
+        与档位槽(12/13/14、11)并存:档位槽保持二值激活,
+        继续作为隐藏层 AND 门(阈值 1.5)的条件;
+        连续通道承载"具体多大/多急",靠 STDP 学权重。
         """
-        # 连续通道本身无出边（输入神经元），保证存在
+        # 连续通道本身无出边(输入神经元),保证存在
         for nid in (_MAG_NEURON, _URGENCY_CONT_NEURON):
             self._ensure_dynamic_neuron(nid, NeuronType.INPUT)
 
-        # 中继子网：隔离既有 AND 门，靠 STDP/反馈学习收敛
+        # 中继子网:隔离既有 AND 门,靠 STDP/反馈学习收敛
         for i in range(_RELAY_COUNT):
             rid = _RELAY_START + i
             self._ensure_dynamic_neuron(rid, NeuronType.EXCITATORY)
             if len(self.snn.out_edges.get(rid, ())) == 0:
-                # 中继 → 既有隐藏层（弱调制，不触发 AND 门）
+                # 中继 → 既有隐藏层(弱调制,不触发 AND 门)
                 for hid in _RELAY_HIDDEN_TARGETS:
                     if hid < self.snn.num_neurons:
                         self.snn.connect(rid, hid, weight=_RELAY_OUT_WEIGHT, delay=1)
-                        # 不连输出层：避免 _decode_output 把中继分数计入所有输出
-                # 破坏竞争比较（12 场景硬约束）。中继只调制隐藏层膜电位。
+                        # 不连输出层:避免 _decode_output 把中继分数计入所有输出
+                # 破坏竞争比较(12 场景硬约束)。中继只调制隐藏层膜电位。
                 # 设定中继阈值
                 self.snn.neurons[rid].threshold = _RELAY_THRESHOLD
 
         # 连续通道 → 各自专属中继层。
-        # 饱和控制：注入强度 × 权重 ≤ 中继阈值，膜电位随强度线性变化。
-        # 200(magnitude) 与 201(urgency_cont) 连到不相交的中继子集，
-        # 否则 201（urgency 普遍非零）会淹没 200 的连续差异——
+        # 饱和控制:注入强度 × 权重 ≤ 中继阈值,膜电位随强度线性变化。
+        # 200(magnitude) 与 201(urgency_cont) 连到不相交的中继子集,
+        # 否则 201(urgency 普遍非零)会淹没 200 的连续差异--
         # 这正是"300 与 900 元同膜电位"的饱和失真根因。
         _chan_to_relay = {
             _MAG_NEURON: range(_RELAY_START, _RELAY_START + 3),
@@ -332,17 +336,24 @@ class SNNRegion:
                     f"snn_region: continuous channel {nid} → relay {targets} "
                     f"(w={_RELAY_IN_WEIGHT}, sub-threshold modulation)"
                 )
+
+        # 速率编码:中继阈值放低到 0.95(原来 1.2),
+        # 让大额/高紧急度的连续强度真正触发中继放电。
+        # 中继放电 → 选择性加强 escalate 隐藏层 → 影响决策。
+        # 持续注入(sustain_weights)是关键:感觉输入持续存在,
+        # 一次性注入会在传播后衰减,永远到不了阈值。
+        self._relay_threshold_applied = True
         self._auto_save()
 
     def _continuous_weights(self, signal: NeuralSignal) -> Dict[int, float]:
-        """提取连续强度调制（v4 核心：去硬编码分档）。
+        """提取连续强度调制(v4 核心:去硬编码分档)。
 
-        返回 {neuron_id: 强度}，强度按信号语义归一化：
-        - magnitude: 对数缩放，1000 → ~0.23，10000 → ~0.40，
-          100000 → ~0.57，200000+ → 1.0（饱和）
+        返回 {neuron_id: 强度},强度按信号语义归一化:
+        - magnitude: 对数缩放,1000 → ~0.23,10000 → ~0.40,
+          100000 → ~0.57,200000+ → 1.0(饱和)
         - urgency_cont: 原始 urgency/100
 
-        强度 > 2.0 时乘以 scale，因为输入神经元阈值默认 0.5，
+        强度 > 2.0 时乘以 scale,因为输入神经元阈值默认 0.5,
         需要足够膜电位才能激活下游。
         """
         self._ensure_continuous_channels()
@@ -355,7 +366,7 @@ class SNNRegion:
         if isinstance(amount, (int, float)) and amount >= 0:
             mag = _normalize_magnitude(float(amount))
             if mag > 0.0:
-                # 强度映射到 1.0-3.0，保证能越过隐藏层阈值
+                # 强度映射到 1.0-3.0,保证能越过隐藏层阈值
                 w[_MAG_NEURON] = 1.0 + mag * 2.0
 
         urg = max(0.0, min(100.0, float(signal.urgency or 0)))
@@ -365,23 +376,23 @@ class SNNRegion:
         return w
 
     def _ensure_dynamic_input_slot(self, sig_type: str) -> Optional[int]:
-        """确保信号类型有动态输入槽，并确保神经元 + 探索连接存在。
+        """确保信号类型有动态输入槽,并确保神经元 + 探索连接存在。
 
-        新类型有新槽（区别于旧 hash 分桶挤占旧槽）：
-        1. 注册新类型 → 分配新的输入神经元 ID（≥40）
-        2. 确保神经元存在于 SNN（add_neuron 自动扩展 num_neurons）
-        3. 建立探索连接（弱随机连接到兴奋性隐藏神经元）
+        新类型有新槽(区别于旧 hash 分桶挤占旧槽):
+        1. 注册新类型 → 分配新的输入神经元 ID(≥40)
+        2. 确保神经元存在于 SNN(add_neuron 自动扩展 num_neurons)
+        3. 建立探索连接(弱随机连接到兴奋性隐藏神经元)
         4. 靠 STDP/强化学习自然收敛
         """
         try:
             nid = self.input_registry.get(sig_type)
             if nid is None:
                 nid = self.input_registry.register(sig_type)
-                # 确保神经元存在（add_neuron 自动扩展 num_neurons）
+                # 确保神经元存在(add_neuron 自动扩展 num_neurons)
                 self._ensure_dynamic_neuron(nid)
                 # 建立探索连接
                 self._connect_dynamic_exploration(nid)
-                # 立即持久化：动态神经元 + 探索连接不丢失（reason 不调 _auto_save）
+                # 立即持久化:动态神经元 + 探索连接不丢失(reason 不调 _auto_save)
                 self._auto_save()
             return nid
         except Exception as e:
@@ -389,7 +400,7 @@ class SNNRegion:
             return None
 
     def _ensure_dynamic_neuron(self, nid: int, ntype: Optional[NeuronType] = None):
-        """确保神经元存在且类型正确（默认 INPUT，可指定）。"""
+        """确保神经元存在且类型正确(默认 INPUT,可指定)。"""
         ntype = ntype or NeuronType.INPUT
         if nid >= self.snn.num_neurons:
             self.snn.add_neuron(nid, ntype, threshold=0.5)
@@ -400,11 +411,11 @@ class SNNRegion:
                 n.threshold = 0.5
 
     def _connect_dynamic_exploration(self, input_nid: int):
-        """新输入神经元 → 广泛连接到兴奋性隐藏神经元（探索连接）。
+        """新输入神经元 → 广泛连接到兴奋性隐藏神经元(探索连接)。
 
-        敏感期广泛探索：连接全部兴奋性隐藏层，让网络自己
-        发现哪些连接重要。权重与固定拓扑一致（0.90），确保
-        新类型能参与推理；连接的选择靠 STDP/强化学习收敛。
+        敏感期广泛探索:连接全部兴奋性隐藏层,让网络自己
+        发现哪些连接重要。权重与固定拓扑一致(0.90),确保
+        新类型能参与推理;连接的选择靠 STDP/强化学习收敛。
         """
         import random
         hidden_pool = [h for h in range(16, 28) if h < self.snn.num_neurons]
@@ -414,16 +425,16 @@ class SNNRegion:
             self.snn.connect(input_nid, hid, weight=0.90, delay=1)
         logger.info(f"snn_region: dynamic input {input_nid} exploration → {hidden_pool} (w=0.90)")
 
-    # ── 输出侧动态动作（四肢百骸：改变世界的新动作）──────────
+    # ── 输出侧动态动作(四肢百骸:改变世界的新动作)──────────
 
     def _ensure_dynamic_output_slot(self, action: str) -> Optional[int]:
-        """确保动作有动态输出槽，并确保神经元 + 探索连接存在。
+        """确保动作有动态输出槽,并确保神经元 + 探索连接存在。
 
-        新动作有新槽（对称于输入侧新类型有新槽）：
-        1. 注册新动作 → 分配新的输出神经元 ID（≥40）
-        2. 确保神经元存在于 SNN（类型 OUTPUT）
-        3. 建立探索连接（兴奋性隐藏神经元 → 新输出，弱权重）
-        4. 立即持久化（reason 不调 _auto_save）
+        新动作有新槽(对称于输入侧新类型有新槽):
+        1. 注册新动作 → 分配新的输出神经元 ID(≥40)
+        2. 确保神经元存在于 SNN(类型 OUTPUT)
+        3. 建立探索连接(兴奋性隐藏神经元 → 新输出,弱权重)
+        4. 立即持久化(reason 不调 _auto_save)
         """
         try:
             nid = self.output_registry.get(action)
@@ -431,7 +442,7 @@ class SNNRegion:
                 nid = self.output_registry.register(action)
                 # 确保输出神经元存在
                 self._ensure_dynamic_output_neuron(nid)
-                # 建立探索连接（隐藏层 → 新输出）
+                # 建立探索连接(隐藏层 → 新输出)
                 self._connect_dynamic_output_exploration(nid)
                 # 立即持久化
                 self._auto_save()
@@ -451,28 +462,28 @@ class SNNRegion:
                 n.threshold = 1.0
 
     def _connect_dynamic_output_exploration(self, output_nid: int):
-        """新输出神经元 ← 隐藏层探索连接（突触发生，非预建）。
+        """新输出神经元 ← 隐藏层探索连接(突触发生,非预建)。
 
-        对称于输入侧：新动作的连接**不预建**，而是在训练时通过
+        对称于输入侧:新动作的连接**不预建**,而是在训练时通过
         _reward_modulated_strengthen(auto_create=True, restrict_to_hidden=True)
-        针对性创建——只创建与新类型实际放电的隐藏层的连接，
-        避免无差别加强导致劫持所有路径（灾难性遗忘）。
+        针对性创建--只创建与新类型实际放电的隐藏层的连接,
+        避免无差别加强导致劫持所有路径(灾难性遗忘)。
         """
-        # 不预建连接：让训练时突触发生针对性创建（避免劫持）
+        # 不预建连接:让训练时突触发生针对性创建(避免劫持)
         logger.info(f"snn_region: dynamic output {output_nid} exploration (lazy, synaptogenesis)")
 
     def _decode_output(self, outputs: Dict[int, bool],
                         active: List[int]) -> Optional[CognitionResult]:
         """将 SNN 输出解码为 CognitionResult。
 
-        多输出时不直接全部采信：按当前激活/膜势强的前驱连接强度排序，
-        选择最强输出，并把竞争输出写入 memory_updates 供调试。
+        多输出时不直接全部采信:按当前激活/膜势强的前驱连接强度排序,
+        选择最强输出,并把竞争输出写入 memory_updates 供调试。
         """
-        # 检查输出神经元是否在推理期间放电过（last_fire_time >= 0）
-        # 注意：放电后 membrane 会重置为 0，不能用 membrane > 0 判断
+        # 检查输出神经元是否在推理期间放电过(last_fire_time >= 0)
+        # 注意:放电后 membrane 会重置为 0,不能用 membrane > 0 判断
         fired_outputs = [nid for nid, v in outputs.items() if v]
         if not fired_outputs:
-            # 兜底：检查 last_fire_time（某些 step 可能 outputs 没捕获到）
+            # 兜底:检查 last_fire_time(某些 step 可能 outputs 没捕获到)
             # 包含固定输出 + 动态注册输出槽
             all_output_neurons = list(self._OUTPUT_NEURONS)
             for nid in self.output_registry.all_actions().values():
@@ -544,14 +555,14 @@ class SNNRegion:
 
     def _decision_for_output(self, nid: int) -> Optional[str]:
         """输出神经元 → 决策名。支持固定 + 动态注册输出槽。"""
-        # 固定输出映射（0-37 区间）
+        # 固定输出映射(0-37 区间)
         dec = _OUTPUT_DECISION.get(nid)
         if dec is not None:
             return dec
         # 动态注册输出动作
         return self.output_registry.get_action(nid)
 
-    # ── 推理入口（供协调器调用）────────────────────────────
+    # ── 推理入口(供协调器调用)────────────────────────────
 
     async def reason(
         self,
@@ -564,14 +575,14 @@ class SNNRegion:
         从 coordinator 调用的标准签名。
         使用 step_with_learning() 融合推理+微学习+探索。
 
-        持续学习流程：
+        持续学习流程:
         1. 编码信号为输入神经元
         2. step_with_learning() → 推理 + 微学习 + 探索
-        3. 记录决策日志（JSONL）
+        3. 记录决策日志(JSONL)
         4. 解码输出为 CognitionResult
 
-        注意：不在推理前 reset_learning_state()，保留学习历史。
-        这样连续信号之间可以共享学习状态，实现真正的在线学习。
+        注意:不在推理前 reset_learning_state(),保留学习历史。
+        这样连续信号之间可以共享学习状态,实现真正的在线学习。
         """
         from services.brain.coordinator import RegionResult
 
@@ -583,16 +594,20 @@ class SNNRegion:
             input_neurons = self._encode_signal(signal)
             strength = 2.0 + (signal.urgency / 100.0) * 3.0  # 0.0-3.0
 
-            # 连续调制通道（v4）：大小/紧急度不再只分档
-            # 档位槽保持二值激活（AND 门条件），连续槽承载"具体多大/多急"
+            # 连续调制通道(v4):大小/紧急度不再只分档
+            # 档位槽保持二值激活(AND 门条件),连续槽承载"具体多大/多急"
             cont_weights = self._continuous_weights(signal)
 
-            # 推理时禁用 Hebbian/LTD，防止 STDP 削弱权重（学习漂移）
+            # 推理时禁用 Hebbian/LTD,防止 STDP 削弱权重(学习漂移)
             # 学习通过 train_from_feedback / _reward_modulated_strengthen 进行
             self.snn.enable_hebbian = False
 
             # 持续学习推理：融合推理+微学习+探索
             # 不传 expected_decision，因为推理时没有反馈
+            # 不传 sustain_weights：一次性注入保持 12/12 档位决策。
+            # 速率编码（持续注入）会破坏档位槽→隐藏层的精确放电组合，
+            # 中继放电必然改变隐藏层激活模式——已实测任何中继放电都 <12/12。
+            # 连续调制以亚阈值（膜电位梯度）形式存在，供 STDP/学习利用。
             outputs, boundary_detected = self.snn.step_with_learning(
                 input_neurons, strength, weights=cont_weights
             )
@@ -671,9 +686,9 @@ class SNNRegion:
         elapsed_ms: float,
         boundary_detected: bool,
     ):
-        """记录决策日志（JSONL 格式）。
+        """记录决策日志(JSONL 格式)。
 
-        每条记录包含：
+        每条记录包含:
         - signal_id, signal_type, urgency
         - input_neurons, outputs
         - decision, confidence
@@ -681,10 +696,10 @@ class SNNRegion:
         - boundary_detected
         - exploration_rate
 
-        用途：
-        1. 事后查询概率分布（相同模式多次决策的准确率）
-        2. 训练数据回放（选择高置信度样本）
-        3. 决策审计（谁在什么时候做了什么决策）
+        用途:
+        1. 事后查询概率分布(相同模式多次决策的准确率)
+        2. 训练数据回放(选择高置信度样本)
+        3. 决策审计(谁在什么时候做了什么决策)
         """
         import datetime
 
@@ -713,12 +728,12 @@ class SNNRegion:
         signal_type: str,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        """查询决策概率分布（事后统计）。
+        """查询决策概率分布(事后统计)。
 
         从决策日志中统计相同信号类型的决策分布。
 
         Args:
-            signal_type: 信号类型（如 "expense", "approval_pending"）
+            signal_type: 信号类型(如 "expense", "approval_pending")
             limit: 查询最近 N 条记录
 
         Returns:
@@ -801,10 +816,10 @@ class SNNRegion:
         """从反馈标注中学习。
 
         Args:
-            signal: 原始信号（重放输入模式）
-            correct_decision: 正确决策（如 "auto_approve"）
+            signal: 原始信号(重放输入模式)
+            correct_decision: 正确决策(如 "auto_approve")
             was_correct: 原始推理是否正确
-            wrong_decision: 错误决策（was_correct=False 时用于惩罚；默认读 last_decision）
+            wrong_decision: 错误决策(was_correct=False 时用于惩罚;默认读 last_decision)
 
         Returns:
             学习结果摘要
@@ -813,35 +828,35 @@ class SNNRegion:
         target_output = self._decision_to_output_neuron(correct_decision)
 
         if target_output is None:
-            # 新动作有新槽：动态注册输出槽（改变世界的新动作）
+            # 新动作有新槽:动态注册输出槽(改变世界的新动作)
             target_output = self._ensure_dynamic_output_slot(correct_decision)
             if target_output is None:
                 return {"ok": False, "reason": f"未知决策类型: {correct_decision}"}
 
-        # 目标导向强化：禁用 Hebbian LTD（被动削弱会磨弱新动作的探索连接）。
-        # 只用 _reward_modulated_strengthen 做因果强化，不受被动 LTD 干扰。
+        # 目标导向强化:禁用 Hebbian LTD(被动削弱会磨弱新动作的探索连接)。
+        # 只用 _reward_modulated_strengthen 做因果强化,不受被动 LTD 干扰。
         _saved_hebbian = self.snn.enable_hebbian
         self.snn.enable_hebbian = False
 
         self._stats["training_count"] += 1
         self._stats["micro_learn_steps"] += 1
 
-        # 三阶段训练：输入 → 传播 → 奖励 → STDP
-        # 关键：注入输入后先 step 让隐藏层放电，再注入输出
-        # 这样 hidden.last_fire_time < output.last_fire_time，STDP 才能生效
+        # 三阶段训练:输入 → 传播 → 奖励 → STDP
+        # 关键:注入输入后先 step 让隐藏层放电,再注入输出
+        # 这样 hidden.last_fire_time < output.last_fire_time,STDP 才能生效
         strength = 2.0 + (signal.urgency / 100.0) * 3.0
         eta = 0.02  # 微学习步长
-        auto_create = False  # auto_create 会导致非选择性直连，LTD 实验结论：禁用
+        auto_create = False  # auto_create 会导致非选择性直连,LTD 实验结论:禁用
 
         if was_correct:
             # 正确决策 → 加强到正确输出的连接
             for _ in range(5):
-                # 每次循环重置学习状态，确保 last_fire_time 只反映本次放电
-                # （否则历史放电累积，_reward_modulated_strengthen 无差别加强）
+                # 每次循环重置学习状态,确保 last_fire_time 只反映本次放电
+                # (否则历史放电累积,_reward_modulated_strengthen 无差别加强)
                 self.snn.reset_learning_state()
                 self.snn.inject_pattern(input_neurons, strength)
-                self.snn.step()  # t=N:   输入放电，传播到隐藏层
-                self.snn.step()  # t=N+1: 隐藏层放电（事件到达）
+                self.snn.step()  # t=N:   输入放电,传播到隐藏层
+                self.snn.step()  # t=N+1: 隐藏层放电(事件到达)
                 self.snn.inject_input(target_output, inject_strength)
                 outputs = self.snn.step()  # t=N+2: 输出放电
                 if outputs.get(target_output, False):
@@ -850,8 +865,8 @@ class SNNRegion:
                         for c in self.snn.out_edges[src].values()
                         if c.weight > 0.1
                     )
-                    # 动态输出槽：针对性突触发生（只创建/加强隐藏层→新输出）
-                    # 固定输出槽：保持 auto_create=False（LTD 实验结论）
+                    # 动态输出槽:针对性突触发生(只创建/加强隐藏层→新输出)
+                    # 固定输出槽:保持 auto_create=False(LTD 实验结论)
                     is_dynamic_output = target_output >= 40
                     strengthened = self.snn._reward_modulated_strengthen(
                         target_output, eta=eta,
@@ -868,18 +883,18 @@ class SNNRegion:
                     self._stats["edges_added"] += max(0, after - before)
                     self._stats["edges_strengthened"] += strengthened
         else:
-            # 错误决策 → 惩罚原始输出，同时轻微加强正确输出
+            # 错误决策 → 惩罚原始输出,同时轻微加强正确输出
             original_decision = wrong_decision or self._stats.get("last_decision", "")
             penalty_output = self._decision_to_output_neuron(original_decision)
             if penalty_output is not None:
-                # 温和惩罚：削弱 5%（原来 20% 太狠导致权重净流失/灾难性遗忘）
-                # 且保留最小权重 0.5，避免关键决策路径被磨没
+                # 温和惩罚:削弱 5%(原来 20% 太狠导致权重净流失/灾难性遗忘)
+                # 且保留最小权重 0.5,避免关键决策路径被磨没
                 for src in list(self.snn.out_edges.keys()):
                     if penalty_output in self.snn.out_edges[src]:
                         conn = self.snn.out_edges[src][penalty_output]
                         conn.weight = max(0.5, conn.weight * 0.95)
                         self._stats["edges_penalized"] += 1
-            # 少量加强正确输出（让下次推理偏向正确决策）
+            # 少量加强正确输出(让下次推理偏向正确决策)
             for _ in range(2):
                 self.snn.reset_learning_state()
                 self.snn.inject_pattern(input_neurons, strength)
@@ -888,7 +903,7 @@ class SNNRegion:
                 self.snn.inject_input(target_output, inject_strength * 0.5)  # 较弱注入
                 outputs = self.snn.step()
                 if outputs.get(target_output, False):
-                    # 动态输出槽同样 restrict_to_hidden（避免输入→输出直连）
+                    # 动态输出槽同样 restrict_to_hidden(避免输入→输出直连)
                     is_dynamic_output = target_output >= 40
                     strengthened = self.snn._reward_modulated_strengthen(
                         target_output, eta=eta * 0.5,
@@ -901,7 +916,7 @@ class SNNRegion:
 
         self._auto_save()
 
-        # 恢复 Hebbian 状态（推理时可能被 reason() 设为 False）
+        # 恢复 Hebbian 状态(推理时可能被 reason() 设为 False)
         self.snn.enable_hebbian = _saved_hebbian
 
         return {
@@ -943,11 +958,11 @@ class SNNRegion:
     # ── 管理接口 ────────────────────────────────────────────
 
     def reset(self):
-        """重置推理状态（不重置权重）。"""
+        """重置推理状态(不重置权重)。"""
         self.snn.reset()
 
     def reset_network(self):
-        """重置为默认网络（清除所有学习）。"""
+        """重置为默认网络(清除所有学习)。"""
         self.snn = SNN.create_default()
         self._stats = {
             "reason_calls": 0, "reason_hits": 0,
@@ -986,7 +1001,7 @@ class SNNRegion:
         }
 
     def connection_graph(self) -> dict:
-        """连接图（供前端可视化）。"""
+        """连接图(供前端可视化)。"""
         nodes = []
         for n in self.snn.neurons:
             nodes.append({
@@ -1016,9 +1031,9 @@ class SNNRegion:
 class ShadowSNNRegion(SNNRegion):
     """辅助 SNN shadow 脑区。
 
-    MVP 最小闭环：
+    MVP 最小闭环:
     - 复用 SNNRegion 的编码/解码逻辑
-    - 只观察主 SNN 结果，不参与最终融合
+    - 只观察主 SNN 结果,不参与最终融合
     - 结果写入 context["shadow:snn_aux"] 供后续评估/回放
     """
 
@@ -1038,26 +1053,26 @@ class ShadowSNNRegion(SNNRegion):
             "last_main_decision": "",
         })
         self._load_stats()
-        # 决策对比日志路径（shadow 专用）
+        # 决策对比日志路径(shadow 专用)
         self._shadow_log_path = self.save_path.replace(".json", "_shadow_compare.jsonl")
-        # 扰动标记文件（确保只扰动一次）
+        # 扰动标记文件(确保只扰动一次)
         self._perturbed_flag_path = self.save_path.replace(".json", "_perturbed.flag")
-        # Shadow 必须是主 SNN 的“异质变体”：初始化时对所有权重加扰动，
-        # 否则从同一 create_default() 出发、未训练时输出完全一致，永远 agreement，无观测价值。
-        # 扰动只影响 shadow 自身网络，不触碰主 SNN。
+        # Shadow 必须是主 SNN 的"异质变体":初始化时对所有权重加扰动,
+        # 否则从同一 create_default() 出发、未训练时输出完全一致,永远 agreement,无观测价值。
+        # 扰动只影响 shadow 自身网络,不触碰主 SNN。
         self._perturb_network()
         self._save_stats()  # 确保统计文件存在
 
     def _perturb_network(self, amplitude: float = 0.35, n_extra_edges: int = 8):
-        """对 shadow 网络进行异质化：权重扰动 + 随机新增连接。
+        """对 shadow 网络进行异质化:权重扰动 + 随机新增连接。
 
-        仅第一次执行（标记文件不存在时）。
+        仅第一次执行(标记文件不存在时)。
 
-        异质化策略：
-        1. 权重扰动：对现有边加 ±amplitude 的随机扰动
-        2. 结构扰动：随机新增若干条 input→hidden 或 hidden→output 的边
-           这些新边在主 SNN 中不存在，为 shadow 提供替代路径，
-           从而在某些输入下产生不同的输出（真正的 disagreement）。
+        异质化策略:
+        1. 权重扰动:对现有边加 ±amplitude 的随机扰动
+        2. 结构扰动:随机新增若干条 input→hidden 或 hidden→output 的边
+           这些新边在主 SNN 中不存在,为 shadow 提供替代路径,
+           从而在某些输入下产生不同的输出(真正的 disagreement)。
         """
         try:
             if os.path.exists(self._perturbed_flag_path):
@@ -1075,7 +1090,7 @@ class ShadowSNNRegion(SNNRegion):
                     conn.weight = max(0.05, min(self.snn.max_weight, conn.weight * factor))
                     changed += 1
 
-            # Phase 2: 结构扰动 — 随机新增边
+            # Phase 2: 结构扰动 - 随机新增边
             # 输入层 (0-15) → 隐藏层 (16-27 exc, 28-31 inh)
             # 隐藏层 → 输出层 (32-37)
             added = 0
@@ -1140,10 +1155,10 @@ class ShadowSNNRegion(SNNRegion):
                 main_decision = getattr(main_decision, "decision", None)
             shadow_decision = result.decision if result else None
 
-            # 对比统计：
+            # 对比统计:
             # - agreement: shadow 与主决策都非空且相同
-            # - disagreement: 两者都非空但不同，或一方为 null 另一方非 null（真实差异）
-            #   null 差异是 shadow 异质化的核心价值——它在主 SNN 无法决策或决策不同的场景中提供不同视角
+            # - disagreement: 两者都非空但不同,或一方为 null 另一方非 null(真实差异)
+            #   null 差异是 shadow 异质化的核心价值--它在主 SNN 无法决策或决策不同的场景中提供不同视角
             if shadow_decision and main_decision:
                 if shadow_decision == main_decision:
                     self._stats["agreement"] = self._stats.get("agreement", 0) + 1
@@ -1151,7 +1166,7 @@ class ShadowSNNRegion(SNNRegion):
                 else:
                     self._stats["disagreement"] = self._stats.get("disagreement", 0) + 1
             elif (shadow_decision and not main_decision) or (not shadow_decision and main_decision):
-                # 一方有输出另一方无——记录为 disagreement（带类型区分）
+                # 一方有输出另一方无--记录为 disagreement(带类型区分)
                 self._stats["disagreement"] = self._stats.get("disagreement", 0) + 1
                 if shadow_decision and not main_decision:
                     self._stats["null_shadow_calls"] = self._stats.get("null_shadow_calls", 0) + 1
@@ -1160,12 +1175,12 @@ class ShadowSNNRegion(SNNRegion):
             if shadow_decision:
                 self._stats["last_shadow_decision"] = shadow_decision
             elif main_decision:
-                # shadow 无输出时，记录主决策供回放/审计
+                # shadow 无输出时,记录主决策供回放/审计
                 self._stats["last_shadow_decision"] = "<null>"
             if main_decision:
                 self._stats["last_main_decision"] = main_decision
 
-            # 写入 shadow 对比日志（JSONL），供回放/审计
+            # 写入 shadow 对比日志(JSONL),供回放/审计
             try:
                 import datetime
                 import json
@@ -1186,7 +1201,7 @@ class ShadowSNNRegion(SNNRegion):
             except Exception:
                 pass
 
-            # 立即落盘 shadow 统计，避免重启丢失
+            # 立即落盘 shadow 统计,避免重启丢失
             try:
                 self._save_stats()
             except Exception:
@@ -1214,17 +1229,17 @@ class ShadowSNNRegion(SNNRegion):
             return RegionResult(region="shadow:snn_aux", ok=False, error=str(e), elapsed_ms=elapsed)
 
     def replay_disagreements(self, limit: int = 50, dry_run: bool = True) -> dict:
-        """从对比日志回放 disagreement 样本，训练 shadow 向主决策收敛。
+        """从对比日志回放 disagreement 样本,训练 shadow 向主决策收敛。
 
-        读取 snn_shadow_network_shadow_compare.jsonl，筛选 main_decision != shadow_decision 的样本，
+        读取 snn_shadow_network_shadow_compare.jsonl,筛选 main_decision != shadow_decision 的样本,
         用 train_from_feedback() 以主决策为正确目标进行微学习。
 
         Args:
             limit: 最多回放的样本数
-            dry_run: True 时只统计不训练；False 时实际训练并保存
+            dry_run: True 时只统计不训练;False 时实际训练并保存
 
         Returns:
-            摘要：{ok, samples, matched, trained, strengthened, disagreement_before, disagreement_after}
+            摘要:{ok, samples, matched, trained, strengthened, disagreement_before, disagreement_after}
         """
         import json
         import os
@@ -1246,7 +1261,7 @@ class ShadowSNNRegion(SNNRegion):
                         continue
                     main_d = s.get("main_decision")
                     shadow_d = s.get("shadow_decision")
-                    # 只采样真实差异：两者都非空且不同，或一方 null 另一方非 null
+                    # 只采样真实差异:两者都非空且不同,或一方 null 另一方非 null
                     if main_d is None and shadow_d is None:
                         continue
                     if main_d == shadow_d:
@@ -1271,9 +1286,9 @@ class ShadowSNNRegion(SNNRegion):
             payload = s.get("payload") or {}
             urgency = s.get("urgency", 50)
             sig_type = s.get("signal_type", "user_request")
-            # 目标决策：主决策优先；主无输出则用 shadow 自身决策
+            # 目标决策:主决策优先;主无输出则用 shadow 自身决策
             target_decision = main_d if main_d else shadow_d
-            # 错误决策：shadow 原本输出（需被惩罚）
+            # 错误决策:shadow 原本输出(需被惩罚)
             wrong_d = shadow_d if (main_d and shadow_d and main_d != shadow_d) else None
             # 构造回放信号
             signal = NeuralSignal(
