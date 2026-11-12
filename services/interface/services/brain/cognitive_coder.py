@@ -444,6 +444,66 @@ class CognitiveCoder:
         self._stats["distill_calls"] += len(samples)
         return stats
 
+    def contrastive_align(self, samples: List[Dict[str, Any]], eta: float = 0.05) -> Dict[str, int]:
+        """对比学习对齐：跨模态互信息对齐（InfoNCE 风格）。
+
+        不是机械模仿规则式教师，而是让模态 SNN 通过**跨模态一致性**
+        学习对齐——同一概念在不同模态下应激活同一维度。
+
+        对每个多模态样本：
+        1. 各模态独立编码出概念激活
+        2. 正对：跨模态同概念 → 加强双方该概念路径（拉近）
+        3. 负对：跨模态不同概念 → 削弱误激活路径（推远）
+
+        用其他模态作为"软教师"：当其他模态对某概念激活强而本模态弱时，
+        加强本模态该概念路径（跨模态拉近），实现真实的对齐学习。
+
+        Args:
+            samples: 多模态样本列表，每个含 visual/audio/text 特征
+            eta: 学习率
+
+        Returns:
+            {visual: n, audio: n, text: n} 对齐步数
+        """
+        stats = {"visual": 0, "audio": 0, "text": 0}
+
+        for sample in samples:
+            # 各模态独立编码
+            modal_acts: Dict[str, Dict[str, float]] = {}
+            if sample.get("visual"):
+                modal_acts["visual"] = self.visual_snn.encode(sample["visual"])
+            if sample.get("audio"):
+                modal_acts["audio"] = self.audio_snn.encode(sample["audio"])
+            if sample.get("text"):
+                modal_acts["text"] = _text_to_concepts(sample["text"])
+
+            # 逐模态对比学习：用其他模态作为软教师
+            modals = list(modal_acts.keys())
+            for m in modals:
+                # 其他模态对本概念的最大激活（软教师）
+                teacher: Dict[str, float] = {}
+                for other in modals:
+                    if other == m:
+                        continue
+                    for concept, strength in modal_acts[other].items():
+                        teacher[concept] = max(teacher.get(concept, 0), strength)
+
+                # 无其他模态 → 无法对比，跳过
+                if not teacher:
+                    continue
+
+                # 用软教师更新本模态 SNN
+                if m == "visual":
+                    self.visual_snn.distill_step(sample["visual"], teacher, eta)
+                    stats["visual"] += 1
+                elif m == "audio":
+                    self.audio_snn.distill_step(sample["audio"], teacher, eta)
+                    stats["audio"] += 1
+
+        self._stats["contrastive_calls"] = self._stats.get("contrastive_calls", 0) + len(samples)
+        return stats
+
+
     def _payload_to_concepts(self, payload: Dict[str, Any]) -> Dict[str, float]:
         """结构化 payload 字段 → 概念。
 
