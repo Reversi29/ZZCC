@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from models.brain import CognitionResult, NeuralSignal
 from services.brain.perception import Perception, PerceptionResult
 from services.brain.sentience import SentienceNet, SentimentState, SentienceDrivenBudget
+from services.brain.cognitive_coder import CognitiveCoder, ConceptVector
 from services.brain.reasoning import ReasoningEngine
 
 logger = logging.getLogger("brain.reasoning_v2")
@@ -36,10 +37,12 @@ class ReasoningEngineV2:
         self.base = base  # v1 引擎（含 coordinator/regions/budget）
         self.perception = Perception()
         self.sentience = SentienceNet()
+        self.cognitive_coder = CognitiveCoder()  # 多模态认知编码器
         self.sentience_budget = SentienceDrivenBudget(base.compute_budget)
         self._stats = {
             "v2_calls": 0,
             "consistency_flags": 0,
+            "concept_calls": 0,
         }
 
     async def reason(
@@ -67,19 +70,37 @@ class ReasoningEngineV2:
         payload = signal.payload or {}
         perception = self.perception.perceive(payload)
 
-        # ── 2. 感受 ──
+        # ── 2. 多模态认知编码（认知对齐） ──
+        # 感知特征 → 统一概念向量。不同模态（视觉/语言/音频）对同一
+        # 概念（如苹果/危险/紧急）激活收敛到统一概念空间，实现跨模态认知。
+        raw_text = perception.raw_text
+        concept_vector = self.cognitive_coder.encode(
+            text=raw_text,
+            payload=payload,
+        )
+        self._stats["concept_calls"] += 1
+        concept_input = self.cognitive_coder.to_sentience_input(concept_vector)
+
+        # ── 3. 感受 ──
+        # 感受层接收：感知向量 + 认知编码注入的概念感受
         sentiment_state = self.sentience.sense(perception)
         sentiments = sentiment_state.sentiments
+        # 概念感受叠加（认知对齐：概念激活增强对应感受）
+        for dim, val in concept_input.items():
+            if val > 0.05:
+                sentiments[dim] = max(sentiments.get(dim, 0.0), val)
 
-        # ── 3. 感受注入上下文（供 coordinator 使用） ──
+        # ── 4. 感受注入上下文（供 coordinator 使用） ──
         # 把感受状态放入 context，脑区可读取（如 LLM prompt 增强）
         # 同时把感受强度用于意图分类的增强
         enhanced_context = dict(memory_context)
         enhanced_context["perception"] = perception.to_dict()
         enhanced_context["sentiments"] = sentiment_state.to_dict()
         enhanced_context["sentience"] = sentiments
+        enhanced_context["concepts"] = concept_vector.to_dict()
+        enhanced_context["concept_vector"] = concept_vector.to_vector()
 
-        # ── 4. 感受驱动预算（若感受显著则用 v2 预算，否则回退 v1 意图预算） ──
+        # ── 5. 感受驱动预算（若感受显著则用 v2 预算，否则回退 v1 意图预算） ──
         plan = None
         if self._has_significant_sentiment(sentiments):
             try:
@@ -89,7 +110,7 @@ class ReasoningEngineV2:
                 logger.warning("v2: sentiment budget failed, fallback v1: %s", str(e))
                 plan = None
 
-        # ── 5. 调用 v1 引擎的协调器（带 v2 context） ──
+        # ── 6. 调用 v1 引擎的协调器（带 v2 context） ──
         # v1.reason() 内部会重新分配意图预算，这里直接调 coordinator
         if plan is not None:
             result = await self.base.coordinator.run(
@@ -101,15 +122,18 @@ class ReasoningEngineV2:
                 signal, working_memory, db, memory_context=enhanced_context
             )
 
-        # ── 6. 诚意检查（决策-感受一致性） ──
+        # ── 7. 诚意检查（决策-感受一致性） ──
         result = self._validate_consistency(result, sentiments, signal)
 
-        # 附加感知/感受信息
+        # 附加感知/感受/概念信息
         result.memory_updates["perception"] = perception.to_dict()
         result.memory_updates["sentience"] = sentiment_state.to_dict()
+        result.memory_updates["concepts"] = concept_vector.to_dict()
         result.memory_updates["_v2"] = {
             "perception_dim": perception.neuron_count(),
             "sentiment_dims": list(sentiments.keys()),
+            "concept_dims": len(concept_vector.to_vector()),
+            "dominant_concepts": concept_vector.dominant(top=3),
             "consistency_flags": self._stats["consistency_flags"],
         }
 
