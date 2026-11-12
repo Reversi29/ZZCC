@@ -715,22 +715,29 @@ class CognitiveCoder:
         if struct_concepts:
             modal_concepts["structured"] = struct_concepts
 
-        # ── 2. 对齐层融合（加权，同概念跨模态取高） ──
+        # ── 2. 对齐层融合（协同推理：多模态交叉验证） ──
         unified: Dict[str, float] = {}
         sources: Dict[str, List[str]] = {}
         for modality, concepts in modal_concepts.items():
             w = self.modality_weights.get(modality, 1.0)
             for concept, strength in concepts.items():
                 contrib = strength * w
-                if concept not in unified or contrib > unified[concept]:
-                    if concept not in unified:
-                        sources[concept] = []
+                if concept not in unified:
+                    sources[concept] = []
                     unified[concept] = contrib
-                    sources[concept].append(modality)
-                elif concept in sources:
-                    sources[concept].append(modality)
+                elif contrib > unified[concept]:
+                    unified[concept] = contrib
+                sources[concept].append(modality)
 
-        # ── 3. 归一化 ──
+        # ── 3. 协同推理：多模态交叉验证 ──
+        # 同概念多模态激活 → 共识提升置信（2 模态 +10%，3 模态 +20%）
+        # 冲突（不同模态强度差异大）保持取高，不刻意压制（保留多模态信息）
+        for concept in unified:
+            n = len(sources.get(concept, []))
+            if n > 1:
+                unified[concept] = min(1.0, unified[concept] * (1 + 0.1 * (n - 1)))
+
+        # ── 4. 归一化 ──
         for concept in unified:
             unified[concept] = min(1.0, unified[concept])
 
