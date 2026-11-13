@@ -151,6 +151,10 @@ _RELAY_HIDDEN_TARGETS = (17, 18, 20, 21, 26)  # escalate 相关隐藏层
 # 概念→决策连接靠 STDP/反馈学习收敛，而非硬编码语义映射。
 _CONCEPT_NEURON_BASE = 220    # 概念输入神经元起点
 _CONCEPT_RELAY_BASE = 230     # 概念中继神经元起点
+# 概念中继驱动输出的决策话语权加成。概念是语义记忆的直接激活，
+# 应比感觉通路（档位槽隐藏层）更有决策话语权。避免概念槽特异性
+# 学习（如 banana→reject）被隐藏层 escalate 路径压制。
+_CONCEPT_DRIVE_BOOST = 2.2
 _CONCEPT_RELAY_THRESHOLD = 0.95   # 概念中继阈值（大强度放电）
 _CONCEPT_RELAY_IN_WEIGHT = 0.4    # 概念 → 中继
 _CONCEPT_RELAY_OUT_WEIGHT = 0.25  # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
@@ -652,18 +656,20 @@ class SNNRegion:
         """
         # 检查输出神经元是否在推理期间放电过(last_fire_time >= 0)
         # 注意:放电后 membrane 会重置为 0,不能用 membrane > 0 判断
+        # 同时包含 outputs dict 标记 + 所有 last_fire_time>=0 的输出神经元。
+        # 关键:概念中继(230+)驱动的输出(如 33 reject)可能在 step() 返回的
+        # outputs dict 里未被捕获(放电时序在循环 break 之后),必须用
+        # last_fire_time 兜底确保概念槽特异性学习参与竞争。
         fired_outputs = [nid for nid, v in outputs.items() if v]
-        if not fired_outputs:
-            # 兜底:检查 last_fire_time(某些 step 可能 outputs 没捕获到)
-            # 包含固定输出 + 动态注册输出槽
-            all_output_neurons = list(self._OUTPUT_NEURONS)
-            for nid in self.output_registry.all_actions().values():
-                if nid not in all_output_neurons:
-                    all_output_neurons.append(nid)
-            fired_outputs = [
-                nid for nid in all_output_neurons
-                if nid < len(self.snn.neurons) and self.snn.neurons[nid].last_fire_time >= 0
-            ]
+        # 始终合并 last_fire_time>=0 的输出神经元（不只在空时兜底）
+        all_output_neurons = list(self._OUTPUT_NEURONS)
+        for nid in self.output_registry.all_actions().values():
+            if nid not in all_output_neurons:
+                all_output_neurons.append(nid)
+        fired_outputs = list(dict.fromkeys(fired_outputs + [
+            nid for nid in all_output_neurons
+            if nid < len(self.snn.neurons) and self.snn.neurons[nid].last_fire_time >= 0
+        ]))
         if not fired_outputs:
             return None
 
@@ -676,13 +682,22 @@ class SNNRegion:
             if n.last_fire_time >= 0
             and n.neuron_type not in (NeuronType.INPUT, NeuronType.OUTPUT)
         )
+        # 概念中继驱动加成：概念是语义记忆的直接激活（类似前额叶语义控制），
+        # 应比感觉通路（档位槽隐藏层）更有决策话语权。
+        # 若概念中继（>=_CONCEPT_RELAY_BASE）明确驱动某输出，不应被
+        # 档位槽 escalate 路径压制——概念槽特异性学习（如 banana→reject）
+        # 必须能胜出隐藏层主导。
         for out_nid in fired_outputs:
             n = self.snn.neurons[out_nid]
             score = max(0.1, float(n.membrane or 0.0))
             for src_nid in hidden_source_ids:
                 conn = self.snn.out_edges.get(src_nid, {}).get(out_nid)
                 if conn is not None:
-                    score += conn.weight * 2.0
+                    drive = 2.0
+                    # 概念中继（230+）是语义控制信号，驱动加成
+                    if src_nid >= _CONCEPT_RELAY_BASE:
+                        drive *= _CONCEPT_DRIVE_BOOST
+                    score += conn.weight * drive
             if score <= 0.1:
                 for src in self.snn.neurons:
                     if src.last_fire_time >= 0 and src.id < 16:
