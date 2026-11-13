@@ -154,6 +154,20 @@ _CONCEPT_RELAY_BASE = 230     # 概念中继神经元起点
 _CONCEPT_RELAY_THRESHOLD = 0.95   # 概念中继阈值（大强度放电）
 _CONCEPT_RELAY_IN_WEIGHT = 0.4    # 概念 → 中继
 _CONCEPT_RELAY_OUT_WEIGHT = 0.25  # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
+
+# ── 感受认知接入（方向B：底层认知）──────────────────────
+# sentience 6 维连续感受（threat/safety/interest/confusion/urgency/familiarity）
+# 作为主 SNN 的底层认知输入，替代/补充人工编码的 type/urgency/金额分档。
+# 每个感受维度一个输入神经元（202-207），经独立中继（216-221）连输出层。
+# 中继不连隐藏层（不破坏 AND 门），感受→决策靠 STDP/反馈学习收敛，
+# 而非人工"金额≤1000→批准"语义。
+_SENTIENCE_BASE = 202            # 感受输入神经元起点（202=threat ... 207=familiarity）
+_SENTIENCE_RELAY_BASE = 216      # 感受中继神经元起点（216-221）
+_SENTIENCE_DIM_ORDER = ("threat", "safety", "interest", "confusion", "urgency", "familiarity")
+_SENTIENCE_RELAY_THRESHOLD = 0.95   # 感受中继阈值（大强度放电）
+_SENTIENCE_RELAY_IN_WEIGHT = 0.4    # 感受输入 → 中继
+_SENTIENCE_RELAY_OUT_WEIGHT = 0.3   # 中继 → 输出层（弱驱动，不破坏 AND 门）
+_SENTIENCE_RELAY_OUT_TARGETS = (32, 33, 34, 35, 36, 37)  # 输出层全部决策
 _CONCEPT_LEARN_ETA = 0.12    # 概念槽学习率（独立于微学习 eta，训练足够快）
 
 
@@ -389,6 +403,28 @@ class SNNRegion:
         self._relay_threshold_applied = True
         self._auto_save()
 
+    def _ensure_sentience_channels(self) -> None:
+        """确保感受认知输入神经元存在并建立中继子网。
+
+        方向B（底层认知）：sentience 6 维连续感受（threat/safety/interest/
+        confusion/urgency/familiarity）作为主 SNN 的认知输入（202-207），
+        经独立中继（216-221）连输出层（不连隐藏层，不破坏 AND 门）。
+        感受→决策靠 STDP/反馈学习收敛，非人工语义映射。
+        """
+        for i, dim in enumerate(_SENTIENCE_DIM_ORDER):
+            nid = _SENTIENCE_BASE + i
+            self._ensure_dynamic_neuron(nid, NeuronType.INPUT)
+            rid = _SENTIENCE_RELAY_BASE + i
+            self._ensure_dynamic_neuron(rid, NeuronType.EXCITATORY)
+            if len(self.snn.out_edges.get(rid, ())) == 0:
+                for out_nid in _SENTIENCE_RELAY_OUT_TARGETS:
+                    if out_nid < self.snn.num_neurons:
+                        self.snn.connect(rid, out_nid, weight=_SENTIENCE_RELAY_OUT_WEIGHT, delay=1)
+                self.snn.neurons[rid].threshold = _SENTIENCE_RELAY_THRESHOLD
+            if len(self.snn.out_edges.get(nid, ())) == 0:
+                self.snn.connect(nid, rid, weight=_SENTIENCE_RELAY_IN_WEIGHT, delay=1)
+        self._auto_save()
+
     def _continuous_weights(self, signal: NeuralSignal) -> Dict[int, float]:
         """提取连续强度调制(v4 核心:去硬编码分档)。
 
@@ -452,6 +488,19 @@ class SNNRegion:
                 if cnid is not None:
                     # 概念激活强度映射到 1.0-3.0（越过隐藏层阈值，但走独立中继不污染 AND 门）
                     w[cnid] = max(w.get(cnid, 0.0), 1.0 + act * 2.0)
+
+        # 感受认知接入（方向B：底层认知）
+        # sentience 6 维连续感受（threat/safety/interest/confusion/urgency/familiarity）
+        # 作为主 SNN 的认知输入，决策由认知表征涌现而非人工 type/金额分档。
+        sent = (signal.payload or {}).get("_sentience")
+        if isinstance(sent, dict) and sent:
+            self._ensure_sentience_channels()
+            for i, dim in enumerate(_SENTIENCE_DIM_ORDER):
+                val = sent.get(dim)
+                if isinstance(val, (int, float)) and val > 0.05:
+                    nid = _SENTIENCE_BASE + i
+                    # 感受强度映射到 1.0-3.0（越过中继阈值，驱动输出竞争）
+                    w[nid] = max(w.get(nid, 0.0), 1.0 + float(val) * 2.0)
 
         return w
 
@@ -1070,6 +1119,12 @@ class SNNRegion:
         # 否则概念永远学不会（生产 learn 场景多数是纠正错误，was_correct=False）
         self._learn_concept_drives_output(signal, target_output, eta)
 
+        # 感受认知学习（方向B）：感受中继学会驱动正确决策
+        # sentience 6 维感受（threat/urgency/familiarity 等）作为主 SNN 认知输入，
+        # 感受中继→输出连接靠反馈学习收敛（威胁→escalate、熟悉→auto_approve），
+        # 而非人工"金额≤1000→批准"语义。
+        self._learn_sentience_drives_output(signal, target_output, eta)
+
         self._auto_save()
 
         # 恢复 Hebbian 状态(推理时可能被 reason() 设为 False)
@@ -1182,6 +1237,40 @@ class SNNRegion:
                     conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
                 if conn is not None and conn.weight < self.snn.max_weight:
                     conn.weight = min(self.snn.max_weight, conn.weight + _CONCEPT_LEARN_ETA * act)
+        except Exception:
+            pass
+
+    def _learn_sentience_drives_output(
+        self, signal: NeuralSignal, target_output: int, eta: float = 0.02
+    ) -> None:
+        """感受认知学习（方向B）：感受中继学会驱动正确决策。
+
+        sentience 6 维连续感受（threat/safety/interest/confusion/urgency/familiarity）
+        作为主 SNN 的认知输入（202-207），经独立中继（216-221）连输出层。
+        正确反馈时，对每个激活感受维度，加强其感受中继→目标输出连接，
+        让"威胁→escalate、熟悉→auto_approve"等映射靠学习收敛，
+        而非人工"金额≤1000→批准"语义。
+        """
+        try:
+            sent = (signal.payload or {}).get("_sentience")
+            if not isinstance(sent, dict) or not sent:
+                return
+            # 确保感受通道存在（幂等）
+            self._ensure_sentience_channels()
+            for i, dim in enumerate(_SENTIENCE_DIM_ORDER):
+                act = sent.get(dim)
+                if not isinstance(act, (int, float)) or act <= 0.05:
+                    continue
+                relay_nid = _SENTIENCE_RELAY_BASE + i
+                if relay_nid >= self.snn.num_neurons:
+                    continue
+                conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
+                if conn is None:
+                    # 突触发生：建立感受中继→输出连接
+                    self.snn.connect(relay_nid, target_output, weight=_SENTIENCE_RELAY_OUT_WEIGHT, delay=1)
+                    conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
+                if conn is not None and conn.weight < self.snn.max_weight:
+                    conn.weight = min(self.snn.max_weight, conn.weight + _CONCEPT_LEARN_ETA * float(act))
         except Exception:
             pass
 

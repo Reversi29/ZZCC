@@ -125,6 +125,12 @@ class ReasoningEngineV2:
         if concept_vector and concept_vector.concepts:
             signal.payload = dict(signal.payload or {})
             signal.payload["_concept_vector"] = dict(concept_vector.concepts)
+        # 感受认知接入：sentience 6 维连续感受（threat/safety/interest/
+        # confusion/urgency/familiarity）作为主 SNN 的底层认知输入。
+        # 主 SNN 不再是人工编码 type/urgency/金额分档，而是感知"多危险/多紧急/多熟悉"。
+        if sentiments:
+            signal.payload = dict(signal.payload or {})
+            signal.payload["_sentience"] = dict(sentiments)
         if plan is not None:
             result = await self.base.coordinator.run(
                 signal, enhanced_context, plan=plan
