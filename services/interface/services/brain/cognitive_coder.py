@@ -719,6 +719,17 @@ class CognitiveCoder:
         if struct_concepts:
             modal_concepts["structured"] = struct_concepts
 
+        # 开放集概念注入：payload 显式传入的 _concept_vector（上游/用户注入的
+        # 任意概念，如 banana/fire）应与规则式提取合并（取高），而非被覆盖。
+        # 这样概念槽（220+）能感知到开放集概念，而非只有预定义语义概念。
+        injected_cv = payload.get("_concept_vector")
+        if isinstance(injected_cv, dict) and injected_cv:
+            modal_concepts["injected"] = {
+                str(k): float(v)
+                for k, v in injected_cv.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+
         # ── 2. 对齐层融合（协同推理：多模态交叉验证） ──
         unified: Dict[str, float] = {}
         sources: Dict[str, List[str]] = {}
