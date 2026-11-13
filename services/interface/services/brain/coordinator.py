@@ -291,9 +291,21 @@ class RegionCoordinator:
                     "context": r.context,
                 }
                 continue
-            if r.result is not None:
-                weight = self._region_weights.get(r.region, 0.3)
-                candidates.append((r.region, r.result, weight))
+            if r.result is None:
+                continue
+            # LLM 失效信号过滤：LLM 限流/超时/返回空时会产出
+            # decision="need_info" 但 reasoning 为空的"空壳结果"。
+            # 这类结果不是真决策（无推理依据），若参与融合会以 level=3
+            # 污染 reasoning_level 并可能压制本地脑区的可用决策，
+            # 表现为顶层 /brain/ask 莫名返回 need_info（conf 恰为 0.7
+            # 上限）。过滤后由 SNN/规则降级承接。
+            if r.result.decision == "need_info" and not (r.result.reasoning or "").strip():
+                logger.info(
+                    "coordinator: drop empty LLM need_info from %s "
+                    "(reasoning empty, likely LLM fallback)", r.region)
+                continue
+            weight = self._region_weights.get(r.region, 0.3)
+            candidates.append((r.region, r.result, weight))
             # 收集 enrichment context（语义/情景记忆等）
             if r.context:
                 enrichment_context[r.region] = r.context

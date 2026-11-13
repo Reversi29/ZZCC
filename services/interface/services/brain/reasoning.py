@@ -448,6 +448,18 @@ class ReasoningEngine:
         if not history:
             return None
 
+        # 0. 过滤历史空壳 need_info：LLM 限流/超时/返回空会产生
+        #    decision="need_info" 且 reasoning 为空的记录。这类记录不是
+        #    真决策，若计入分布统计会让 dominant_decision 偏向 need_info，
+        #    进而把后续推理的 L2 结果也拉向 need_info，形成循环污染。
+        history = [
+            h for h in history
+            if not (h.get("decision") == "need_info"
+                    and not (h.get("reasoning") or "").strip())
+        ]
+        if not history:
+            return None
+
         # 1. 历史决策分布
         decisions = [h["decision"] for h in history]
         decision_counts: Dict[str, int] = {}

@@ -423,6 +423,14 @@ async def retrieve_for_signal(
         history = await get_decisions(db, limit=limit)
     except Exception:
         history = []
+    # 过滤空壳 need_info：LLM 限流/超时/返回空会写入 decision="need_info" 且
+    # reasoning 为空的记录。这类记录无推理依据，若留在工作记忆/历史中，
+    # 会回注 prompt 拉偏 LLM 判断、并让统计偏向 need_info，形成循环污染。
+    history = [
+        h for h in history
+        if not (h.get("decision") == "need_info"
+                and not (h.get("reasoning") or "").strip())
+    ]
     relevant_history = history[:limit]
 
     return {
