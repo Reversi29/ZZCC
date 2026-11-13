@@ -779,12 +779,17 @@ class SNNRegion:
 
             # 持续学习推理：融合推理+微学习+探索
             # 不传 expected_decision，因为推理时没有反馈
-            # 不传 sustain_weights：一次性注入保持 12/12 档位决策。
-            # 速率编码（持续注入）会破坏档位槽→隐藏层的精确放电组合，
-            # 中继放电必然改变隐藏层激活模式——已实测任何中继放电都 <12/12。
-            # 连续调制以亚阈值（膜电位梯度）形式存在，供 STDP/学习利用。
+            # 速率编码（sustain_weights）：仅感受通道 202-207 持续注入。
+            # 感受中继（216-221）连输出层（不连隐藏层），速率编码放电
+            # 不会破坏档位槽 AND 门——威胁/紧急强度越高中继放电越频繁。
+            # 连续通道 200/201 的中继（210-215）仍连隐藏层，保持一次性
+            # 注入（亚阈值调制），避免破坏档位槽→隐藏层精确放电组合。
+            sustain_weights = {
+                nid: w for nid, w in cont_weights.items()
+                if _SENTIENCE_BASE <= nid < _SENTIENCE_BASE + len(_SENTIENCE_DIM_ORDER)
+            }
             outputs, boundary_detected = self.snn.step_with_learning(
-                input_neurons, strength, weights=cont_weights
+                input_neurons, strength, weights=cont_weights, sustain_weights=sustain_weights or None
             )
 
             # 记录探索结果
