@@ -475,6 +475,98 @@ async def observe(
     ))
 
 
+@router.post("/review/dynamic")
+async def review_dynamic(
+    count: int = Query(3, ge=1, le=10),
+    seed: Optional[int] = None,
+):
+    """动态复习：从知识库随机抽取不同历史信号注入，避免每日固定信号。
+
+    从 brain_memory 的 episodic 记忆中抽取不同 signal_type 的样本，
+    构造信号调 observe（auto_process=True），触发 LLM 老师蒸馏。
+    种子默认用当前日期（当日一致、逐日不同），实现每日动态摄取不同知识。
+    """
+    import random
+    from datetime import date
+    from services.db import managed_session
+
+    rng = random.Random(seed if seed is not None else int(date.today().strftime("%Y%m%d")))
+    async with managed_session() as db:
+        # 抽取不同 signal_type 的 episodic 记忆（避免同类重复）
+        all_rows = await mem.memory_list(db, type_="episodic", limit=500)
+
+    # 按 signal_type 分组，每组随机取一个代表样本
+    by_type: Dict[str, List[dict]] = {}
+    for row in all_rows:
+        val = row.get("value")
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except (ValueError, TypeError):
+                continue
+        if not isinstance(val, dict):
+            continue
+        st = val.get("signal_type") or row.get("module")
+        if not st:
+            continue
+        by_type.setdefault(st, []).append(row)
+
+    # 随机选 count 个不同类型，每个随机取一个样本
+    all_types = list(by_type.keys())
+    rng.shuffle(all_types)
+    selected_types = all_types[:count]
+
+    results = []
+    for st in selected_types:
+        candidates = by_type[st]
+        row = rng.choice(candidates)
+        val = row.get("value")
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except (ValueError, TypeError):
+                val = {}
+        payload = val.get("signal_payload") or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        # 从记忆中提取 urgency（无则按金额推断：金额越高越紧急）
+        urgency = val.get("urgency")
+        if not isinstance(urgency, (int, float)) or urgency <= 0:
+            amt = payload.get("amount") if isinstance(payload, dict) else None
+            try:
+                amt = float(amt) if amt is not None else 0
+            except (TypeError, ValueError):
+                amt = 0
+            if amt >= 80000:
+                urgency = 90
+            elif amt >= 10000:
+                urgency = 70
+            elif amt >= 1000:
+                urgency = 50
+            elif amt > 0:
+                urgency = 30
+            else:
+                urgency = 50
+        # 构造复习信号
+        signal = {
+            "type": st,
+            "payload": payload,
+            "source": "cron_review_dynamic",
+            "urgency": urgency,
+        }
+        # 调用 observe（同步推理）
+        obs = await observe(ObserveRequest(signal=signal, auto_process=True))
+        results.append({
+            "signal_type": st,
+            "payload": payload,
+            "urgency": urgency,
+            "decision": obs.get("decision") if isinstance(obs, dict) else None,
+            "confidence": obs.get("confidence") if isinstance(obs, dict) else None,
+        })
+
+    return {"ok": True, "count": len(results), "samples": results}
+
+
 @router.post("/process-queue")
 async def process_queue(
     limit: int = Query(20, ge=1, le=100),
