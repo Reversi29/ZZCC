@@ -1434,7 +1434,7 @@ class ShadowSNNRegion(SNNRegion):
         self._perturb_network()
         self._save_stats()  # 确保统计文件存在
 
-    def _perturb_network(self, amplitude: float = 0.35, n_extra_edges: int = 8):
+    def _perturb_network(self, amplitude: float = 0.15, n_extra_edges: int = 4):
         """对 shadow 网络进行异质化:权重扰动 + 随机新增连接。
 
         仅第一次执行(标记文件不存在时)。
@@ -1458,7 +1458,10 @@ class ShadowSNNRegion(SNNRegion):
                     if conn is None:
                         continue
                     factor = 1.0 + rng.uniform(-amplitude, amplitude)
-                    conn.weight = max(0.05, min(self.snn.max_weight, conn.weight * factor))
+                    # 上限用 1.8 而非 max_weight(3.0)——异质化幅度 0.35 + max_weight 上限
+                    # 会让 escalate 边触顶 3.0，shadow 恒输出 escalate（168/168 分歧样本），
+                    # 失去异质观测价值。幅度降到 0.15 + 上限 1.8，shadow 更接近主 SNN。
+                    conn.weight = max(0.05, min(1.8, conn.weight * factor))
                     changed += 1
 
             # Phase 2: 结构扰动 - 随机新增边
@@ -1482,7 +1485,7 @@ class ShadowSNNRegion(SNNRegion):
                 else:
                     src = rng.choice(exc_range + inh_range)
                     tgt = rng.choice(output_range)
-                    w = round(rng.uniform(0.8, 2.0), 3)
+                    w = round(rng.uniform(0.8, 1.5), 3)
                 # 跳过已存在的边
                 if tgt in self.snn.out_edges.get(src, {}):
                     continue
