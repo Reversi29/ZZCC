@@ -67,6 +67,43 @@ def test_clean_topology_stability():
         )
 
 
+def test_clean_topology_stability_after_feedback():
+    """方向1（边界优化）：错误反馈累积后 eval 仍 12/12（防漂移期边界平局）。
+
+    惩罚精准化（方向2）前，错误反馈只惩罚不加强（penalized 420 vs
+    strengthened 0），权重净流失导致 #8 approval_pending/30 的
+    escalate vs auto_approve 差 0.002 翻转。惩罚精准化后
+    penalized/strengthened=1.00，权重平衡，边界应保持。
+    """
+    import tempfile
+    from services.brain.snn_region import SNNRegion
+    from models.brain import NeuralSignal
+
+    region = SNNRegion(save_path=tempfile.mkdtemp() + "/s.json")
+    # 连续 20 次错误反馈（模拟漂移期累积训练）
+    for i in range(20):
+        sig = NeuralSignal(
+            id=f"t{i}", type="expense", payload={"amount": 500},
+            source="eval", urgency=50,
+        )
+        r = region._run_reason(sig) if hasattr(region, "_run_reason") else None
+        # 直接用 eval_cases 内部 asyncio
+        import asyncio
+
+        async def _reason():
+            return await region.reason(sig, {}, None)
+
+        r = asyncio.run(_reason())
+        wrong = r.result.decision if r.result else "auto_approve"
+        region.train_from_feedback(sig, "escalate", False, wrong_decision=wrong)
+
+    ok, fails = _run(region)
+    assert not fails, (
+        f"错误反馈累积后 eval 掉分：{ok}/{len(EVAL_CASES)}\n失败：{fails}\n"
+        "（惩罚精准化应保持权重平衡，边界不应翻转）"
+    )
+
+
 def _run(region):
     """同步包装 eval_cases.run（内部已用 asyncio.run）。"""
     return _run_inner(region)
