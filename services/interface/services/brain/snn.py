@@ -595,6 +595,15 @@ class SNN:
         重要权重:被频繁激活的神经元参与的连接
         重要性高的权重在后续学习中更新率降低,防止灾难性遗忘
         """
+        # 先衰减所有已有重要性,防止只增不减最终全部饱和冻结
+        # (EWC_IMPORTANCE_DECAY 此前定义了但从未调用,是死代码)
+        if self._ewc_importance:
+            for key in list(self._ewc_importance.keys()):
+                v = self._ewc_importance[key] * self.EWC_IMPORTANCE_DECAY
+                if v < 0.001:   # 低于阈值清理,防止稀疏表无限膨胀
+                    del self._ewc_importance[key]
+                else:
+                    self._ewc_importance[key] = v
         for n_id in fired_neurons:
             # 出边重要性(该神经元的输出连接)
             for tgt, conn in self.out_edges.get(n_id, {}).items():
@@ -603,6 +612,20 @@ class SNN:
                     10.0,  # 最大重要性
                     self._ewc_importance[key] + 0.01
                 )
+
+    def get_ewc_importance(self) -> dict:
+        """导出 EWC 重要性(持久化用)。key 为 "src->tgt" 字符串。"""
+        return {f"{s}->{t}": v for (s, t), v in self._ewc_importance.items()}
+
+    def load_ewc_importance(self, data: dict):
+        """从持久化数据恢复 EWC 重要性。"""
+        self._ewc_importance.clear()
+        for k, v in (data or {}).items():
+            try:
+                s, t = k.split("->")
+                self._ewc_importance[(int(s), int(t))] = float(v)
+            except Exception:
+                continue
 
     def _get_ewc_multiplier(self, src: int, tgt: int) -> float:
         """获取 EWC 学习率乘数。
@@ -869,6 +892,7 @@ class SNN:
             "history_window": self.history_window,
             "neurons": neurons,
             "edges": edges,
+            "ewc_importance": self.get_ewc_importance(),
         }
 
     @classmethod
@@ -907,6 +931,9 @@ class SNN:
         for ed in data.get("edges", []):
             net.connect(ed["source"], ed["target"],
                        weight=ed["weight"], delay=ed["delay"])
+        # 恢复 EWC 重要性（此前未持久化，重启/恢复即清零）
+        if "ewc_importance" in data:
+            net.load_ewc_importance(data.get("ewc_importance", {}))
         return net
 
     def save(self, path: str) -> bool:

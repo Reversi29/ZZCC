@@ -16,7 +16,8 @@
   snn_drift_guard.py              # 检测 + 必要时恢复，打印报告
   snn_drift_guard.py --check      # 仅检测，不恢复
   snn_drift_guard.py --baseline    # 从当前生产网络重建基线快照（需先确认 eval 达标）
-  snn_drift_guard.py --restore     # 无条件从基线恢复
+  snn_drift_guard.py --restore     # 软恢复（保留 EWC 知识）
+  snn_drift_guard.py --hard-restore  # 硬恢复（丢弃 EWC，从基线重来）
 
 退出码：0=健康, 1=漂移已恢复, 2=漂移且 --check 未恢复
 """
@@ -53,6 +54,10 @@ MAX_TRAINING = 20
 # 1.3 而非 1.5：真实漂移现场是 penalized 269 / strengthened 201 = 1.34，
 # 用 1.5 会让它漏报，只能靠 training_count 单独捕获
 PENALIZE_RATIO = 1.3
+# 权重均值下压阈值——真实漂移会把权重整体压低（结构性连接被削弱）。
+# 基线快照的权重均值作为基准，低于基线均值×(1-WEIGHT_MEAN_DROP_RATIO)
+# 即判为漂移。这是网络自身状态的判据，不依赖 stats（被服务内存覆写）。
+WEIGHT_MEAN_DROP_RATIO = 0.25
 
 
 def docker_exec(args, check=True):
@@ -101,6 +106,20 @@ class DriftReport:
         except Exception:
             return None
 
+    def baseline_weight_mean(self):
+        """从基线快照读权重均值，作为下压判定的基准。"""
+        raw = read_file(BASELINE)
+        if not raw:
+            return None
+        try:
+            net = json.loads(raw)
+            edges = net.get("edges", [])
+            if not edges:
+                return None
+            return sum(e.get("weight", 0) for e in edges) / len(edges)
+        except Exception:
+            return None
+
     def check(self):
         """用网络自身状态检测漂移，返回 True 表示健康。"""
         raw = read_file(NETWORK)
@@ -115,6 +134,11 @@ class DriftReport:
 
         self.neurons = net.get("num_neurons")
         self.edges = len(net.get("edges", {}))
+        edge_list = net.get("edges", [])
+        self.weight_mean = (
+            sum(e.get("weight", 0) for e in edge_list) / len(edge_list)
+            if edge_list else 0.0
+        )
 
         if self.neurons is None:
             self.issues.append("网络缺少 num_neurons 字段")
@@ -155,12 +179,26 @@ class DriftReport:
             except Exception:
                 pass
 
+        # 漂移源 3：权重均值下压（网络自身状态，不依赖 stats）
+        # stats 被服务内存覆写时上面两条会漏检，权重分布是可靠判据。
+        base_wm = self.baseline_weight_mean()
+        if base_wm is not None and base_wm > 0 and self.weight_mean > 0:
+            if self.weight_mean < base_wm * (1 - WEIGHT_MEAN_DROP_RATIO):
+                self.issues.append(
+                    f"权重均值下压：{self.weight_mean:.3f} "
+                    f"< 基线 {base_wm:.3f} × (1-{WEIGHT_MEAN_DROP_RATIO})")
+            elif self.weight_mean < base_wm * 0.9:
+                self.warnings.append(
+                    f"权重均值接近阈值：{self.weight_mean:.3f} "
+                    f"vs 基线 {base_wm:.3f}")
+
         # 只有致命 issues 触发恢复；warnings 不触发
         return not self.issues
 
     def render(self, restored=False):
         lines = ["===== SNN 漂移护栏 =====",
-                 f"  神经元: {self.neurons}  边: {self.edges}",
+                 f"  神经元: {self.neurons}  边: {self.edges}  "
+                 f"权重均值: {self.weight_mean:.3f}",
                  f"  training_count: {self.training_count}  "
                  f"strengthened: {self.strengthened}  penalized: {self.penalized}"]
         if self.issues:
@@ -185,10 +223,45 @@ def snapshot_drifted(report):
     return dest
 
 
-def restore_from_baseline():
+def merge_ewc_for_restore(baseline_raw: str, drift_raw: str) -> tuple[str, int]:
+    """软恢复的 EWC 合并：返回 (合并后的基线 JSON, 保留的 EWC 条数)。
+
+    合并策略：漂移网络优先保留其 EWC 值，基线里漂移没有的补进来。
+    这样恢复基线拓扑后，被固化的重要连接（如 escalate 路径）依然受
+    EWC 保护，不会因回退基线而丢失已固化的知识。
+    """
+    try:
+        base = json.loads(baseline_raw)
+        drift = json.loads(drift_raw)
+        ewc = dict(drift.get("ewc_importance", {}))
+        for k, v in base.get("ewc_importance", {}).items():
+            ewc.setdefault(k, v)
+        if not ewc:
+            return baseline_raw, 0
+        base["ewc_importance"] = ewc
+        return json.dumps(base, ensure_ascii=False, indent=2), len(ewc)
+    except Exception:
+        return baseline_raw, 0
+
+
+def restore_from_baseline(soft=True):
+    """从基线恢复网络。
+
+    soft=True（默认）：软恢复。恢复基线拓扑，但把漂移网络的 EWC 重要性
+    合并过来。这样被固化的重要连接（如 escalate 路径）在恢复后依然受
+    EWC 保护，不会因为回退基线而丢失已固化的知识。
+
+    soft=False：硬恢复。完全丢弃漂移网络的 EWC 重要性，从基线重新开始。
+    """
     if not read_file(BASELINE):
         return "基线快照不存在，无法恢复（需先 --baseline 建立）"
+    baseline_raw = read_file(BASELINE)
+    drift_raw = read_file(NETWORK)
+    merged, self_ewc = merge_ewc_for_restore(baseline_raw, drift_raw)
     docker_exec(["cp", BASELINE, NETWORK])
+    # 先 cp 基线再写合并后的内容（含 EWC）
+    if merged != baseline_raw:
+        write_file(NETWORK, merged)
     # stats 文件未随网络重置会残留旧值，一并归零
     zero_stats = json.dumps({
         "reason_calls": 0, "reason_hits": 0, "total_fires": 0,
@@ -199,7 +272,7 @@ def restore_from_baseline():
     }, ensure_ascii=False)
     write_file(f"{DATA_DIR}/snn_network_stats.json", zero_stats)
     restart_service()
-    return "已恢复"
+    return f"已软恢复（保留 {self_ewc} 条 EWC 重要性）"
 
 
 def build_baseline():
@@ -216,15 +289,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="仅检测，不恢复")
     ap.add_argument("--baseline", action="store_true", help="从当前生产网络重建基线")
-    ap.add_argument("--restore", action="store_true", help="无条件从基线恢复")
+    ap.add_argument("--restore", action="store_true", help="软恢复（保留 EWC 知识）")
+    ap.add_argument("--hard-restore", action="store_true", help="硬恢复（丢弃 EWC，从基线重来）")
     args = ap.parse_args()
 
     if args.baseline:
         print(build_baseline())
         return 0
 
+    if args.hard_restore:
+        print(restore_from_baseline(soft=False))
+        return 0
+
     if args.restore:
-        print(restore_from_baseline())
+        print(restore_from_baseline(soft=True))
         return 0
 
     report = DriftReport()
