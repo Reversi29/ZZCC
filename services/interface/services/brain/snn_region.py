@@ -134,8 +134,25 @@ _CONCEPT_PRETRAIN_SEEDS = {
     "hello": "chat",
     "greeting": "chat",
 }
-# 概念预训练连接初始权重（与 _CONCEPT_RELAY_OUT_WEIGHT 同一量级，稍高）
-_CONCEPT_PRETRAIN_CONN_WEIGHT = 0.7
+# 概念预训练连接初始权重（需足以触发输出放电——输出阈值 1.0，
+# 概念中继单次放电需 ≥ 阈值才能驱动输出，0.7 不足以触发。
+# 设 1.0 刚好触发，但低于典型学习权重（8 次反馈≈1.1+），
+# 让特异性学习能覆盖预训练语义先验）。
+_CONCEPT_PRETRAIN_CONN_WEIGHT = 1.0
+
+# 学习连接评分加成：学习过的特异性知识（连接权重>预训练基线）
+# 给额外 drive 加成，确保学习能覆盖预训练语义先验（如 banana
+# 学习 reject 后应胜 unlearned approval）。预训练连接（≤基线）
+# 给完整 drive（×1.0），学习连接给完整 drive × 加成。
+_CONCEPT_LEARNED_DRIVE_BONUS = 1.6
+
+# ── need_info 污染治理系数 ────────────────────────────────
+# need_info 是"信息请求"而非业务结论，不应作为默认赢家碾压
+# reject/escalate 等实质决策。历史反馈过度强化了 need_info 槽
+# （218→100 w=1.86 等），使其 score 碾压正确决策。
+# 施加结构惩罚（×0.6），让 need_info 只在信息真正不足且
+# 其他输出较弱时胜出。
+_NEED_INFO_PENALTY = 0.4
 
 # ── 紧急度 → 输入神经元映射 ─────────────────────────────────
 def _urgency_neuron(urgency: int) -> Optional[int]:
@@ -732,11 +749,19 @@ class SNNRegion:
             target_output = self._decision_to_output_neuron(target_decision)
             if target_output is None:
                 return
-            # 预置连接（已存在则不覆盖，尊重学习收敛的权重）
-            if relay_nid not in self.snn.out_edges or \
-               target_output not in self.snn.out_edges.get(relay_nid, {}):
-                self.snn.connect(relay_nid, target_output,
-                                 weight=_CONCEPT_PRETRAIN_CONN_WEIGHT, delay=1)
+            # 预置连接：目标输出未连 → 以预训练权重新建；
+            # 已存在但权重低于预训练基线（基线网络可能只有 0.9，
+            # 不足以触发输出阈值 1.0）→ 提升到预训练基线。
+            # 语义先验种子应保证目标输出能触发，不依赖历史弱连接。
+            existing = None
+            if relay_nid in self.snn.out_edges:
+                existing = self.snn.out_edges.get(relay_nid, {}).get(target_output)
+            if existing is None or existing.weight < _CONCEPT_PRETRAIN_CONN_WEIGHT:
+                if existing is not None:
+                    existing.weight = _CONCEPT_PRETRAIN_CONN_WEIGHT
+                else:
+                    self.snn.connect(relay_nid, target_output,
+                                     weight=_CONCEPT_PRETRAIN_CONN_WEIGHT, delay=1)
                 # 同时预置 concept_decision_weights（供 _decode_output 融合参考）
                 cdw = self._stats.setdefault("concept_decision_weights", {})
                 entry = cdw.setdefault(c, {})
@@ -749,56 +774,50 @@ class SNNRegion:
                 logger.info(
                     f"snn_region: concept pretrain seed '{concept}' → {target_decision} "
                     f"(relay {relay_nid}→{target_output})")
-            # P3 强化：抑制概念中继→need_info 误导连接（每次调用都执行，
+            # P3 强化：抑制概念中继→非目标决策输出误导连接（每次调用都执行，
             # 不只新建连接时——历史连接的误导也可能存在）。
-            # 动态输出槽 need_info(100+) 可能被历史反馈强化，劫持概念信号
-            # （如 rejection 场景 need_info score 碾压 reject）。预训练种子
-            # 的语义先验应压制这种误导：削弱/移除中继→need_info 连接，
-            # 让正确决策输出（reject/escalate/auto_approve）胜出。
-            self._suppress_need_info_drive(relay_nid, c)
+            # 动态输出槽 need_info(100+) 或冲突决策（escalate/auto_approve）
+            # 可能被历史反馈强化，劫持概念信号（如 rejection 场景 escalate
+            # 碾压 reject）。预训练种子的语义先验应压制这种误导：削弱中继→
+            # 非目标输出连接，让正确决策输出（reject/escalate/auto_approve）胜出。
+            self._suppress_off_target_drive(relay_nid, c, target_decision)
         except Exception as e:
             logger.warning(f"snn_region: pretrain seed failed for '{concept}': {e}")
 
-    def _suppress_need_info_drive(self, relay_nid: int, concept: str) -> None:
-        """抑制概念中继→need_info 的误导连接（P3 强化）。
+    def _suppress_off_target_drive(self, relay_nid: int, concept: str,
+                                   target_decision: str) -> None:
+        """抑制概念中继→非目标决策输出的误导连接（P3 强化）。
 
-        动态输出槽 need_info（ID 100+）可能因历史反馈被强化，
-        导致概念信号被 need_info 劫持（如 rejection→reject 被
-        need_info score 碾压）。预训练种子的语义先验应压制这种
-        误导，让概念中继不再驱动 need_info，改由正确决策输出承接。
+        动态输出槽（need_info 100+ 或冲突决策 escalate/reject）可能
+        因历史反馈被强化，导致概念信号被错误决策劫持（如 rejection→
+        reject 被 escalate 碾压）。预训练种子的语义先验应压制这种误导，
+        让概念中继不再驱动非目标输出，改由目标决策输出承接。
         """
         try:
             if relay_nid not in self.snn.out_edges:
                 return
-            # 找 need_info 动态输出槽 ID（可能多个）
-            need_info_ids = []
-            try:
-                ni = self.output_registry.get("need_info")
-                if ni is not None:
-                    need_info_ids.append(ni)
-            except Exception:
-                pass
-            # 也扫固定/动态输出里 decision==need_info 的
-            for nid, dec in _OUTPUT_DECISION.items():
-                if dec == "need_info":
-                    need_info_ids.append(nid)
+            # 所有业务输出神经元 ID（固定 + 动态）
+            output_ids = list(self._OUTPUT_NEURONS)
             for act in self.output_registry.all_actions().values():
-                if self._decision_for_output(act) == "need_info":
-                    need_info_ids.append(act)
-            need_info_ids = list(dict.fromkeys(need_info_ids))
-            for ni in need_info_ids:
-                conn = self.snn.out_edges.get(relay_nid, {}).get(ni)
+                if act not in output_ids:
+                    output_ids.append(act)
+            for out_nid in output_ids:
+                dec = self._decision_for_output(out_nid)
+                if dec is None or dec == target_decision:
+                    continue  # 目标决策保留，非目标才抑制
+                conn = self.snn.out_edges.get(relay_nid, {}).get(out_nid)
                 if conn is not None:
                     # 削弱误导连接（权重×0.3，不低于下限），不删除保留可塑性
                     old_w = conn.weight
                     conn.weight = max(0.05, min(conn.weight, old_w * 0.3))
-                    self._stats["need_info_suppressed"] = \
-                        self._stats.get("need_info_suppressed", 0) + 1
+                    self._stats["off_target_suppressed"] = \
+                        self._stats.get("off_target_suppressed", 0) + 1
                     logger.info(
-                        f"snn_region: suppress need_info drive relay {relay_nid}→{ni} "
-                        f"w={old_w:.3f}→{conn.weight:.3f} (concept '{concept}')")
+                        f"snn_region: suppress off-target drive relay {relay_nid}→{out_nid} "
+                        f"w={old_w:.3f}→{conn.weight:.3f} "
+                        f"(concept '{concept}', target {target_decision})")
         except Exception as e:
-            logger.warning(f"snn_region: need_info suppress failed: {e}")
+            logger.warning(f"snn_region: off-target suppress failed: {e}")
 
     def _decode_output(self, outputs: Dict[int, bool],
                         active: List[int]) -> Optional[CognitionResult]:
@@ -850,6 +869,13 @@ class SNNRegion:
                     # 概念中继（230+）是语义控制信号，驱动加成
                     if src_nid >= _CONCEPT_RELAY_BASE:
                         drive *= _CONCEPT_DRIVE_BOOST
+                        # 预训练 vs 学习区分：预训练连接（权重≤基线）是
+                        # 语义先验引导，给完整 drive（×1.0）；已学习的
+                        # 特异性知识（权重>基线）给额外加成，确保学习
+                        # 能覆盖预训练（如 banana 学习 reject 后应胜
+                        # unlearned approval）。
+                        if conn.weight > _CONCEPT_PRETRAIN_CONN_WEIGHT:
+                            drive *= _CONCEPT_LEARNED_DRIVE_BONUS
                     score += conn.weight * drive
             if score <= 0.1:
                 for src in self.snn.neurons:
@@ -857,6 +883,13 @@ class SNNRegion:
                         conn = self.snn.out_edges.get(src.id, {}).get(out_nid)
                         if conn is not None:
                             score += conn.weight
+            # need_info 污染治理：need_info 是"信息请求"而非业务结论，
+            # 不应作为默认赢家碾压 reject/escalate 等实质决策。
+            # 历史反馈过度强化了 need_info 槽（218→100 w=1.86 等），
+            # 使其 score 碾压正确决策。施加结构惩罚（×0.6），
+            # 让 need_info 只在信息真正不足且其他输出较弱时胜出。
+            if self._decision_for_output(out_nid) == "need_info":
+                score *= _NEED_INFO_PENALTY
             strengths[out_nid] = score
 
         sorted_outputs = sorted(strengths.items(), key=lambda item: item[1], reverse=True)

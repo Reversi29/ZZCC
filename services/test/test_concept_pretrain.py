@@ -115,12 +115,27 @@ def test_suppress_need_info_drive(region):
     # 注册 need_info 输出槽
     ni = region.output_registry.register("need_info")
     region.snn.connect(relay, ni, weight=1.2, delay=1)
-    # 再次调用预训练种子 → 抑制 need_info
+    # 再次调用预训练种子 → 抑制非目标输出
     region._apply_pretrain_seed("rejection", relay)
     conn = region.snn.out_edges.get(relay, {}).get(ni)
     if conn is not None:
         assert conn.weight < 1.2  # 被削弱
-    assert region._stats.get("need_info_suppressed", 0) >= 1
+    assert region._stats.get("off_target_suppressed", 0) >= 1
+
+
+def test_suppress_off_target_escalate(region):
+    """rejection 概念中继→escalate 误导连接被抑制（非目标输出）。"""
+    region._ensure_concept_channel("rejection")
+    nid = region.concept_registry.get("rejection")
+    relay = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+    # 模拟历史污染：中继也连 escalate(34)
+    region.snn.connect(relay, 34, weight=1.5, delay=1)
+    region._apply_pretrain_seed("rejection", relay)
+    conn = region.snn.out_edges.get(relay, {}).get(34)
+    if conn is not None:
+        assert conn.weight < 1.5  # 被削弱
+    # reject(33) 目标输出保留
+    assert 33 in region.snn.out_edges.get(relay, {})
 
 
 def test_rejection_not_hijacked_by_need_info(region):
@@ -148,3 +163,17 @@ def test_suppress_existing_need_info_connection(region):
         region._apply_pretrain_seed("rejection", relay)
         new = region.snn.out_edges[relay][ni].weight
         assert new < old  # 被削弱
+
+
+def test_pretrain_boost_weak_existing(region):
+    """已有弱连接（<预训练基线）被提升到基线，确保目标输出能触发。"""
+    region._ensure_concept_channel("danger")
+    nid = region.concept_registry.get("danger")
+    relay = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
+    # 模拟基线弱连接 34(escalate) w=0.9（不足以触发阈值 1.0）
+    if 34 not in region.snn.out_edges.get(relay, {}):
+        region.snn.connect(relay, 34, weight=0.9, delay=1)
+    region._apply_pretrain_seed("danger", relay)
+    conn = region.snn.out_edges.get(relay, {}).get(34)
+    assert conn is not None
+    assert conn.weight >= 1.0  # 被提升到预训练基线
