@@ -74,8 +74,15 @@ def _signal_amount(payload: Dict[str, Any], context: Dict[str, Any]) -> float:
 
 def _signal_doctype(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
     for src in (payload, context):
-        if isinstance(src, dict) and src.get("doctype"):
-            return str(src.get("doctype"))
+        if isinstance(src, dict):
+            if src.get("doctype"):
+                return str(src.get("doctype"))
+            # 回退：payload/context 的 type 键（业务信号类型）
+            if src.get("type"):
+                return str(src.get("type"))
+            # 回退：signal_type（语义等价键）
+            if src.get("signal_type"):
+                return str(src.get("signal_type"))
     return ""
 
 

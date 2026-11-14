@@ -64,7 +64,7 @@ class RegionResult:
 _REGION_WEIGHTS: Dict[str, float] = {
     "rule":        0.80,   # 规则引擎：高置信度但窄范围
     "statistical": 0.60,   # 统计推理：模式匹配，中等置信度
-    "llm":         0.50,   # LLM：宽范围但可变置信度
+    "llm":         0.40,   # LLM：宽范围但可变置信度；429限流/温度致抖动，降权避免顶层拉偏
     "snn":         0.55,   # SNN：脉冲神经网络，训练后精准匹配
     "semantic":    0.20,   # 语义记忆：仅做上下文增强
     "episodic":    0.20,   # 情景记忆：仅做上下文增强

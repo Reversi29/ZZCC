@@ -400,7 +400,10 @@ class ReasoningEngine:
 
         for rule in rules_mod.list_rules(enabled_only=True):
             try:
-                matched = await rules_mod._eval_condition(rule.condition, signal.payload, signal.context)
+                matched = await rules_mod._eval_condition(rule.condition, signal.payload,
+                                                           {**(signal.context or {}),
+                                                            "type": signal.type,
+                                                            "signal_type": signal.type})
             except Exception:
                 matched = False
             if matched:
