@@ -284,6 +284,21 @@ class SNNRegion:
         # 概念槽注册器（开放集概念 → 概念输入神经元）
         self.concept_registry = ConceptRegistry(_registry_path)
 
+        # ── 多 SNN 容错健康状态（P2）──────────────
+        # 连续无有效决策计数。SNN 可能不抛异常但持续返回
+        # result=None（输出未达阈值 / _decode_output 无输出）——
+        # 这是"隐形故障"，coordinator 会静默跳过，需要明确标记。
+        # 超过阈值时 health() 报告不健康，reason() 快速降级让
+        # 规则/统计/LLM 脑区承接，并触发网络健康恢复。
+        self._consecutive_no_decision = 0
+        self._health_status = "healthy"  # healthy | degraded | unhealthy
+        self._health_reason = ""
+        self._last_health_reset = time.time()
+        # 健康阈值：连续 N 次无决策 → degraded；恢复需要 M 次成功
+        self._HEALTH_DEGRADE_AFTER = 5
+        self._HEALTH_RECOVER_AFTER = 2
+        self._consecutive_healthy = 0
+
     def _register_signal_type(self, sig_type: str) -> int:
         """注册信号类型到动态输入槽(新类型有新槽,不挤占旧槽)。
 
@@ -837,6 +852,8 @@ class SNNRegion:
                 self._stats["last_decision"] = result.decision
                 self._stats["last_confidence"] = result.confidence
                 self._stats["total_fires"] = self.snn.stats()["total_fires"]
+                # 有效决策 → 健康恢复
+                self._record_healthy()
 
                 return RegionResult(
                     region="snn", ok=True,
@@ -846,11 +863,13 @@ class SNNRegion:
                         "steps_run": self.snn.time,
                         "boundary_detected": boundary_detected,
                         "exploration_rate": self._stats["exploration_rate"],
+                        "health": self._health_status,
                     },
                     elapsed_ms=elapsed,
                 )
 
-            # 未产生有效结果
+            # 未产生有效结果——隐形故障，计入健康追踪
+            self._record_no_decision("SNN 输出未达阈值")
             return RegionResult(
                 region="snn", ok=True, result=None,
                 context={
@@ -858,6 +877,7 @@ class SNNRegion:
                     "reason": "SNN 输出未达阈值",
                     "stats": self.snn.stats(),
                     "exploration_rate": self._stats["exploration_rate"],
+                    "health": self._health_status,
                 },
                 elapsed_ms=elapsed,
             )
@@ -868,6 +888,53 @@ class SNNRegion:
                 region="snn", ok=False,
                 error=str(e), elapsed_ms=elapsed,
             )
+
+    # ── 多 SNN 容错健康追踪（P2）────────────────────
+
+    def _record_no_decision(self, reason: str):
+        """记录一次无有效决策（隐形故障）。
+
+        连续无决策超过阈值 → degraded；持续恶化 → unhealthy。
+        健康状态供 coordinator 判断是否降级 SNN 权重。
+        """
+        self._consecutive_no_decision += 1
+        self._consecutive_healthy = 0
+        self._health_reason = reason
+        if self._consecutive_no_decision >= self._HEALTH_DEGRADE_AFTER:
+            self._health_status = "unhealthy"
+            self._health_reason = f"连续 {self._consecutive_no_decision} 次无决策"
+            logger.warning(
+                "snn: health degraded after %d no-decision calls (%s)",
+                self._consecutive_no_decision, reason)
+        elif self._consecutive_no_decision >= 2:
+            self._health_status = "degraded"
+            self._health_reason = f"连续 {self._consecutive_no_decision} 次无决策"
+        else:
+            self._health_status = "healthy"
+            self._health_reason = reason
+
+    def _record_healthy(self):
+        """记录一次有效决策，健康恢复。"""
+        if self._health_status != "healthy":
+            self._consecutive_healthy += 1
+            if self._consecutive_healthy >= self._HEALTH_RECOVER_AFTER:
+                self._health_status = "healthy"
+                self._health_reason = ""
+                logger.info("snn: health recovered after %d successful calls",
+                            self._consecutive_healthy)
+        else:
+            self._consecutive_healthy = 0
+        self._consecutive_no_decision = 0
+
+    def health(self) -> dict:
+        """健康状态快照（供 /snn/status 暴露）。"""
+        return {
+            "status": self._health_status,
+            "reason": self._health_reason,
+            "consecutive_no_decision": self._consecutive_no_decision,
+            "consecutive_healthy": self._consecutive_healthy,
+            "since": self._last_health_reset,
+        }
 
     # ── 决策日志 ────────────────────────────────────────────
 
@@ -1369,6 +1436,7 @@ class SNNRegion:
             "save_path": self.save_path,
             "stats": self._stats,
             "network": self.snn.stats(),
+            "health": self.health(),
         }
 
     def connection_graph(self) -> dict:

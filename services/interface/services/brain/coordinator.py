@@ -305,6 +305,22 @@ class RegionCoordinator:
                     "(reasoning empty, likely LLM fallback)", r.region)
                 continue
             weight = self._region_weights.get(r.region, 0.3)
+            # 多 SNN 容错（P2）：SNN 健康不佳时降权/跳过，让规则承接
+            if r.region == "snn":
+                snn_health = (r.context or {}).get("health", {})
+                if isinstance(snn_health, dict):
+                    hstatus = snn_health.get("status", "healthy")
+                    if hstatus == "unhealthy":
+                        logger.warning(
+                            "coordinator: SNN unhealthy, skipping "
+                            "(consecutive_no_decision=%d), rules/LLM take over",
+                            snn_health.get("consecutive_no_decision", 0))
+                        continue
+                    elif hstatus == "degraded":
+                        weight *= 0.5
+                        logger.info(
+                            "coordinator: SNN degraded, weight halved to %.2f",
+                            weight)
             candidates.append((r.region, r.result, weight))
             # 收集 enrichment context（语义/情景记忆等）
             if r.context:
