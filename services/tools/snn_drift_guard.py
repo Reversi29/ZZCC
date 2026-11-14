@@ -281,14 +281,26 @@ def build_baseline():
         return "当前网络不可读，无法建立基线"
     write_file(BASELINE, raw)
     net = json.loads(raw)
+    # 重建基线 = 新的统计起点，stats 一并归零，否则重建后首次检查
+    # 仍会误报训练累积（旧 training_count 残留）
+    zero_stats = json.dumps({
+        "reason_calls": 0, "reason_hits": 0, "total_fires": 0,
+        "last_decision": "", "last_confidence": 0.0, "training_count": 0,
+        "edges_added": 0, "edges_strengthened": 0, "edges_penalized": 0,
+        "exploration_rate": 0.1, "boundary_detected_count": 0,
+        "ewc_protected_edges": 0, "micro_learn_steps": 0,
+    }, ensure_ascii=False)
+    write_file(f"{DATA_DIR}/snn_network_stats.json", zero_stats)
     return f"基线已建立：{net.get('num_neurons')} 神经元 / " \
-           f"{len(net.get('edges', {}))} 边"
+           f"{len(net.get('edges', {}))} 边（stats 已归零）"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="仅检测，不恢复")
     ap.add_argument("--baseline", action="store_true", help="从当前生产网络重建基线")
+    ap.add_argument("--baseline-if-healthy", action="store_true",
+                    help="健康且 eval 12/12 时重建基线（保留概念预训练积累）")
     ap.add_argument("--restore", action="store_true", help="软恢复（保留 EWC 知识）")
     ap.add_argument("--hard-restore", action="store_true", help="硬恢复（丢弃 EWC，从基线重来）")
     args = ap.parse_args()
@@ -307,6 +319,27 @@ def main():
 
     report = DriftReport()
     healthy = report.check()
+
+    if args.baseline_if_healthy:
+        # 健康时重建基线——保留概念预训练积累，防止恢复基线清掉
+        # 运行时累积的概念连接（danger/rejection/approval 中继）。
+        # 前提：eval 12/12 达标（网络功能正确才可作新基线）。
+        if not healthy:
+            print(report.render())
+            print("  → 未健康，跳过基线重建（先恢复或等待漂移治理）")
+            return 2
+        print(report.render())
+        ok, fails = _eval_prod()
+        if ok != 12:
+            print(f"  → eval {ok}/12 未达标，跳过基线重建（保留现有基线）")
+            if fails:
+                for f in fails[:4]:
+                    print(f"      ✗ #{f['index']} {f['type']}/{f['urgency']} "
+                          f"expect={f['expected']} got={f['got']}")
+            return 2
+        print(f"  → eval {ok}/12 达标，重建基线（保留概念预训练积累）")
+        print(build_baseline())
+        return 0
 
     if healthy:
         print(report.render())
@@ -327,6 +360,23 @@ def main():
     after.check()
     print(after.render(restored=True))
     return 1
+
+
+def _eval_prod():
+    """对当前生产网络跑权威 eval，返回 (通过数, 失败列表)。"""
+    import sys as _sys
+    import tempfile
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "interface"))
+    _sys.path.insert(0, os.path.dirname(__file__))
+    from services.brain.snn_region import SNNRegion
+    from eval_cases import run
+    # 从容器拉取生产网络到本地临时文件——SNNRegion 从本地文件读取
+    tmp = tempfile.mkdtemp()
+    local_net = os.path.join(tmp, "snn_network.json")
+    subprocess.run(["docker", "cp", f"{CONTAINER}:{NETWORK}", local_net],
+                   capture_output=True, check=True)
+    region = SNNRegion(save_path=local_net)
+    return run(region)
 
 
 if __name__ == "__main__":
