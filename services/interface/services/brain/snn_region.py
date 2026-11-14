@@ -1332,17 +1332,45 @@ class SNNRegion:
                         continue
                     relay_nid = _CONCEPT_RELAY_BASE + (cnid - _CONCEPT_NEURON_BASE)
                     conn = self.snn.out_edges.get(relay_nid, {}).get(penalty_output)
-                    if conn is not None:
+                    if conn is not None and conn.weight > 0:
+                        # 只惩罚兴奋性边(概念中继→输出),抑制性边不碰
                         conn.weight = max(0.5, conn.weight * 0.95)
                         self._stats["edges_penalized"] += 1
             elif penalty_output is not None:
                 # 温和惩罚:削弱 5%(原来 20% 太狠导致权重净流失/灾难性遗忘)
-                # 且保留最小权重 0.5,避免关键决策路径被磨没
-                for src in list(self.snn.out_edges.keys()):
-                    if penalty_output in self.snn.out_edges[src]:
-                        conn = self.snn.out_edges[src][penalty_output]
+                # 且保留最小权重 0.5,避免关键决策路径被磨没。
+                # 方向2(漂移根因):只惩罚**本次实际放电**的源→penalty_output 边,
+                # 不惩罚所有指向 penalty_output 的边。原全局遍历会在错误反馈
+                # 时惩罚大量无辜边(edges_penalized 远超 edges_strengthened,
+                # 权重整体下压,护栏每 6 小时恢复基线)。
+                # 先注入输入让隐藏层放电,记录本次放电路径。
+                self.snn.reset_learning_state()
+                self.snn.inject_pattern(input_neurons, strength)
+                self.snn.step()
+                self.snn.step()
+                fired_sources = set()
+                for n in self.snn.neurons:
+                    if n.last_fire_time >= 0 and n.id != penalty_output:
+                        fired_sources.add(n.id)
+                penalized = 0
+                for src in fired_sources:
+                    conn = self.snn.out_edges.get(src, {}).get(penalty_output)
+                    if conn is not None and conn.weight > 0:
+                        # 只惩罚兴奋性边(weight>0)。抑制性边(负权重)不碰——
+                        # max(0.5, 负×0.95) 会把抑制边错误提升为兴奋边。
                         conn.weight = max(0.5, conn.weight * 0.95)
-                        self._stats["edges_penalized"] += 1
+                        penalized += 1
+                # 若没有放电路径命中(边缘情况),回退到指向 penalty_output
+                # 的直接入边(仅直接源,不再全局遍历)
+                if penalized == 0:
+                    for src in list(self.snn.out_edges.keys()):
+                        if penalty_output in self.snn.out_edges[src]:
+                            conn = self.snn.out_edges[src][penalty_output]
+                            if conn.weight > 0:
+                                conn.weight = max(0.5, conn.weight * 0.95)
+                                self._stats["edges_penalized"] += 1
+                else:
+                    self._stats["edges_penalized"] += penalized
             # 少量加强正确输出(让下次推理偏向正确决策)
             # 有概念向量时跳过全局加强:概念槽学习应特异性(只加强概念→目标输出),
             # 不污染全局网络(否则无概念信号也偏目标决策)。
@@ -1356,13 +1384,18 @@ class SNNRegion:
                     self.snn.inject_input(target_output, inject_strength * 0.5)  # 较弱注入
                     outputs = self.snn.step()
                     if outputs.get(target_output, False):
-                        # 动态输出槽同样 restrict_to_hidden(避免输入→输出直连)
+                        # 方向2(漂移根因):错误分支加强必须 auto_create 受限隐藏层——
+                        # 原 auto_create=False 导致错误反馈无法建立正确决策路径
+                        # (如 expense/500 不激活 escalate 隐藏层,加强永远失败),
+                        # 只惩罚不加强,权重净流失(penalized 420 vs strengthened 0)。
+                        # restrict_to_hidden=True 只创建隐藏层→正确输出连接,
+                        # 不创建输入→输出直连(LTD 实验教训:非选择性直连)。
                         is_dynamic_output = target_output >= 40
                         strengthened = self.snn._reward_modulated_strengthen(
                             target_output, eta=eta * 0.5,
-                            auto_create=False,
-                            auto_create_weight=0.10,
-                            restrict_to_hidden=is_dynamic_output,
+                            auto_create=True,
+                            auto_create_weight=0.15,
+                            restrict_to_hidden=True,
                             cap_weight=1.5 if is_dynamic_output else None,
                         )
                         self._stats["edges_strengthened"] += strengthened
