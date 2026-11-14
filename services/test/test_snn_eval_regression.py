@@ -49,6 +49,24 @@ def test_eval_cases_schema():
         }
 
 
+@pytest.mark.snn_regression
+def test_clean_topology_stability():
+    """干净拓扑 eval 必须稳定——连续 3 次全 12/12（防边界翻转）。
+
+    边界用例（如 approval_pending/30 的 escalate vs auto_approve 分数差
+    仅 0.002）若权重微扰导致翻转，说明拓扑不稳健，需治理而非靠运气。
+    """
+    import tempfile
+    from services.brain.snn_region import SNNRegion
+    for i in range(3):
+        region = SNNRegion(save_path=tempfile.mkdtemp() + f"/s{i}.json")
+        ok, fails = _run(region)
+        assert not fails, (
+            f"干净拓扑 eval 第 {i + 1} 次掉分：{ok}/{len(EVAL_CASES)}\n"
+            f"失败：{fails}"
+        )
+
+
 def _run(region):
     """同步包装 eval_cases.run（内部已用 asyncio.run）。"""
     return _run_inner(region)
