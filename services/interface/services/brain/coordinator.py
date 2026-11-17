@@ -372,13 +372,31 @@ class RegionCoordinator:
                 # 安全侧决策优先：reject/escalate/flag 优先级更高
                 safe_priority = _DECISION_PRIORITY.get(result.decision, 0)
                 top_priority = _DECISION_PRIORITY.get(top_result.decision, 0)
-                if safe_priority > top_priority and weight >= top_weight * 0.5:
-                    # 安全侧脑区置信度足够 → 仲裁为安全决策
-                    logger.info("coordinator: conflict resolution — %s overrides %s (priority %d > %d)",
-                                 result.decision, top_result.decision, safe_priority, top_priority)
-                    final_decision = result.decision
-                    final_confidence = min(final_confidence, result.confidence)
-                    break
+                # 用加权分（confidence×weight）而非纯权重：防 LLM 单方误判
+                # （如 expense/500 LLM 偶发 escalate conf 0.7，weight 0.40 恰好
+                # 达 rule 0.80×0.5，覆盖 rule+SNN 共识 auto_approve）。
+                # 实质安全侧（reject/escalate/flag，优先级>=3）需加权分达
+                # top 的 50% 且置信度 >=0.75 才覆盖共识。
+                # need_info（优先级 2，中性缺信息决策）保持原 weight 条件，
+                # 真 need_info（带 reasoning）应保留覆盖 auto_approve。
+                safe_weighted = result.confidence * weight
+                if safe_priority > top_priority:
+                    if safe_priority >= 3:  # 实质安全侧：高置信才覆盖
+                        if (result.confidence >= 0.75
+                                and safe_weighted >= top_weighted * 0.5):
+                            logger.info("coordinator: conflict resolution — %s overrides %s (priority %d > %d, weighted %.2f >= %.2f)",
+                                         result.decision, top_result.decision, safe_priority, top_priority,
+                                         safe_weighted, top_weighted * 0.5)
+                            final_decision = result.decision
+                            final_confidence = min(final_confidence, result.confidence)
+                            break
+                    else:  # need_info 等中性决策：原 weight 条件
+                        if weight >= top_weight * 0.5:
+                            logger.info("coordinator: conflict resolution — %s overrides %s (priority %d > %d)",
+                                         result.decision, top_result.decision, safe_priority, top_priority)
+                            final_decision = result.decision
+                            final_confidence = min(final_confidence, result.confidence)
+                            break
 
         # 偏离检测：如果 top 脑区置信度显著高于其他（>2x），信任它
         if len(candidates) > 1:
