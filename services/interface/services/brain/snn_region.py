@@ -713,6 +713,12 @@ class SNNRegion:
             # P3 概念预训练种子：新概念首次出现即预置目标输出连接，
             # 让概念第一次就能引导正确决策方向（而非依赖反馈积累）。
             self._apply_pretrain_seed(concept, relay_nid)
+            # need_info 污染治理：所有概念中继统一削弱→need_info 误导连接。
+            # 概念是语义记忆直接激活，不应驱动"信息请求"输出（need_info
+            # 是信息不足而非业务结论）。历史反馈可能强化概念中继→need_info
+            # 边（如 218→100 w=1.5、221→100 w=1.14），劫持概念信号。
+            # 每次调用都执行（不只新建），覆盖历史强化。
+            self._suppress_concept_need_info(relay_nid)
             # 立即持久化：概念槽 + 神经元 + 连接不丢失
             self._auto_save()
             logger.info(f"snn_region: concept channel {concept} → {nid} (relay {relay_nid})")
@@ -720,6 +726,31 @@ class SNNRegion:
         except Exception as e:
             logger.warning(f"snn_region: concept channel failed for '{concept}': {e}")
             return None
+
+    def _suppress_concept_need_info(self, relay_nid: int) -> None:
+        """need_info 污染治理：削弱概念中继→need_info 误导连接。
+
+        need_info（动态输出槽 100+）是"信息请求"而非业务结论，不应作为
+        默认赢家碾压 reject/escalate 等实质决策。历史反馈可能过度强化
+        概念中继→need_info 边（如 218→100 w=1.5、221→100 w=1.14），
+        导致概念信号被 need_info 劫持。每次概念注册/激活都削弱一次，
+        覆盖学习强化。
+        """
+        try:
+            need_nid = self._decision_to_output_neuron("need_info")
+            if need_nid is None:
+                return  # need_info 未注册，无可抑制
+            conn = self.snn.out_edges.get(relay_nid, {}).get(need_nid)
+            if conn is not None and conn.weight > 0:
+                old_w = conn.weight
+                conn.weight = min(old_w, 0.05)  # 削弱到接近零（保留可塑性）
+                self._stats["need_info_suppressed"] = \
+                    self._stats.get("need_info_suppressed", 0) + 1
+                logger.info(
+                    f"snn_region: suppress concept→need_info {relay_nid}→{need_nid} "
+                    f"w={old_w:.3f}→{conn.weight:.3f}")
+        except Exception as e:
+            logger.warning(f"snn_region: need_info suppress failed: {e}")
 
     def _apply_pretrain_seed(self, concept: str, relay_nid: int) -> None:
         """P3 概念预训练种子：匹配概念名 → 目标决策，预置中继→输出连接。
