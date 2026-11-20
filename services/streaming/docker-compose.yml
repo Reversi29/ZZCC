@@ -8,10 +8,10 @@ services:
     restart: unless-stopped
     ports:
       - "${SRS_RTMP_PORT:-1935}:1935"      # RTMP 推流
-      - "${SRS_HTTP_PORT:-8080}:8080"      # HTTP API / HLS 拉流
+      - "${SRS_HTTP_PORT:-8090}:8080"      # HLS 切片播放（Web）
       - "${SRS_HTTPS_PORT:-443}:443"       # HTTPS
       - "${SRS_SRT_PORT:-10080}:10080"     # SRT 低延迟
-      - "${SRS_WEBRTC_PORT:-1985}:1985"    # WebRTC
+      - "${SRS_WEBRTC_PORT:-1985}:1985"    # WebRTC signaling + HTTP API（SRS 5.x 共用 TCP 1985）
     volumes:
       - ./conf/srs.conf:/usr/local/srs/conf/srs.conf:ro
       - ./data/srs/recordings:/usr/local/srs/recordings
@@ -19,7 +19,7 @@ services:
     environment:
       - TZ=${TZ:-Asia/Shanghai}
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/versions"]
+      test: ["CMD", "curl", "-sf", "http://localhost:1985/api/v1/versions"]
       interval: 30s
       timeout: 10s
       retries: 3

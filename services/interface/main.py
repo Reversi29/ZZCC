@@ -149,6 +149,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         _log.error("plugin_system_init_failed", error=str(exc))
 
+    # Feed (广场) tables + media dir (best-effort; failure is non-fatal)
+    try:
+        from services import feed as feed_svc
+        await feed_svc.ensure_tables()
+        feed_svc.media_store().root.mkdir(parents=True, exist_ok=True)
+        _log.info("feed_schema_ready")
+    except Exception as exc:
+        _log.error("feed_schema_init_failed", error=str(exc))
+
     # Brain AI system init (best-effort; failure is non-fatal)
     try:
         from services.db import managed_session
@@ -221,7 +230,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, plugin_marketplace as plugin_marketplace_router, brain as brain_router
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, plugin_marketplace as plugin_marketplace_router, brain as brain_router, feed as feed_router
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -240,6 +249,7 @@ def create_app() -> FastAPI:
     app.include_router(plugins_router.router, prefix=v1)
     app.include_router(plugin_marketplace_router.router, prefix=v1)
     app.include_router(brain_router.router, prefix=v1)
+    app.include_router(feed_router.router, prefix=v1)
 
     # --- Health check (must register before SPA fallback) ---
     @app.get("/health")

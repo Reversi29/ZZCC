@@ -69,6 +69,33 @@ class MatrixSettings(BaseSettings):
     )
 
 
+class StreamingSettings(BaseSettings):
+    """SRS 推流服务配置（广场视频/直播）。
+
+    SRS 5.x 端口约定：
+    - 1985 TCP = HTTP API + WebRTC signaling（http_api listen 被忽略，硬编码 1985）
+    - 8080 容器内 = HTTP Server / HLS 切片播放
+    """
+    model_config = SettingsConfigDict(env_prefix="STREAMING_")
+
+    api_url: str = Field(
+        default="http://127.0.0.1:1985",
+        description="SRS HTTP API 地址",
+    )
+    hls_base: str = Field(
+        default="http://127.0.0.1:8090/hls",
+        description="HLS 播放基址（容器 8080 映射到宿主机 8090）",
+    )
+    rtmp_base: str = Field(
+        default="rtmp://127.0.0.1:1935/live",
+        description="RTMP 推流基址",
+    )
+    upload_dir: str = Field(
+        default="/app/config_data/feed_media",
+        description="本地媒体存储目录（./data 挂载点）",
+    )
+
+
 class APISettings(BaseSettings):
     """API-level settings."""
     model_config = SettingsConfigDict(env_prefix="")
@@ -128,6 +155,7 @@ class AppSettings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     matrix: MatrixSettings = Field(default_factory=MatrixSettings)
+    streaming: StreamingSettings = Field(default_factory=StreamingSettings)
     api: APISettings = Field(default_factory=APISettings)
 
     # App metadata
