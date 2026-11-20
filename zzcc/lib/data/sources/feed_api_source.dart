@@ -64,6 +64,53 @@ class FeedApiSource implements FeedRemoteSource {
     }
   }
 
+  /// 点赞/评论/分享。返回 {added, count}。
+  @override
+  Future<Map<String, dynamic>> interact(String contentId, String kind,
+      {String? userId, String? payload}) async {
+    try {
+      final resp = await _dio.post(
+        '/feed/$contentId/interact',
+        data: {
+          'kind': kind,
+          'user_id': userId ?? 'anonymous',
+          if (payload != null) 'payload': payload,
+        },
+      );
+      final data = resp.data;
+      if (data is! Map<String, dynamic>) {
+        throw FeedApiException('响应格式错误: ${data.runtimeType}');
+      }
+      return data;
+    } on DioException catch (e) {
+      _log.warning('interact DioException: ${e.message}');
+      rethrow;
+    }
+  }
+
+  /// 应用安装计数。返回 {added, count}。
+  @override
+  Future<Map<String, dynamic>> install(String contentId,
+      {String? userId, String? packageName}) async {
+    try {
+      final resp = await _dio.post(
+        '/feed/$contentId/install',
+        data: {
+          'user_id': userId ?? 'anonymous',
+          if (packageName != null) 'package_name': packageName,
+        },
+      );
+      final data = resp.data;
+      if (data is! Map<String, dynamic>) {
+        throw FeedApiException('响应格式错误: ${data.runtimeType}');
+      }
+      return data;
+    } on DioException catch (e) {
+      _log.warning('install DioException: ${e.message}');
+      rethrow;
+    }
+  }
+
   /// 后端 snake_case → 前端 FeedContent。
   FeedContent _fromJson(Map<String, dynamic> j) {
     final typeStr = (j['type'] as String?) ?? 'recommend';

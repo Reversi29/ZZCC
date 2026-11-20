@@ -10,6 +10,14 @@ import '../models/feed_content_model.dart';
 abstract class FeedRemoteSource {
   /// 按类型拉取内容列表。
   Future<List<FeedContent>> fetchByType(FeedContentType type);
+
+  /// 点赞/评论/分享。返回 {added, count}。
+  Future<Map<String, dynamic>> interact(String contentId, String kind,
+      {String? userId, String? payload});
+
+  /// 应用安装计数。返回 {added, count}。
+  Future<Map<String, dynamic>> install(String contentId,
+      {String? userId, String? packageName});
 }
 
 /// 本地 Mock 数据源。
@@ -274,5 +282,17 @@ class MockFeedRemoteSource implements FeedRemoteSource {
         tags: ['直播', 'live'],
       );
     });
+  }
+
+  @override
+  Future<Map<String, dynamic>> interact(String contentId, String kind,
+      {String? userId, String? payload}) async {
+    return {'ok': true, 'added': false, 'count': 0};
+  }
+
+  @override
+  Future<Map<String, dynamic>> install(String contentId,
+      {String? userId, String? packageName}) async {
+    return {'ok': true, 'added': false, 'count': 0};
   }
 }

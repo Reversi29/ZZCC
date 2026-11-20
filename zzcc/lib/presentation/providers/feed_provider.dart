@@ -61,11 +61,28 @@ class FeedProvider extends ChangeNotifier {
     }
   }
 
-  /// 切换点赞状态。
-  void toggleLike(FeedContent item) {
+  /// 切换点赞状态（乐观更新 + 后端写入）。
+  Future<void> toggleLike(FeedContent item) async {
     final liked = !(_liked[item.id] ?? false);
     _liked[item.id] = liked;
+    // 乐观更新计数
+    _updateContent(item.id, likes: item.likes + (liked ? 1 : 0));
     notifyListeners();
+
+    try {
+      final r = await _source.interact(item.id, 'like',
+          userId: _currentUserId());
+      final count = (r['count'] as num?)?.toInt();
+      if (count != null) {
+        _updateContent(item.id, likes: count);
+        notifyListeners();
+      }
+    } catch (e) {
+      // 失败回滚乐观状态
+      _liked[item.id] = !liked;
+      _updateContent(item.id, likes: item.likes);
+      notifyListeners();
+    }
   }
 
   /// 切换关注状态。
@@ -74,9 +91,61 @@ class FeedProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 切换安装状态。
-  void toggleInstall(String id) {
-    _installed[id] = !(_installed[id] ?? false);
+  /// 切换安装状态（乐观更新 + 后端写入）。
+  Future<void> toggleInstall(FeedContent item) async {
+    final installed = !(_installed[item.id] ?? false);
+    _installed[item.id] = installed;
     notifyListeners();
+
+    try {
+      final r = await _source.install(item.id,
+          userId: _currentUserId(), packageName: item.packageName);
+      final count = (r['count'] as num?)?.toInt();
+      if (count != null) {
+        _updateContent(item.id, appDownloads: count);
+        notifyListeners();
+      }
+    } catch (e) {
+      _installed[item.id] = !installed;
+      notifyListeners();
+    }
   }
+
+  /// 发表评论（后端写入 + 计数更新）。
+  Future<bool> addComment(FeedContent item, String text,
+      {String? userId}) async {
+    try {
+      final r = await _source.interact(item.id, 'comment',
+          userId: userId ?? _currentUserId(), payload: text);
+      final count = (r['count'] as num?)?.toInt();
+      if (count != null) {
+        _updateContent(item.id, comments: count);
+        notifyListeners();
+      }
+      return r['added'] == true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  void _updateContent(String id,
+      {int? likes, int? comments, int? appDownloads}) {
+    for (final type in _cache.keys) {
+      final list = _cache[type];
+      if (list == null) continue;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id == id) {
+          final updated = list[i].copyWith(
+            likes: likes,
+            comments: comments,
+            appDownloads: appDownloads,
+          );
+          _cache[type] = List.from(list)..[i] = updated;
+          return;
+        }
+      }
+    }
+  }
+
+  String _currentUserId() => 'test_agent';
 }

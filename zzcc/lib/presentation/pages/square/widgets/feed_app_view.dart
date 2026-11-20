@@ -203,7 +203,7 @@ class _AppCard extends ConsumerWidget {
                     ),
                   ),
                   onPressed: () =>
-                      ref.read(feedProvider.notifier).toggleInstall(item.id),
+                      ref.read(feedProvider.notifier).toggleInstall(item),
                   child: Text(
                     installed ? '打开' : '安装',
                     style: const TextStyle(fontSize: 13),
@@ -315,7 +315,7 @@ class _AppDetailSheet extends ConsumerWidget {
                             installed ? Colors.grey[800] : Colors.white,
                       ),
                       onPressed: () =>
-                          ref.read(feedProvider.notifier).toggleInstall(item.id),
+                          ref.read(feedProvider.notifier).toggleInstall(item),
                       child: Text(installed ? '打开' : '安装'),
                     ),
                   ),

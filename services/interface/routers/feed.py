@@ -31,7 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.feed_models import FeedContent, FeedInteraction, FeedLive, FeedMedia
+from models.feed_models import FeedContent, FeedInteraction, FeedLive, FeedMedia, utcnow
 from routers.auth import get_current_user_dep
 from services.db import get_session
 from services import feed as feed_svc
@@ -69,6 +69,12 @@ class FeedContentIn(BaseModel):
 class FeedInteractIn(BaseModel):
     kind: str = Field(..., description="like/comment/share")
     user_id: str = Field(default="anonymous", max_length=64)
+    payload: Optional[str] = Field(default=None, max_length=2000, description="评论正文等")
+
+
+class FeedInstallIn(BaseModel):
+    user_id: str = Field(default="anonymous", max_length=64)
+    package_name: Optional[str] = Field(default=None, max_length=256)
 
 
 def _to_dict(c: FeedContent) -> dict[str, Any]:
@@ -205,6 +211,49 @@ async def create_feed_content(
 
 
 # ============================================================
+# 应用安装
+# ============================================================
+@router.post("/{content_id}/install")
+async def install_app(
+    content_id: str,
+    body: FeedInstallIn = Body(...),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """应用安装计数。幂等：同用户同应用只 +1。"""
+    obj = (
+        await session.execute(
+            select(FeedContent).where(FeedContent.content_id == content_id)
+        )
+    ).scalars().first()
+    if obj is None:
+        raise HTTPException(status_code=404, detail="内容不存在")
+    if obj.type != "app":
+        raise HTTPException(status_code=400, detail="仅应用可安装")
+
+    uid = body.user_id or "anonymous"
+    added = False
+    try:
+        session.add(FeedInteraction(
+            content_id=content_id, user_id=uid, kind="install", payload=body.package_name,
+        ))
+        await session.flush()
+        obj.app_downloads = (obj.app_downloads or 0) + 1
+        await session.commit()
+        added = True
+    except IntegrityError:
+        await session.rollback()
+        fresh = (
+            await session.execute(
+                select(FeedContent).where(FeedContent.content_id == content_id)
+            )
+        ).scalars().first()
+        return {"ok": True, "added": False,
+                "count": getattr(fresh, "app_downloads", 0) if fresh is not None else 0}
+
+    return {"ok": True, "added": added, "count": obj.app_downloads}
+
+
+# ============================================================
 # 互动
 # ============================================================
 @router.post("/{content_id}/interact")
@@ -213,10 +262,13 @@ async def interact(
     body: FeedInteractIn = Body(...),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """点赞/评论/分享。幂等：同用户同类型只记一次。"""
+    """点赞/评论/分享。like 幂等，comment/share 防刷（时间窗口）。"""
     kind = (body.kind or "").strip().lower()
     if kind not in {"like", "comment", "share"}:
         raise HTTPException(status_code=400, detail="kind 需为 like/comment/share")
+
+    if kind == "comment" and not (body.payload or "").strip():
+        raise HTTPException(status_code=400, detail="评论内容不能为空")
 
     col = {
         "like": FeedContent.likes,
@@ -235,13 +287,33 @@ async def interact(
     uid = body.user_id or "anonymous"
     added = False
     try:
-        session.add(FeedInteraction(content_id=content_id, user_id=uid, kind=kind))
+        # like 幂等：同用户同内容只一次（UniqueConstraint 拦截）
+        # comment/share 防刷：同一用户 30s 内同内容同类型只一次
+        if kind != "like":
+            from datetime import timedelta
+            recent = (
+                await session.execute(
+                    select(FeedInteraction).where(
+                        FeedInteraction.content_id == content_id,
+                        FeedInteraction.user_id == uid,
+                        FeedInteraction.kind == kind,
+                        FeedInteraction.created_at >= utcnow() - timedelta(seconds=30),
+                    )
+                )
+            ).scalars().first()
+            if recent is not None:
+                return {"ok": True, "added": False, "count": getattr(obj, col.key),
+                        "reason": "rate_limited"}
+
+        session.add(FeedInteraction(
+            content_id=content_id, user_id=uid, kind=kind, payload=body.payload,
+        ))
         await session.flush()
         setattr(obj, col.key, getattr(obj, col.key) + 1)
         await session.commit()
         added = True
     except IntegrityError:
-        # 已存在：幂等返回当前计数（不回滚后复用已坏 session，重新查询）
+        # like 已存在：幂等返回当前计数（不回滚后复用已坏 session，重新查询）
         await session.rollback()
         fresh = (
             await session.execute(
@@ -249,17 +321,9 @@ async def interact(
             )
         ).scalars().first()
         count = getattr(fresh, col.key, 0) if fresh is not None else 0
-        return {
-            "ok": True,
-            "added": False,
-            "count": count,
-        }
+        return {"ok": True, "added": False, "count": count}
 
-    return {
-        "ok": True,
-        "added": added,
-        "count": getattr(obj, col.key),
-    }
+    return {"ok": True, "added": added, "count": getattr(obj, col.key)}
 
 
 # ============================================================

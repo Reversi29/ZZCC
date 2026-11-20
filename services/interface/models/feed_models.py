@@ -103,6 +103,7 @@ class FeedInteraction(Base):
     content_id: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)  # like/comment/share
+    payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 评论正文等
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
