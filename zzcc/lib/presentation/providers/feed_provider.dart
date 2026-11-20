@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/models/feed_content_model.dart';
 import '../../data/sources/feed_remote_source.dart';
+import '../../data/sources/feed_api_source.dart';
 
 /// 广场内容 Provider（全局单例）。
 final feedProvider = ChangeNotifierProvider<FeedProvider>((ref) {
@@ -16,7 +17,7 @@ final feedProvider = ChangeNotifierProvider<FeedProvider>((ref) {
 
 /// 广场内容状态。
 class FeedProvider extends ChangeNotifier {
-  final FeedRemoteSource _source = MockFeedRemoteSource();
+  final FeedRemoteSource _source = FeedApiSource();
 
   final Map<FeedContentType, List<FeedContent>> _cache = {};
   final Map<FeedContentType, bool> _loading = {};

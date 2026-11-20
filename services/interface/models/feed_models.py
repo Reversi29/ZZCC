@@ -64,11 +64,15 @@ class FeedContent(Base):
     # 视频/音频播放地址
     video_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     audio_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    audio_waveform: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     duration_text: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     # 应用特有
     app_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     app_downloads: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    app_icon: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    app_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    package_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     # 直播特有
     is_live: Mapped[bool] = mapped_column(Boolean, default=False)

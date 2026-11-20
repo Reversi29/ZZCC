@@ -56,9 +56,13 @@ class FeedContentIn(BaseModel):
     tags: List[str] = Field(default=[])
     video_url: Optional[str] = None
     audio_url: Optional[str] = None
+    audio_waveform: Optional[str] = None
     duration_text: Optional[str] = None
     app_category: Optional[str] = None
     app_downloads: Optional[int] = None
+    app_icon: Optional[str] = None
+    app_version: Optional[str] = None
+    package_name: Optional[str] = None
     sort_weight: int = 0
 
 
@@ -90,9 +94,13 @@ def _to_dict(c: FeedContent) -> dict[str, Any]:
         "views": c.views,
         "video_url": c.video_url,
         "audio_url": c.audio_url,
+        "audio_waveform": c.audio_waveform,
         "duration_text": c.duration_text,
         "app_category": c.app_category,
         "app_downloads": c.app_downloads,
+        "app_icon": c.app_icon,
+        "app_version": c.app_version,
+        "package_name": c.package_name,
         "is_live": c.is_live,
         "viewer_count": c.viewer_count,
         "created_at": c.created_at.isoformat() if c.created_at else None,
@@ -180,9 +188,13 @@ async def create_feed_content(
         tags=json.dumps(body.tags, ensure_ascii=False),
         video_url=body.video_url,
         audio_url=body.audio_url,
+        audio_waveform=body.audio_waveform,
         duration_text=body.duration_text,
         app_category=body.app_category,
         app_downloads=body.app_downloads,
+        app_icon=body.app_icon,
+        app_version=body.app_version,
+        package_name=body.package_name,
         is_live=ctype == "live",
         sort_weight=body.sort_weight,
     )
