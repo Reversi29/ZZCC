@@ -3,6 +3,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:like_button/like_button.dart';
 import 'package:intl/intl.dart';
 import 'package:zzcc/presentation/pages/square/widgets/knowledge_graph_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_recommend_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_video_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_audio_view.dart';
 
 class Project {
   final String id;
@@ -104,6 +107,15 @@ class _SquarePageState extends State<SquarePage>
               children: categories.map((category) {
                 if (category == '知识图谱') {
                   return const KnowledgeGraphView();
+                }
+                if (category == '推荐') {
+                  return const FeedRecommendView();
+                }
+                if (category == '视频') {
+                  return const FeedVideoView();
+                }
+                if (category == '音频') {
+                  return const FeedAudioView();
                 }
                 return GridView.builder(
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
