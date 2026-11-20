@@ -6,6 +6,10 @@ import 'package:zzcc/presentation/pages/square/widgets/knowledge_graph_view.dart
 import 'package:zzcc/presentation/pages/square/widgets/feed_recommend_view.dart';
 import 'package:zzcc/presentation/pages/square/widgets/feed_video_view.dart';
 import 'package:zzcc/presentation/pages/square/widgets/feed_audio_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_article_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_app_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_project_view.dart';
+import 'package:zzcc/presentation/pages/square/widgets/feed_live_view.dart';
 
 class Project {
   final String id;
@@ -116,6 +120,18 @@ class _SquarePageState extends State<SquarePage>
                 }
                 if (category == '音频') {
                   return const FeedAudioView();
+                }
+                if (category == '图文') {
+                  return const FeedArticleView();
+                }
+                if (category == '应用') {
+                  return const FeedAppView();
+                }
+                if (category == '项目') {
+                  return const FeedProjectView();
+                }
+                if (category == '直播') {
+                  return const FeedLiveView();
                 }
                 return GridView.builder(
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(

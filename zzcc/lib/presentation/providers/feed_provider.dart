@@ -26,6 +26,8 @@ class FeedProvider extends ChangeNotifier {
   final Map<String, bool> _liked = {};
   // 关注状态（author -> followed）
   final Map<String, bool> _followed = {};
+  // 安装状态（app id -> installed）
+  final Map<String, bool> _installed = {};
 
   List<FeedContent> contents(FeedContentType type) =>
       _cache[type] ?? const [];
@@ -37,6 +39,8 @@ class FeedProvider extends ChangeNotifier {
   bool isLiked(String id) => _liked[id] ?? false;
 
   bool isFollowed(String author) => _followed[author] ?? false;
+
+  bool isInstalled(String id) => _installed[id] ?? false;
 
   /// 拉取指定类型内容（已有缓存则直接返回）。
   Future<void> load(FeedContentType type, {bool refresh = false}) async {
@@ -66,6 +70,12 @@ class FeedProvider extends ChangeNotifier {
   /// 切换关注状态。
   void toggleFollow(String author) {
     _followed[author] = !(_followed[author] ?? false);
+    notifyListeners();
+  }
+
+  /// 切换安装状态。
+  void toggleInstall(String id) {
+    _installed[id] = !(_installed[id] ?? false);
     notifyListeners();
   }
 }

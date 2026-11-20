@@ -46,6 +46,12 @@ class MockFeedRemoteSource implements FeedRemoteSource {
         return _audioFeed();
       case FeedContentType.article:
         return _articleFeed();
+      case FeedContentType.app:
+        return _appFeed();
+      case FeedContentType.project:
+        return _projectFeed();
+      case FeedContentType.live:
+        return _liveFeed();
     }
   }
 
@@ -171,6 +177,101 @@ class MockFeedRemoteSource implements FeedRemoteSource {
         views: 3000 + i * 400,
         createdAt: DateTime.now().subtract(Duration(days: i + 1)),
         tags: ['图文', '文章'],
+      );
+    });
+  }
+
+  List<FeedContent> _appFeed() {
+    const apps = [
+      ('思维导图', '知识管理', 'v2.4.1', 1200000, 'com.zzcc.mindmap'),
+      ('任务看板', '效率办公', 'v1.8.0', 860000, 'com.zzcc.kanban'),
+      ('量化行情', '金融理财', 'v3.2.5', 520000, 'com.zzcc.quotes'),
+      ('六角跳棋', '休闲游戏', 'v1.3.2', 2100000, 'com.zzcc.hexchess'),
+      ('云端笔记', '效率办公', 'v2.0.3', 980000, 'com.zzcc.notes'),
+      ('类脑助手', '人工智能', 'v1.0.0', 450000, 'com.zzcc.brain'),
+      ('知识图谱', '效率办公', 'v1.5.0', 320000, 'com.zzcc.graph'),
+      ('音频剪辑', '影音娱乐', 'v2.2.1', 670000, 'com.zzcc.audio'),
+    ];
+    return List.generate(apps.length, (i) {
+      final (title, cat, ver, dl, pkg) = apps[i];
+      return FeedContent(
+        id: 'app_$i',
+        type: FeedContentType.app,
+        title: title,
+        description: '$cat · 官方应用',
+        author: 'ZZCC 官方',
+        authorAvatar: '$_seedBase/aapp$i/200',
+        coverImage: '$_seedBase/app$i/300/300',
+        appIcon: '$_seedBase/appicon$i/200',
+        appCategory: cat,
+        appVersion: ver,
+        appDownloads: dl,
+        packageName: pkg,
+        likes: 50 + i * 8,
+        comments: 3 + i,
+        views: dl ~/ 10,
+        createdAt: DateTime.now().subtract(Duration(days: i + 1)),
+        tags: [cat, '应用'],
+      );
+    });
+  }
+
+  List<FeedContent> _projectFeed() {
+    const projects = [
+      ('ZZCC 类脑平台', '类脑推理 + 知识图谱 + 聊天前端的综合系统', 'Reversi29', 89, 12),
+      ('六角跳棋', '基于六边形网格坐标系统的跳棋游戏', '棋棋工作室', 56, 8),
+      ('量化交易系统', '回测引擎 + 策略框架 + 模拟实盘', '量化小组', 72, 15),
+      ('OA 审批系统', 'EXP/PO/JE 三套状态机 + 审批历史', '企业研发', 45, 6),
+      ('SNN 脉冲网络', '脉冲神经网络：结构可塑性 + 学习规则', '类脑实验室', 63, 9),
+      ('SRS 推流服务', 'RTMP/SRT/WebRTC/HLS 短视频推流', '媒体组', 38, 4),
+    ];
+    return List.generate(projects.length, (i) {
+      final (title, desc, author, likes, comments) = projects[i];
+      return FeedContent(
+        id: 'proj_$i',
+        type: FeedContentType.project,
+        title: title,
+        description: desc,
+        author: author,
+        authorAvatar: '$_seedBase/projav$i/200',
+        coverImage: '$_seedBase/proj$i/600/400',
+        likes: likes,
+        comments: comments,
+        shares: 2 + i,
+        views: 500 + i * 120,
+        createdAt: DateTime.now().subtract(Duration(days: i + 2)),
+        tags: ['项目', '开源'],
+      );
+    });
+  }
+
+  List<FeedContent> _liveFeed() {
+    const lives = [
+      ('Flutter 实战直播', '科技前沿', 'live', 1250),
+      ('六角跳棋对局', '棋棋工作室', 'live', 860),
+      ('量化策略分享', '量化小组', 'live', 430),
+      ('知识图谱导览', 'AI 观察', 'live', 2100),
+      ('SNN 脉冲网络演示', '类脑实验室', 'live', 670),
+      ('音乐创作现场', '音律工作室', 'live', 380),
+    ];
+    return List.generate(lives.length, (i) {
+      final (title, author, status, viewers) = lives[i];
+      return FeedContent(
+        id: 'live_$i',
+        type: FeedContentType.live,
+        title: title,
+        description: '正在直播',
+        author: author,
+        authorAvatar: '$_seedBase/liveav$i/200',
+        coverImage: '$_seedBase/live$i/600/800',
+        liveStatus: status,
+        liveViewers: viewers,
+        likes: 100 + i * 25,
+        comments: 10 + i * 3,
+        shares: 2 + i,
+        views: viewers,
+        createdAt: DateTime.now().subtract(Duration(minutes: i * 15 + 5)),
+        tags: ['直播', 'live'],
       );
     });
   }
