@@ -700,7 +700,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   // Toolbar
   PreferredSizeWidget _buildToolbar() {
     return AppBar(
-      title: const Text('工作台'),
+      title: const Text('仪表盘'),
       backgroundColor: Colors.white,
       foregroundColor: Colors.black,
       elevation: 1,
