@@ -57,6 +57,8 @@ class _FeedVideoViewState extends ConsumerState<FeedVideoView>
         if (mounted) setState(() {});
       }
       await p.controller.play();
+      // 播放埋点：实际起播才计观看数（会话内去重，循环播放不重复计数）
+      ref.read(feedProvider.notifier).reportView(item.id);
       return;
     }
 
@@ -76,6 +78,8 @@ class _FeedVideoViewState extends ConsumerState<FeedVideoView>
       if (mounted) setState(() {});
       await controller.setLooping(true);
       await controller.play();
+      // 播放埋点：实际起播才计观看数（会话内去重）
+      ref.read(feedProvider.notifier).reportView(item.id);
     } catch (e) {
       entry.error = e.toString();
       if (mounted) setState(() {});

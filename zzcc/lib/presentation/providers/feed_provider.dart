@@ -43,6 +43,20 @@ class FeedProvider extends ChangeNotifier {
     return load(FeedContentType.recommend, refresh: true);
   }
 
+  /// 已上报观看的内容 id（会话级去重，避免循环播放重复计数）。
+  final Set<String> _viewReported = {};
+
+  /// 上报观看数（播放埋点）。
+  ///
+  /// 同一次会话内同一内容只上报一次：视频循环播放/音频反复点播
+  /// 不应把 views 吹大成虚假热度。fire-and-forget——埋点失败
+  /// 不应阻断播放体验。
+  void reportView(String contentId) {
+    if (_viewReported.contains(contentId)) return;
+    _viewReported.add(contentId);
+    _source.reportView(contentId);
+  }
+
   List<FeedContent> contents(FeedContentType type) =>
       _cache[type] ?? const [];
 

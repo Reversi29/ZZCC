@@ -240,6 +240,32 @@ async def create_feed_content(
 # ============================================================
 # 应用安装
 # ============================================================
+@router.post("/view/{content_id}/report")
+async def report_view(
+    content_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """观看数上报（播放埋点）。
+
+    每次播放/起播上报一次，views +1。前端在视频/音频实际开始
+    播放时调用（不是加载列表时），使热度公式的 views×0.5 项生效。
+
+    注：本路由必须以字面量 'view' 开头注册在通配 /{content_type}
+    之前，否则 'view' 会被当作 content_type 匹配失败。
+    """
+    row = (
+        await session.execute(
+            select(FeedContent).where(FeedContent.content_id == content_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="content not found")
+
+    row.views = (row.views or 0) + 1
+    await session.commit()
+    return {"ok": True, "content_id": content_id, "views": row.views}
+
+
 @router.post("/{content_id}/install")
 async def install_app(
     content_id: str,

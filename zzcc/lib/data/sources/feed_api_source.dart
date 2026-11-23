@@ -91,6 +91,23 @@ class FeedApiSource implements FeedRemoteSource {
     }
   }
 
+  /// 观看数上报（播放埋点）。返回 {ok, content_id, views}。
+  @override
+  Future<Map<String, dynamic>> reportView(String contentId) async {
+    try {
+      final resp = await _dio.post('/feed/view/$contentId/report');
+      final data = resp.data;
+      if (data is! Map<String, dynamic>) {
+        throw FeedApiException('响应格式错误: ${data.runtimeType}');
+      }
+      return data;
+    } on DioException catch (e) {
+      // 埋点失败不阻断播放体验，仅记录。
+      _log.warning('reportView DioException: ${e.message}');
+      return <String, dynamic>{'ok': false};
+    }
+  }
+
   /// 应用安装计数。返回 {added, count}。
   @override
   Future<Map<String, dynamic>> install(String contentId,

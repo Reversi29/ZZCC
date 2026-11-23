@@ -68,6 +68,8 @@ class _FeedAudioViewState extends ConsumerState<FeedAudioView>
       } else {
         await _player.resume();
         if (mounted) setState(() => _isPlaying = true);
+        // 播放埋点（会话内去重，resume 不会重复计数）
+        ref.read(feedProvider.notifier).reportView(item.id);
       }
       return;
     }
@@ -82,6 +84,8 @@ class _FeedAudioViewState extends ConsumerState<FeedAudioView>
     try {
       await _player.play(UrlSource(item.audioUrl!));
       if (mounted) setState(() => _isPlaying = true);
+      // 播放埋点：实际起播才计观看数（会话内去重）
+      ref.read(feedProvider.notifier).reportView(item.id);
     } catch (e) {
       if (mounted) {
         setState(() => _isPlaying = false);

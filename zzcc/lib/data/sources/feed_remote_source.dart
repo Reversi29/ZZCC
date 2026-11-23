@@ -22,6 +22,10 @@ abstract class FeedRemoteSource {
   /// 应用安装计数。返回 {added, count}。
   Future<Map<String, dynamic>> install(String contentId,
       {String? userId, String? packageName});
+
+  /// 观看数上报（播放埋点）。内容实际起播时调用，views +1。
+  /// 返回 {ok, content_id, views}。
+  Future<Map<String, dynamic>> reportView(String contentId);
 }
 
 /// 本地 Mock 数据源。
@@ -299,5 +303,10 @@ class MockFeedRemoteSource implements FeedRemoteSource {
   Future<Map<String, dynamic>> install(String contentId,
       {String? userId, String? packageName}) async {
     return {'ok': true, 'added': false, 'count': 0};
+  }
+
+  @override
+  Future<Map<String, dynamic>> reportView(String contentId) async {
+    return {'ok': true, 'content_id': contentId, 'views': 0};
   }
 }
