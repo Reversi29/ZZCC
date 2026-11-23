@@ -326,8 +326,32 @@ def main():
         # 前提：eval 12/12 达标（网络功能正确才可作新基线）。
         if not healthy:
             print(report.render())
-            print("  → 未健康，跳过基线重建（先恢复或等待漂移治理）")
-            return 2
+            # 缺陷修复：此前这里直接 return 2——只跳过、不恢复。
+            # cron 只调 --baseline-if-healthy，于是漂移一旦发生就永久
+            # 滞留：training_count 单调上涨触发判据，但网络权重从未
+            # 被治理，实测 10 天内 eval 从 12/12 退化到 7/12 无人干预。
+            # 现改为软恢复（保留 EWC 知识），恢复后重检再决定。
+            print("  → 未健康，执行软恢复（保留 EWC）后重检")
+            snap = snapshot_drifted(report)
+            print(f"  漂移版本已留档: {snap}")
+            print(restore_from_baseline(soft=True))
+            after = DriftReport()
+            after_healthy = after.check()
+            print(after.render(restored=True))
+            if not after_healthy:
+                print("  → 恢复后仍未健康，退出码 2")
+                return 2
+            ok, fails = _eval_prod()
+            if ok != 12:
+                print(f"  → 恢复后 eval {ok}/12 未达标，保留现有基线")
+                if fails:
+                    for f in fails[:4]:
+                        print(f"      ✗ #{f['index']} {f['type']}/{f['urgency']} "
+                              f"expect={f['expected']} got={f['got']}")
+                return 2
+            print(f"  → 恢复后 eval {ok}/12 达标，重建基线")
+            print(build_baseline())
+            return 1
         print(report.render())
         ok, fails = _eval_prod()
         if ok != 12:
