@@ -7,13 +7,18 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/docker</string>
-        <string>compose</string>
-        <string>-f</string>
-        <string>/Users/mac/ZZCC/OA/docker-compose.prod.yml</string>
-        <string>up</string>
-        <string>-d</string>
+        <string>/Users/mac/ZZCC/OA/scripts/oa-autostart.sh</string>
     </array>
+
+    <!--
+      不直接调 docker compose：
+        1. Docker Desktop 引擎就绪晚于 launchd 触发，直调会 daemon not running；
+           脚本内含轮询等待（最多 240s）。
+        2. 原路径 /opt/homebrew/bin/docker 在本机不存在
+           （真实路径 /usr/local/bin/docker）。
+      KeepAlive=false + RunAtLoad=true：只在登录时启动一次，
+      后续容器存活由 unless-stopped restart policy 保证。
+    -->
 
     <key>RunAtLoad</key>
     <true/>
