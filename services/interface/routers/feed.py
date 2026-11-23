@@ -121,7 +121,9 @@ async def list_feed(
     content_type: str = Path(..., pattern=r"recommend|video|audio|article|app|project|live"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    sort: str = Query("newest", description="newest|hot"),
+    sort: str | None = Query(
+        None, description="newest|hot；缺省时 recommend 走 hot、其余走 newest"
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """按类型分页拉取内容。"""
@@ -131,8 +133,33 @@ async def list_feed(
         raise HTTPException(status_code=400, detail=str(e))
 
     stmt = select(FeedContent).where(FeedContent.type == ctype)
-    if sort == "hot":
-        stmt = stmt.order_by(FeedContent.likes.desc(), FeedContent.views.desc())
+    # 推荐流默认按热度排（短视频平台语义：新内容靠时间衰减、热内容靠互动加权）；
+    # 其余类型默认按时间倒序，避免运营/新建内容被旧热内容压住。
+    effective_sort = sort or ("hot" if ctype == "recommend" else "newest")
+    if effective_sort == "hot":
+        # 热度分 = (互动加权分) / ln(2 + 发布小时数)
+        # 对数时间衰减：新内容衰减慢、旧内容随时间快速降权；
+        # 互动权重 comments > shares > likes > views（评论/分享意图强于浏览）。
+        # 注意：PostgreSQL 无 log2()，用 ln() 等价（单调，排序结果一致）。
+        age_hours = (
+            (func.extract("epoch", func.now())
+             - func.extract("epoch", FeedContent.created_at))
+            / 3600.0
+        )
+        decay = func.ln(func.greatest(2.0, 2.0 + age_hours))
+        hot_expr = ((
+            FeedContent.likes * 1.0
+            + FeedContent.comments * 3.0
+            + FeedContent.shares * 5.0
+            + FeedContent.views * 0.5
+        ) / decay).label("hot_score")
+        # 人工权重 sort_weight 优先（运营置顶），其次热度分；
+        # created_at 作第三键：互动全 0 时 hot 分并列，需稳定排序（无此键 PG 对
+        # 并列值顺序不确定，列表会随机抖动）。
+        stmt = stmt.order_by(
+            FeedContent.sort_weight.desc(), hot_expr.desc(),
+            FeedContent.created_at.desc()
+        )
     else:
         stmt = stmt.order_by(FeedContent.sort_weight.desc(), FeedContent.created_at.desc())
 
