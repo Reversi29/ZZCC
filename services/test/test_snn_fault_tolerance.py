@@ -149,7 +149,7 @@ def test_reason_no_output_triggers_no_decision(region, monkeypatch):
     monkeypatch.setattr(region, "_encode_signal", lambda s: [0])
     # 防止真实 step 干扰，mock 掉
     monkeypatch.setattr(region.snn, "step_with_learning",
-                        lambda *a, **k: ({}, False))
+                        lambda *a, **k: ({}, False, {}))
     monkeypatch.setattr(region, "_log_decision", lambda *a, **k: None)
 
     signal = NeuralSignal(id="t1", type="expense", urgency=50,
@@ -174,7 +174,7 @@ def test_reason_consecutive_none_degrades(region, monkeypatch):
     monkeypatch.setattr(region, "_decode_output", lambda outputs, active: None)
     monkeypatch.setattr(region, "_encode_signal", lambda s: [0])
     monkeypatch.setattr(region.snn, "step_with_learning",
-                        lambda *a, **k: ({}, False))
+                        lambda *a, **k: ({}, False, {}))
     monkeypatch.setattr(region, "_log_decision", lambda *a, **k: None)
 
     signal = NeuralSignal(id="t1", type="expense", urgency=50,

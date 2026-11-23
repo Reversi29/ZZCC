@@ -851,8 +851,13 @@ class SNNRegion:
             logger.warning(f"snn_region: off-target suppress failed: {e}")
 
     def _decode_output(self, outputs: Dict[int, bool],
-                        active: List[int]) -> Optional[CognitionResult]:
+                        active: List[int],
+                        window_fires: Optional[Dict[int, int]] = None) -> Optional[CognitionResult]:
         """将 SNN 输出解码为 CognitionResult。
+
+        window_fires：决策窗口（≤10 步）的累积放电统计，作为观测数据传入。
+        实测：输出层是单次脉冲（放电后不应期+膜电位清零，无法在窗口内再次放电），
+        放电率编码判据（fires>=2）不适用——故不做决策降权，仅保留观测供调试。
 
         多输出时不直接全部采信:按当前激活/膜势强的前驱连接强度排序,
         选择最强输出,并把竞争输出写入 memory_updates 供调试。
@@ -1020,7 +1025,7 @@ class SNNRegion:
                 nid: w for nid, w in cont_weights.items()
                 if _SENTIENCE_BASE <= nid < _SENTIENCE_BASE + len(_SENTIENCE_DIM_ORDER)
             }
-            outputs, boundary_detected = self.snn.step_with_learning(
+            outputs, boundary_detected, window_fires = self.snn.step_with_learning(
                 input_neurons, strength, weights=cont_weights, sustain_weights=sustain_weights or None
             )
 
@@ -1825,8 +1830,8 @@ class ShadowSNNRegion(SNNRegion):
                                     context={"reason": "shadow disabled by budget"}, elapsed_ms=0)
 
             input_neurons = self._encode_signal(signal)
-            outputs, _ = self.snn.step_with_learning(input_neurons, 2.0)
-            result = self._decode_output(outputs, self.snn.get_active_neurons())
+            outputs, _, window_fires = self.snn.step_with_learning(input_neurons, 2.0)
+            result = self._decode_output(outputs, self.snn.get_active_neurons(), window_fires=window_fires)
             main_decision = context.get("main_snn_result")
             if main_decision is not None and not isinstance(main_decision, str):
                 main_decision = getattr(main_decision, "decision", None)

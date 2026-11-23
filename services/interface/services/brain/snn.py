@@ -722,7 +722,7 @@ class SNN:
         expected_decision: Optional[int] = None,
         weights: Optional[Dict[int, float]] = None,
         sustain_weights: Optional[Dict[int, float]] = None,
-    ) -> tuple[dict[int, bool], bool]:
+    ) -> tuple[dict[int, bool], bool, dict[int, int]]:
         """融合推理+微学习的单步计算。
 
         与 step() 的区别：
@@ -730,7 +730,7 @@ class SNN:
         - 每步微学习（不是批量训练）
         - 探索机制（混乱权利）
         - EWC 防遗忘
-        - 返回输出 + 是否检测到边界模式
+        - 返回输出 + 是否检测到边界模式 + 窗口放电累积
 
         Args:
             input_neurons: 输入神经元 ID 列表
@@ -744,9 +744,11 @@ class SNN:
                 仅连续通道神经元（200/201 等）应被持续注入，档位槽保持一次性。
 
         Returns:
-            (outputs, boundary_detected)
-            - outputs: {neuron_id: is_firing}
+            (outputs, boundary_detected, window_fires)
+            - outputs: {neuron_id: is_firing} 最后一帧
             - boundary_detected: 是否检测到边界模式（探索成功）
+            - window_fires: {neuron_id: 放电次数} 整个窗口（≤10 步）的累积放电，
+                供决策窗口用放电率做稳定决策
         """
         # 重置推理状态（保留学习历史）
         self.reset_learning_state()
@@ -764,6 +766,11 @@ class SNN:
 
         outputs: dict[int, bool] = {}
         boundary_detected = False
+        # 决策窗口：累积每个输出神经元在整个窗口（≤10 步）内的放电次数。
+        # 单帧 outputs 只反映最后一帧，边界抖动/噪声会瞬间影响决策。
+        # 用放电率（窗口内放电次数）做决策，单次放电视为噪声被平均掉，
+        # 稳定激活（多次放电）才能胜出——类似生物放电率编码（rate coding）。
+        window_fires: dict[int, int] = {}
 
         # 运行多个时间步（信号需要传播）
         for step in range(10):
@@ -773,6 +780,11 @@ class SNN:
                 self.inject_weighted(sustain_weights)
             outputs = self.step()
             active = self.get_active_neurons()
+
+            # 累积输出放电（决策窗口统计）
+            for nid, v in outputs.items():
+                if v:
+                    window_fires[nid] = window_fires.get(nid, 0) + 1
 
             # 探索机制
             if active and self._explore(active):
@@ -805,7 +817,7 @@ class SNN:
             # 微学习:加强正确路径,削弱错误路径
             self._micro_learn(expected_decision, actual_output, is_correct, active)
 
-        return outputs, boundary_detected
+        return outputs, boundary_detected, window_fires
 
     def _micro_learn(
         self,
