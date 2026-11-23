@@ -346,6 +346,24 @@ class RegionCoordinator:
             return result.confidence * weight
         candidates.sort(key=_weighted_conf, reverse=True)
 
+        # 意识容量槽：只允许话语权最强的 k 个脑区进入融合（top-k 竞争）。
+        # 认知科学依据：工作记忆容量极小（4±1 chunk），意识层是稀缺焦点算力，
+        # 不是全部脑区无差别竞争。当前 _integrate 让所有脑区（rule/statistical/
+        # snn/llm/semantic/episodic + shadow）全量进融合，靠事后冲突仲裁补救误判；
+        # 但 LLM 抖动拉偏（expense/500 误判 escalate）正是"全员进入后单方误判
+        # 恰好过 50% 阈值覆盖共识"——仲裁救不了全部，需事前限定焦点。
+        # 截断发生在排序后、共识/仲裁前：共识加成与冲突仲裁均基于焦点集合，
+        # 低置信度无关脑区（semantic/episodic 权重 0.20）被截断，不伤核心脑区。
+        FOCUS_SLOT_K = 3
+        if len(candidates) > FOCUS_SLOT_K:
+            for region_name, result, weight in candidates[FOCUS_SLOT_K:]:
+                logger.debug(
+                    "coordinator: focus slot full, dropping %s "
+                    "(conf %.2f x w %.2f = %.2f)",
+                    region_name, result.confidence, weight,
+                    result.confidence * weight)
+            candidates = candidates[:FOCUS_SLOT_K]
+
         top_region, top_result, top_weight = candidates[0]
         top_weighted = top_result.confidence * top_weight
 
@@ -391,7 +409,31 @@ class RegionCoordinator:
                             final_confidence = min(final_confidence, result.confidence)
                             break
                     else:  # need_info 等中性决策：原 weight 条件
-                        if weight >= top_weight * 0.5:
+                        # 共识保护（意识容量改造）：多脑区已就同一决策达成共识
+                        # （agreement_count >= 2，如 rule+SNN 都给出 auto_approve）
+                        # 时，单个 LLM 的 need_info"补信息"请求不应推翻共识。
+                        # need_info 是中性"缺信息"请求而非业务结论，且其加权分
+                        # 往往恰好过 50% 线（0.4 >= 0.8*0.5=0.4），会覆盖
+                        # rule+SNN 明确共识。认知模型上：2 个脑区共识 > 1 个 LLM
+                        # 的补信息请求。故有共识时需加权分显著超过（60%）才覆盖。
+                        if agreement_count >= 2:
+                            need_info_threshold = top_weighted * 0.6
+                            if safe_weighted >= need_info_threshold:
+                                logger.info(
+                                    "coordinator: consensus-protected — %s need_info "
+                                    "(weighted %.2f >= %.2f) overrides %s consensus(%d)",
+                                    region_name, safe_weighted, need_info_threshold,
+                                    top_result.decision, agreement_count)
+                                final_decision = result.decision
+                                final_confidence = min(final_confidence, result.confidence)
+                                break
+                            else:
+                                logger.info(
+                                    "coordinator: consensus-protected — %s need_info "
+                                    "(weighted %.2f < %.2f) BLOCKED by %s consensus(%d)",
+                                    region_name, safe_weighted, need_info_threshold,
+                                    top_result.decision, agreement_count)
+                        elif weight >= top_weight * 0.5:
                             logger.info("coordinator: conflict resolution — %s overrides %s (priority %d > %d)",
                                          result.decision, top_result.decision, safe_priority, top_priority)
                             final_decision = result.decision
