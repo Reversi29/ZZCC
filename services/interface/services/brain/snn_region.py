@@ -153,6 +153,8 @@ _CONCEPT_LEARNED_DRIVE_BONUS = 1.6
 # 施加结构惩罚（×0.6），让 need_info 只在信息真正不足且
 # 其他输出较弱时胜出。
 _NEED_INFO_PENALTY = 0.4
+# 决策窗口速率编码加成系数：fires>=2 时每个额外放电 +0.5 倍竞争分
+_WINDOW_FIRE_BOOST = 0.5
 
 # ── 紧急度 → 输入神经元映射 ─────────────────────────────────
 def _urgency_neuron(urgency: int) -> Optional[int]:
@@ -926,6 +928,16 @@ class SNNRegion:
             # 让 need_info 只在信息真正不足且其他输出较弱时胜出。
             if self._decision_for_output(out_nid) == "need_info":
                 score *= _NEED_INFO_PENALTY
+            # 决策窗口（速率编码）：感受中继持续注入时输出层周期放电，
+            # window_fires 记录窗口内放电次数。fires>=2 表示该输出被
+            # 稳定激活（速率编码），给予竞争加成——感受中继驱动的
+            # 正确决策（威胁/紧急强度越高越频繁放电）获得胜出优势。
+            # 单脉冲场景（档位槽一次性注入，无感受信号）wf 全为 1，
+            # 加成不触发（fires>=2 才加），保持既有 12/12 行为。
+            if window_fires:
+                wf = window_fires.get(out_nid, 0)
+                if wf >= 2:
+                    score *= (1.0 + _WINDOW_FIRE_BOOST * (wf - 1))
             strengths[out_nid] = score
 
         sorted_outputs = sorted(strengths.items(), key=lambda item: item[1], reverse=True)
