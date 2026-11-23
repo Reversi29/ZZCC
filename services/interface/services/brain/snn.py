@@ -57,9 +57,14 @@ class Neuron:
         self.last_fire_time = -1
         self.gain = 1.0
 
-    def add_input(self, weight: float):
-        """接收一个输入信号(累加膜电位)"""
-        if self.refractory_until > 0:
+    def add_input(self, weight: float, t: int = -1):
+        """接收一个输入信号(累加膜电位)。
+
+        t: 当前时间步。不应期判断需要绝对时间比较——
+        用 refractory_until > t(而非 > 0) 才能让神经元在不应期
+        过后恢复接收输入,否则放电一次后永久失能(只能单脉冲)。
+        """
+        if self.refractory_until > t:
             return  # 不应期内不接收
         self.membrane += weight
 
@@ -333,7 +338,7 @@ class SNN:
             if src_neuron.neuron_type == NeuronType.INHIBITORY:
                 self._inhibitory_inputs[tgt] += abs(weight)
             else:
-                tgt_neuron.add_input(weight)
+                tgt_neuron.add_input(weight, t)
 
         # 2. 检查激活
         fired_this_step: set[int] = set()

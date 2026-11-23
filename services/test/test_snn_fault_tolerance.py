@@ -145,7 +145,7 @@ def test_reason_no_output_triggers_no_decision(region, monkeypatch):
     from models.brain import NeuralSignal
 
     # mock _decode_output 返回 None（模拟 SNN 无输出）
-    monkeypatch.setattr(region, "_decode_output", lambda outputs, active: None)
+    monkeypatch.setattr(region, "_decode_output", lambda outputs, active, **kwargs: None)
     monkeypatch.setattr(region, "_encode_signal", lambda s: [0])
     # 防止真实 step 干扰，mock 掉
     monkeypatch.setattr(region.snn, "step_with_learning",
@@ -171,7 +171,7 @@ def test_reason_consecutive_none_degrades(region, monkeypatch):
     import asyncio
     from models.brain import NeuralSignal
 
-    monkeypatch.setattr(region, "_decode_output", lambda outputs, active: None)
+    monkeypatch.setattr(region, "_decode_output", lambda outputs, active, **kwargs: None)
     monkeypatch.setattr(region, "_encode_signal", lambda s: [0])
     monkeypatch.setattr(region.snn, "step_with_learning",
                         lambda *a, **k: ({}, False, {}))

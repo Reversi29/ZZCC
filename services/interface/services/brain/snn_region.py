@@ -1038,7 +1038,7 @@ class SNNRegion:
 
             active = [n.id for n in self.snn.neurons
                       if n.last_fire_time >= 0 and (self.snn.time - n.last_fire_time) <= 10]
-            result = self._decode_output(outputs, active)
+            result = self._decode_output(outputs, active, window_fires=window_fires)
 
             elapsed = (time.time() - start) * 1000
 
