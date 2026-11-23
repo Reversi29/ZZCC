@@ -60,6 +60,8 @@ class _FeedRecommendViewState extends ConsumerState<FeedRecommendView>
               refresh: true),
       child: CustomScrollView(
         slivers: [
+          // 排序切换：热度（互动加权+时间衰减）/ 最新（纯时间倒序）。
+          SliverToBoxAdapter(child: _SortSwitcher()),
           SliverPadding(
             padding: const EdgeInsets.all(12),
             sliver: SliverToBoxAdapter(
@@ -89,6 +91,49 @@ class _FeedRecommendViewState extends ConsumerState<FeedRecommendView>
 }
 
 /// 顶部横幅（简单轮播式占位）。
+/// 排序切换栏：热度 / 最新。
+class _SortSwitcher extends ConsumerWidget {
+  const _SortSwitcher();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sortMode = ref.watch(feedProvider).sortMode;
+    final notifier = ref.read(feedProvider.notifier);
+    Widget option(String value, String label) {
+      final active = sortMode == value;
+      return GestureDetector(
+        onTap: () => notifier.setSortMode(value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: active ? Colors.blue : Colors.grey[200],
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+              color: active ? Colors.white : Colors.grey[700],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Row(
+        children: [
+          option('hot', '热度'),
+          const SizedBox(width: 8),
+          option('newest', '最新'),
+        ],
+      ),
+    );
+  }
+}
+
 class _RecommendBanner extends StatelessWidget {
   final List<FeedContent> contents;
   const _RecommendBanner({required this.contents});

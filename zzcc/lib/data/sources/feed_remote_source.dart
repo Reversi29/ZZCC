@@ -9,7 +9,11 @@ import '../models/feed_content_model.dart';
 /// 广场内容数据源抽象。
 abstract class FeedRemoteSource {
   /// 按类型拉取内容列表。
-  Future<List<FeedContent>> fetchByType(FeedContentType type);
+  ///
+  /// [sort] 可选：'hot'（热度）或 'newest'（最新）；
+  /// 为 null 时后端按类型决定默认（recommend 走 hot、其余 newest）。
+  Future<List<FeedContent>> fetchByType(FeedContentType type,
+      {String? sort});
 
   /// 点赞/评论/分享。返回 {added, count}。
   Future<Map<String, dynamic>> interact(String contentId, String kind,
@@ -41,7 +45,8 @@ class MockFeedRemoteSource implements FeedRemoteSource {
   ];
 
   @override
-  Future<List<FeedContent>> fetchByType(FeedContentType type) async {
+  Future<List<FeedContent>> fetchByType(FeedContentType type,
+      {String? sort}) async {
     // 模拟网络延迟
     await Future<void>.delayed(const Duration(milliseconds: 300));
 

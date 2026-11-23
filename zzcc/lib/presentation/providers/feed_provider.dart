@@ -30,6 +30,19 @@ class FeedProvider extends ChangeNotifier {
   // 安装状态（app id -> installed）
   final Map<String, bool> _installed = {};
 
+  /// 排序模式：'hot'（热度）或 'newest'（最新）。
+  String _sortMode = 'hot';
+  String get sortMode => _sortMode;
+
+  /// 切换排序模式并强制重新拉取。
+  Future<void> setSortMode(String mode) {
+    if (mode != 'hot' && mode != 'newest') return Future.value();
+    if (mode == _sortMode) return Future.value();
+    _sortMode = mode;
+    notifyListeners();
+    return load(FeedContentType.recommend, refresh: true);
+  }
+
   List<FeedContent> contents(FeedContentType type) =>
       _cache[type] ?? const [];
 
@@ -51,7 +64,7 @@ class FeedProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final items = await _source.fetchByType(type);
+      final items = await _source.fetchByType(type, sort: _sortMode);
       _cache[type] = items;
     } catch (e) {
       _error[type] = e.toString();

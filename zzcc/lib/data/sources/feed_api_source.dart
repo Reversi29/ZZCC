@@ -36,13 +36,16 @@ class FeedApiSource implements FeedRemoteSource {
             ));
 
   @override
-  Future<List<FeedContent>> fetchByType(FeedContentType type) async {
+  Future<List<FeedContent>> fetchByType(FeedContentType type,
+      {String? sort}) async {
     final typeStr = type.name; // recommend/video/audio/article/app/project/live
+    final query = <String, dynamic>{'page': 1, 'page_size': 50};
+    if (sort != null) query['sort'] = sort;
     try {
       _log.info('fetchByType: GET /feed/$typeStr baseUrl=${_dio.options.baseUrl}');
       final resp = await _dio.get(
         '/feed/$typeStr',
-        queryParameters: {'page': 1, 'page_size': 50},
+        queryParameters: query,
       );
       final data = resp.data;
       if (data is! Map<String, dynamic>) {
