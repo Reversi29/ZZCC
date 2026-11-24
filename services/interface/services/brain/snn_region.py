@@ -299,6 +299,8 @@ class SNNRegion:
             logger.info("snn: creating default topology")
             self.snn = SNN.create_default()
             self._auto_save()
+        # 概念区冻结对齐: 概念预训练种子(220+)不参与结构可塑性演化
+        self.snn.concept_freeze_start = _CONCEPT_NEURON_BASE
 
         self._stats = {
             "reason_calls": 0,
@@ -1032,6 +1034,9 @@ class SNNRegion:
             # 推理时禁用 Hebbian/LTD,防止 STDP 削弱权重(学习漂移)
             # 学习通过 train_from_feedback / _reward_modulated_strengthen 进行
             self.snn.enable_hebbian = False
+            # 推理时也禁用结构可塑性: 推理放电不驱动演化(修剪/生长/步长)。
+            # 只有 train_from_feedback 显式学习才演化, 避免误剪/误建。
+            self.snn.enable_structural_plasticity = False
 
             # 持续学习推理：融合推理+微学习+探索
             # 不传 expected_decision，因为推理时没有反馈
@@ -1325,10 +1330,11 @@ class SNNRegion:
         # 只用 _reward_modulated_strengthen 做因果强化,不受被动 LTD 干扰。
         _saved_hebbian = self.snn.enable_hebbian
         self.snn.enable_hebbian = False
-        # 结构可塑性(修剪/步长演化)默认不接入生产训练:
-        # 会扰动档位槽→隐藏层精确放电组合(见 MEMORY 教训),且修剪易误剪关键边。
-        # 生长已由 _reward_modulated_strengthen 的 auto_create 受控处理。
-        # 如需启用,由上层显式设置 snn.enable_structural_plasticity 后调用。
+        # 渐进启用结构可塑性: 只在显式训练时演化(动态区≥40)。
+        # 核心区冻结(plasticity_core_freeze)保护 0-39 不扰动 12/12。
+        # 推理(reason)已设 enable_structural_plasticity=False, 此处显式开启。
+        _saved_structural = self.snn.enable_structural_plasticity
+        self.snn.enable_structural_plasticity = True
 
         self._stats["training_count"] += 1
         self._stats["micro_learn_steps"] += 1
@@ -1482,6 +1488,8 @@ class SNNRegion:
 
         # 恢复 Hebbian 状态(推理时可能被 reason() 设为 False)
         self.snn.enable_hebbian = _saved_hebbian
+        # 恢复结构可塑性状态(默认推理关, 训练开)
+        self.snn.enable_structural_plasticity = _saved_structural
 
         return {
             "ok": True,

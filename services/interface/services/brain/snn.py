@@ -451,10 +451,13 @@ class SNN:
         # 1. 步长演化 + 2. 修剪:遍历现有连接
         for src in list(self.out_edges.keys()):
             for tgt, conn in list(self.out_edges[src].items()):
-                # 核心区冻结:默认冻结 ID<40(固定拓扑),结构可塑性只作用
-                # 于动态区(≥40 动态输出/概念槽)。防止扰动已收敛的 12/12
-                # 精确放电组合(MEMORY 教训)。
-                if self.plasticity_core_freeze and (src < 40 and tgt < 40):
+                # 核心区冻结:冻结 ID<40(固定拓扑) 和概念区(220+ 预训练种子),
+                # 结构可塑性只作用于真正的探索区(40-219 动态输出/新概念槽)。
+                # 防止扰动已收敛的 12/12 精确放电组合(MEMORY 教训)。
+                if self.plasticity_core_freeze and (
+                    (src < 40 or src >= self.concept_freeze_start)
+                    or (tgt < 40 or tgt >= self.concept_freeze_start)
+                ):
                     continue
 
                 # 修剪:权重跌破下限
@@ -498,8 +501,11 @@ class SNN:
             for tgt in fired_now:
                 if src == tgt:
                     continue
-                # 核心区冻结:不在核心区建连
-                if self.plasticity_core_freeze and (src < 40 and tgt < 40):
+                # 核心区冻结:不在核心区/概念区建连
+                if self.plasticity_core_freeze and (
+                    (src < 40 or src >= self.concept_freeze_start)
+                    or (tgt < 40 or tgt >= self.concept_freeze_start)
+                ):
                     continue
                 if tgt not in self.out_edges.get(src, {}):
                     # 协同放电 → 突触发生(兴奋性,初始低权重)
@@ -655,6 +661,7 @@ class SNN:
         self.step_max: int = 5                   # 步长上限
         self.allow_synaptogenesis: bool = False  # 生长(协同放电建连)开关,默认关
         self.plasticity_core_freeze: bool = True  # 冻结核心区(0-39)防扰动 12/12
+        self.concept_freeze_start: int = 220  # 概念区冻结起点(220+ 概念预训练种子)
         self._recent_fire: dict[int, list[int]] = defaultdict(list)  # 最近放电历史(结构可塑性用)
 
         # 输出历史(用于 Hebbian 回溯)
@@ -1017,6 +1024,7 @@ class SNN:
             "step_max": self.step_max,
             "allow_synaptogenesis": self.allow_synaptogenesis,
             "plasticity_core_freeze": self.plasticity_core_freeze,
+            "concept_freeze_start": self.concept_freeze_start,
             "neurons": neurons,
             "edges": edges,
             "ewc_importance": self.get_ewc_importance(),
@@ -1043,6 +1051,7 @@ class SNN:
         net.step_max = data.get("step_max", net.step_max)
         net.allow_synaptogenesis = data.get("allow_synaptogenesis", net.allow_synaptogenesis)
         net.plasticity_core_freeze = data.get("plasticity_core_freeze", net.plasticity_core_freeze)
+        net.concept_freeze_start = data.get("concept_freeze_start", net.concept_freeze_start)
 
         for nd in data.get("neurons", []):
             nid = nd["id"]
