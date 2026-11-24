@@ -369,6 +369,11 @@ class SNN:
         # 4b. 结构可塑性(生长/修剪/步长演化,默认关闭,需显式启用)
         self._structural_plasticity_update(t, fired_this_step)
 
+        # 4c. 丰度调控(homeostatic ratio,独立于结构可塑性开关)
+        # 有自己的 enable_homeostatic_ratio 门控,不受 enable_structural_plasticity 影响。
+        # 这样即使结构可塑性关闭,丰度调控仍可独立运行(用户 2026-11-24 需求)。
+        self._homeostatic_ratio_control(t)
+
         # 5. 膜电位衰减(本步结束后,旧信号消退)
         for n in self.neurons:
             n.step(t)
@@ -511,13 +516,8 @@ class SNN:
                     # 协同放电 → 突触发生(兴奋性,初始低权重)
                     self.connect(src, tgt, weight=0.1, step=self.step_min)
 
-        # ── 丰度调控(homeostatic ratio)──
-        # 神经元总数与神经元:突触比例之间存在关系(类似生态丰度)。
-        # 按区域(动态输入/输出区)检测突触密度,偏离目标比例时
-        # 触发生长(突触稀疏)或修剪(突触过密),向目标比例收敛。
-        # 这是需求导向的:不同区域(图像/文字/音频)各自独立调控,
-        # 识别复杂度高的区域允许更高突触密度。
-        self._homeostatic_ratio_control(t)
+        # 丰度调控不在这里执行——由 step() 独立调用,不受结构可塑性开关门控。
+        # (见 _homeostatic_ratio_control,它有独立的 enable_homeostatic_ratio 门控)
 
 
     def _homeostatic_ratio_control(self, t: int):
