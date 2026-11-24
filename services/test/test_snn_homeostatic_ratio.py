@@ -77,14 +77,21 @@ def test_region_ratio_detect():
 
 
 def test_grow_when_sparse():
-    """突触稀疏（比例<目标×tolerance）→ 生长。"""
-    net = _make_net_with_dynamic_region(num_input=10, num_output=5, with_edges=0)
+    """v3:有边节点群密度低(比例<lo) → 生长;零度节点不生长(留给回收)。"""
+    # 有边节点 40-44(各1条边,比例1.0 < lo) → 应生长
+    net = SNN(num_neurons=200)
+    for i in range(40, 45):
+        net.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    for i in range(100, 102):
+        net.add_neuron(i, NeuronType.OUTPUT, threshold=1.0)
+    for i in range(40, 45):
+        net.connect(i, 100, weight=0.2, step=1)
     net.enable_homeostatic_ratio = True
-    net.homeostatic_check_interval = 1  # 每步都检测
-    # 区域 40-59: 10 神经元 0 边 → 比例 0 < 1.6 → 应生长
-    before = sum(len(net.out_edges.get(i, {})) for i in range(40, 50))
+    net.homeostatic_check_interval = 1
+    net.homeostatic_regions = [(40, 45, 2.0)]
+    before = sum(len(net.out_edges.get(i, {})) for i in range(40, 45))
     net._homeostatic_ratio_control(t=100)
-    after = sum(len(net.out_edges.get(i, {})) for i in range(40, 50))
+    after = sum(len(net.out_edges.get(i, {})) for i in range(40, 45))
     assert after > before, f"稀疏应生长: before={before}, after={after}"
 
 
@@ -103,17 +110,46 @@ def test_prune_when_dense():
 
 
 def test_no_action_in_tolerance():
-    """比例在容忍窗口内 → 不动作。"""
-    # 构造比例在 [1.6, 2.5] 内: 10 神经元 18 边 → 1.8
-    net2 = _make_net_with_dynamic_region(num_input=10, num_output=5, with_edges=18)
+    """v3:群内比例在区间内 → 不动作。
+
+    v3 用拓扑聚类判定密度,零度节点独立成群会触发生长(密度0)。
+    所以构造"每个节点都有均衡边、比例在区间内"的真实场景:
+    6 节点均匀连边,每节点 1-2 条,比例 1.0~1.5 在 [lo, hi] 内。
+    """
+    net = SNN(num_neurons=200)
+    for i in range(40, 46):
+        net.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    for i in range(100, 103):
+        net.add_neuron(i, NeuronType.OUTPUT, threshold=1.0)
+    # 均匀连边:6 输入各连到输出,每节点 1 条 → 比例 1.0
+    for i in range(40, 46):
+        net.connect(i, 100 + (i - 40) % 3, weight=0.2, step=1)
+    net.enable_homeostatic_ratio = True
+    net.homeostatic_check_interval = 1
+    # 用默认区域(40-100,100-196)但仅输入区有边
+    net.homeostatic_regions = [(40, 46, 2.0)]
+    before = sum(len(net.out_edges.get(i, {})) for i in range(40, 46))
+    net._homeostatic_ratio_control(t=100)
+    after = sum(len(net.out_edges.get(i, {})) for i in range(40, 46))
+    # 比例 1.0 在 [2.0×0.85, 2.0×1.15]=[1.7,2.3] 外(低于lo) → 会生长
+    # 注:v3 区间 [lo,hi],比例 1.0 < lo 应生长,故断言可能变化
+    # 这里验证区间内场景需比例接近 target,构造 6 节点 12 边 → 2.0
+    net2 = SNN(num_neurons=200)
+    for i in range(40, 46):
+        net2.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    for i in range(100, 103):
+        net2.add_neuron(i, NeuronType.OUTPUT, threshold=1.0)
+    for i in range(40, 46):
+        for j in range(100, 102):
+            net2.connect(i, j, weight=0.2, step=1)
     net2.enable_homeostatic_ratio = True
     net2.homeostatic_check_interval = 1
-    # 收窄区域到实际构造范围,避免稀释比例
-    net2.homeostatic_regions = [(40, 50, 2.0), (100, 105, 2.0)]
-    before = sum(len(net2.out_edges.get(i, {})) for i in range(40, 50))
+    net2.homeostatic_regions = [(40, 46, 2.0)]
+    before2 = sum(len(net2.out_edges.get(i, {})) for i in range(40, 46))
     net2._homeostatic_ratio_control(t=100)
-    after = sum(len(net2.out_edges.get(i, {})) for i in range(40, 50))
-    assert before == after, f"容忍窗口内不应动作(输入区): before={before}, after={after}"
+    after2 = sum(len(net2.out_edges.get(i, {})) for i in range(40, 46))
+    # 比例 2.0 恰在 target 上,区间内 → 不动作
+    assert before2 == after2, f"比例恰在 target 不应动作(输入区): before={before2}, after={after2}"
 
 
 def test_core_freeze_protected():
@@ -157,6 +193,102 @@ def test_interval_throttle():
     # t=100: 到间隔, 检测
     net._homeostatic_ratio_control(t=100)
     assert net._last_homeostatic_check == 100, "到间隔应检测并更新时间"
+
+
+
+# ── v3 专项测试(2026-11-24 23:00 用户方案确认)──
+
+def test_v3_cluster_by_topology():
+    """拓扑距离聚类:相连节点成群,零度节点独立成单群。"""
+    net = SNN(num_neurons=200)
+    for i in range(40, 48):
+        net.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    # 40-44 通过 100-101 相连(形成群), 45-47 零度(独立)
+    for i in range(100, 102):
+        net.add_neuron(i, NeuronType.OUTPUT, threshold=1.0)
+    for i in range(40, 45):
+        net.connect(i, 100, weight=0.2, step=1)
+    net.homeostatic_cluster_hop = 2
+    clusters = net._cluster_by_topology(list(range(40, 48)))
+    # 应至少2群: 40-44(有边,通过输出互连) + 45-47(零度)
+    assert len(clusters) >= 2, f"应聚成≥2群: {clusters}"
+    # 45-47 应成单节点群(零度,无拓扑连接)
+    singles = [c for c in clusters if len(c) == 1]
+    assert len(singles) >= 3, f"零度节点应独立成单群: {clusters}"
+    print("✅ test_v3_cluster_by_topology: 聚类正确")
+
+
+def test_v3_activity_width():
+    """活跃度→区间宽度:稳定群窄(0.15),活跃群宽(0.45)。"""
+    net = SNN(num_neurons=50)
+    # 低活跃 → 窄
+    w1 = net._activity_to_width(0.0)
+    assert abs(w1 - net.homeostatic_width_stable) < 1e-6, f"稳定宽: {w1}"
+    # 高活跃 → 宽
+    w2 = net._activity_to_width(1.0)
+    assert abs(w2 - net.homeostatic_width_active) < 1e-6, f"活跃宽: {w2}"
+    # 中间线性
+    w3 = net._activity_to_width(0.5)
+    assert w1 < w3 < w2, f"中间应介于: {w3}"
+    print("✅ test_v3_activity_width: 区间宽度缩放正确")
+
+
+def test_v3_recycle_zero():
+    """零度节点过考察期 → 回收。"""
+    net = SNN(num_neurons=200)
+    for i in range(40, 46):
+        net.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    # 40-43 有边, 44-45 零度
+    for i in range(100, 102):
+        net.add_neuron(i, NeuronType.OUTPUT, threshold=1.0)
+    for i in range(40, 44):
+        net.connect(i, 100, weight=0.2, step=1)
+    net.enable_homeostatic_ratio = True
+    net.homeostatic_check_interval = 1
+    net.homeostatic_recycle_grace = 5  # 短考察期
+    net._registered_at = {nid: 0 for nid in range(40, 46)}  # 已过考察期
+    net._homeostatic_ratio_control(t=100)
+    recycled = net._recycled
+    assert 44 in recycled and 45 in recycled, f"零度节点应回收: {recycled}"
+    assert 40 not in recycled, f"有边节点不应回收: {recycled}"
+    print("✅ test_v3_recycle_zero: 零度回收正确")
+
+
+def test_v3_recycle_grace():
+    """考察期内不回收(新注册节点保护)。"""
+    net = SNN(num_neurons=200)
+    for i in range(40, 44):
+        net.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    net.enable_homeostatic_ratio = True
+    net.homeostatic_check_interval = 1
+    net.homeostatic_recycle_grace = 100
+    net.homeostatic_regions = [(40, 44, 2.0)]  # 收窄区域,只含受保护节点
+    net._registered_at = {nid: 99 for nid in range(40, 44)}  # 刚注册(t=100,未满100步)
+    net._homeostatic_ratio_control(t=100)
+    assert not net._recycled, f"考察期内不应回收: {net._recycled}"
+    print("✅ test_v3_recycle_grace: 考察期保护正确")
+
+
+def test_v3_interval_band():
+    """区间丰度:比例在 [lo,hi] 内不动,越界才动作。"""
+    net = SNN(num_neurons=200)
+    for i in range(40, 46):
+        net.add_neuron(i, NeuronType.INPUT, threshold=0.5)
+    for i in range(100, 103):
+        net.add_neuron(i, NeuronType.OUTPUT, threshold=1.0)
+    # 每节点 2 边 → 比例 2.0 = target(区间内,不动作)
+    for i in range(40, 46):
+        net.connect(i, 100, weight=0.2, step=1)
+        net.connect(i, 101, weight=0.2, step=1)
+    net.enable_homeostatic_ratio = True
+    net.homeostatic_check_interval = 1
+    net.homeostatic_regions = [(40, 46, 2.0)]
+    before = sum(len(net.out_edges.get(i, {})) for i in range(40, 46))
+    net._homeostatic_ratio_control(t=100)
+    after = sum(len(net.out_edges.get(i, {})) for i in range(40, 46))
+    # 每节点 2 边,比例 2.0 恰在 target,区间 [1.7,2.3] 内 → 不动作
+    assert before == after, f"区间内不应动作: before={before}, after={after}"
+    print("✅ test_v3_interval_band: 区间判定正确")
 
 
 if __name__ == "__main__":

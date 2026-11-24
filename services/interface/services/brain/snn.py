@@ -521,21 +521,18 @@ class SNN:
 
 
     def _homeostatic_ratio_control(self, t: int):
-        """丰度调控:按区域维持目标突触:神经元比例(homeostatic plasticity)。
+        """丰度调控 v3:区间丰度 + 活跃度缩放区间宽度 + 距离聚类 + 零度回收。
 
-        核心思想(用户 2026-11-24 提出):
-        神经元总数与神经元:突触比例之间存在关系,类似生态学丰度。
-        这应该是需求导向的——识别图像 vs 识别文字的神经元数应有差异。
+        核心思想(用户 2026-11-24 23:00 方案确认):
+        1. 丰度是统计学概念,必须按群体算(逐节点无统计学意义)。
+        2. 一级划分: ID 区间(输入/输出/概念不混);二级划分: 拓扑距离聚类细分群。
+        3. 每群独立算局部密度区间,区间宽度 ∝ 群活跃度(稳定群窄,活跃群宽)。
+        4. 零度节点(无入边无出边)过考察期后回收(开放集完整闭环:能加也能收)。
 
-        机制:
-        - 每个区域(动态输入 40-135 / 动态输出 100-195)有独立目标比例
-        - 定期检测实际 突触:神经元 比例
-        - 偏离目标 → 触发生长(比例过低,突触稀疏)或修剪(比例过高,突触过密)
-        - 只作用于探索区,核心区(0-39)与概念区(220+)冻结保护
-
-        与 _structural_plasticity_update 的区别:
-        - 那是事件驱动(放电相关性),这是稳态驱动(密度目标)
-        - 这是慢调节:每 homeostatic_check_interval 步才检测一次
+        与 v2 区别:
+        - v2 单点 target_ratio + 固定 tolerance;v3 区间 [lo, hi] + 活跃度自适应宽度。
+        - v2 只剪突触不碰神经元;v3 补零度节点回收(神经元数匹配边数)。
+        - v3 用拓扑距离聚类,不依赖 ID 硬编码(功能群更真实)。
 
         Args:
             t: 当前时间步
@@ -548,52 +545,165 @@ class SNN:
         self._last_homeostatic_check = t
 
         # 区域定义:[(start, end, target_ratio)]
-        # 目标比例 = 每神经元期望拥有的突触边数
         regions = self._get_homeostatic_regions()
         if not regions:
             return
 
         for start, end, target_ratio in regions:
-            # 统计该区域内神经元与突触
+            # 区域内活跃神经元(排除已回收)
             region_neurons = [nid for nid in range(start, end)
-                              if nid < self.num_neurons]
+                              if nid < self.num_neurons and nid not in self._recycled]
             if not region_neurons:
                 continue
-            n_count = len(region_neurons)
-            # 统计区域内边数：区域内神经元的出边（扇出密度）
-            # 用区域内神经元作为源,统计出边——这衡量该区域的"突触负载"
-            e_count = 0
-            for src in region_neurons:
-                e_count += len(self.out_edges.get(src, {}))
-            # 区域平均扇出 = 边/神经元
-            if n_count == 0:
-                continue
-            actual_ratio = e_count / n_count
 
-            # 偏离检测
-            if actual_ratio < target_ratio * self.homeostatic_tolerance:
-                # 突触过稀 → 生长
-                self._homeostatic_grow(region_neurons, start, end, target_ratio)
-            elif actual_ratio > target_ratio / self.homeostatic_tolerance:
-                # 突触过密 → 修剪(只剪低权重边,保护重要连接)
-                self._homeostatic_prune(region_neurons, start, end, target_ratio)
+            # 二级:拓扑距离聚类细分群(每群独立算密度)
+            clusters = self._cluster_by_topology(region_neurons)
+            for cluster in clusters:
+                if not cluster:
+                    continue
+                # 群活跃度 → 区间宽度
+                activity = self._region_activity(cluster, t)
+                width = self._activity_to_width(activity)
+                lo = target_ratio * (1.0 - width)
+                hi = target_ratio * (1.0 + width)
+                lo = max(0.1, lo)  # 下界保护
+
+                # 群实际密度
+                n_count = len(cluster)
+                e_count = 0
+                for src in cluster:
+                    e_count += len(self.out_edges.get(src, {}))
+                if n_count == 0:
+                    continue
+                actual_ratio = e_count / n_count
+
+                # 区间判定(带滞回):低于 lo → 生长;高于 hi → 修剪;区间内不动
+                # 生长/修剪目标池用整个 region_neurons(丰度是统计概念),
+                # 群划分只用于判定密度,不限制生长范围(零度节点也能在区域内找到目标)。
+                if actual_ratio < lo:
+                    self._homeostatic_grow(region_neurons, start, end, target_ratio)
+                elif actual_ratio > hi:
+                    self._homeostatic_prune(region_neurons, start, end, target_ratio)
+
+            # 零度节点回收(神经元数匹配边数)
+            if self.homeostatic_zero_recycle:
+                self._recycle_zero_neurons(region_neurons, t)
 
     def _get_homeostatic_regions(self) -> list:
         """返回丰度调控区域列表 [(start, end, target_ratio)]。
 
-        默认:动态输入区(40-135)与动态输出区(100-195)。
+        默认:动态输入区(40-99)与动态输出区(100-195)。
         目标比例可独立配置,体现需求导向(不同模态不同密度)。
         """
         regions = []
         if hasattr(self, 'homeostatic_regions') and self.homeostatic_regions:
             regions = self.homeostatic_regions
         else:
-            # 默认区域:动态输入区(40-99) + 动态输出区(100-195),互不重叠
             regions = [
                 (40, 100, self.homeostatic_target_ratio),
                 (100, 196, self.homeostatic_target_ratio),
             ]
         return regions
+
+    # ── 拓扑距离聚类(方案2二级划分)──
+
+    def _cluster_by_topology(self, region_neurons: list) -> list:
+        """按拓扑距离聚类区域内节点为群。
+
+        用 BFS 跳数作为距离,<= homeostatic_cluster_hop 跳视为同群。
+        群内节点通过图路径相连(功能群真实),不依赖 ID 硬编码。
+        返回: 节点列表的列表(每群一组)。
+        """
+        if not region_neurons:
+            return []
+        region_set = set(region_neurons)
+        unvisited = set(region_neurons)
+        clusters = []
+        hop = self.homeostatic_cluster_hop
+
+        while unvisited:
+            seed = min(unvisited)
+            # BFS 从 seed 出发,收集 <= hop 跳可达的区域内节点
+            queue = [(seed, 0)]
+            cluster = set()
+            visited = {seed}
+            while queue:
+                node, d = queue.pop(0)
+                if d > hop:
+                    continue
+                cluster.add(node)
+                if d == hop:
+                    continue
+                # 邻居(出边目标 + 入边源)
+                for nb in list(self.out_edges.get(node, {}).keys()):
+                    if nb in region_set and nb not in visited:
+                        visited.add(nb)
+                        queue.append((nb, d + 1))
+                for nb in list(self.in_edges.get(node, {}).keys()):
+                    if nb in region_set and nb not in visited:
+                        visited.add(nb)
+                        queue.append((nb, d + 1))
+            clusters.append(sorted(cluster))
+            unvisited -= cluster
+
+        return clusters
+
+    def _region_activity(self, cluster: list, t: int) -> float:
+        """群活跃度:窗口内平均放电次数。
+
+        返回 0.0~1.0 归一化活跃度(每节点窗口内放电次数 / 窗口大小)。
+        """
+        if not cluster:
+            return 0.0
+        window = self.homeostatic_activity_window or self.history_window
+        total_fires = 0
+        for nid in cluster:
+            hist = self._fire_history.get(nid, [])
+            # 窗口内放电次数
+            cnt = sum(1 for ft in hist if ft >= t - window)
+            total_fires += cnt
+        avg = total_fires / len(cluster)
+        # 归一化:窗口内平均放电次数 / 窗口大小 → 0~1
+        return min(1.0, avg / max(1, window))
+
+    def _activity_to_width(self, activity: float) -> float:
+        """活跃度 → 区间半宽。稳定群窄(0.15),活跃群宽(0.45),线性插值。"""
+        stable = self.homeostatic_width_stable
+        active = self.homeostatic_width_active
+        thresh = self.homeostatic_active_threshold
+        if activity <= thresh:
+            return stable
+        # 超过活跃阈值 → 向活跃宽度线性插值
+        ratio = min(1.0, (activity - thresh) / max(0.1, 1.0 - thresh))
+        return stable + (active - stable) * ratio
+
+    def _recycle_zero_neurons(self, region_neurons: list, t: int):
+        """回收零度节点:无入边无出边且过考察期 → 回收(软回收,禁活)。
+
+        开放集完整闭环:新概念能加(注册),多余能收(零度回收)。
+        只收真正无功能的节点(零度),绝不误伤有连接的功能节点。
+        考察期:新注册节点 homeostatic_recycle_grace 步内不回收(防误伤刚注册)。
+        """
+        if not self.homeostatic_zero_recycle:
+            return
+        recycled = 0
+        max_recycle = self.homeostatic_recycle_batch
+        for nid in region_neurons:
+            if recycled >= max_recycle:
+                break
+            if nid in self._recycled:
+                continue
+            # 考察期保护:注册未满 grace 步不回收
+            reg_at = self._registered_at.get(nid, 0)
+            if reg_at and (t - reg_at) < self.homeostatic_recycle_grace:
+                continue
+            # 零度判定:无入边无出边
+            in_deg = len(self.in_edges.get(nid, {}))
+            out_deg = len(self.out_edges.get(nid, {}))
+            if in_deg == 0 and out_deg == 0:
+                self.remove_neuron(nid)
+                self._recycled.add(nid)
+                recycled += 1
 
     def _homeostatic_grow(self, region_neurons: list, start: int, end: int,
                           target_ratio: float):
@@ -605,18 +715,25 @@ class SNN:
         if not region_neurons:
             return
         # 从区域内随机挑选源,建立到区域目标的新连接
+        # 只选有边的节点作为源(零度节点留给回收,不激活——用户 2026-11-24 方案:只回收零度)
         grown = 0
         max_grow = self.homeostatic_grow_batch
-        for src in region_neurons:
+        candidates_src = [src for src in region_neurons
+                          if src in self.out_edges or src in self.in_edges]
+        if not candidates_src:
+            return
+        for src in candidates_src:
             if grown >= max_grow:
                 break
             # 核心区冻结保护(动态区本身不触及 0-39)
             if self.plasticity_core_freeze and src < 40:
                 continue
             # 找区域内可连接的目标(未连接且非自身)
+            # 目标也排除零度节点(保持零度留给回收,不激活——用户方案:只回收零度)
             existing = self.out_edges.get(src, {})
             candidates = [t for t in region_neurons
-                          if t != src and t not in existing]
+                          if t != src and t not in existing
+                          and (t in self.out_edges or t in self.in_edges)]
             if not candidates:
                 continue
             # 随机选目标
@@ -833,6 +950,25 @@ class SNN:
         self.homeostatic_prune_threshold: float = 0.3  # 低于此权重才可修剪(保护中等以上连接)
         self.homeostatic_regions: list = []        # 自定义区域 [(start,end,target)],空用默认
         self._last_homeostatic_check: int = 0      # 上次检测时间
+
+        # ── 丰度调控 v3: 区间丰度 + 活跃度缩放 + 距离聚类 + 零度回收 ──
+        # 用户 2026-11-24 23:00 方案确认:
+        # 丰度是统计概念,按群体算(逐节点无统计学意义)。
+        # 一级: ID 区间划分(输入/输出/概念不混);二级: 拓扑距离聚类细分群。
+        # 每群独立算局部密度区间,区间宽度 ∝ 群活跃度(稳定群窄,活跃群宽)。
+        # 零度节点(无入边无出边)过考察期后回收。
+        self.homeostatic_interval_lo: float = 0.5      # 区间下界比例系数(基准 target 的倍数)
+        self.homeostatic_interval_hi: float = 1.5      # 区间上界比例系数
+        self.homeostatic_width_stable: float = 0.15    # 稳定群区间半宽(窄)
+        self.homeostatic_width_active: float = 0.45    # 活跃群区间半宽(宽)
+        self.homeostatic_active_threshold: float = 0.2  # 活跃度阈值(平均放电次数/窗口,超此→活跃群)
+        self.homeostatic_activity_window: int = 20      # 活跃度统计窗口(复用 history_window)
+        self.homeostatic_cluster_hop: int = 2           # 拓扑距离聚类跳数(≤此跳视为同群)
+        self.homeostatic_zero_recycle: bool = True      # 零度节点回收开关
+        self.homeostatic_recycle_grace: int = 100       # 新节点考察期(步数,期内不回收)
+        self.homeostatic_recycle_batch: int = 2         # 每轮最多回收节点数
+        self._registered_at: dict[int, int] = {}        # 节点注册时间(考察期判定)
+        self._recycled: set[int] = set()                # 已回收节点(不参与比例计算)
 
         # 输出历史(用于 Hebbian 回溯)
         self._fire_history: dict[int, list[int]] = defaultdict(list)
@@ -1204,6 +1340,17 @@ class SNN:
             "homeostatic_prune_batch": self.homeostatic_prune_batch,
             "homeostatic_new_weight": self.homeostatic_new_weight,
             "homeostatic_regions": self.homeostatic_regions,
+            # 丰度调控 v3(区间+活跃度+距离聚类+零度回收)
+            "homeostatic_interval_lo": self.homeostatic_interval_lo,
+            "homeostatic_interval_hi": self.homeostatic_interval_hi,
+            "homeostatic_width_stable": self.homeostatic_width_stable,
+            "homeostatic_width_active": self.homeostatic_width_active,
+            "homeostatic_active_threshold": self.homeostatic_active_threshold,
+            "homeostatic_activity_window": self.homeostatic_activity_window,
+            "homeostatic_cluster_hop": self.homeostatic_cluster_hop,
+            "homeostatic_zero_recycle": self.homeostatic_zero_recycle,
+            "homeostatic_recycle_grace": self.homeostatic_recycle_grace,
+            "homeostatic_recycle_batch": self.homeostatic_recycle_batch,
             "neurons": neurons,
             "edges": edges,
             "ewc_importance": self.get_ewc_importance(),
@@ -1248,6 +1395,27 @@ class SNN:
             "homeostatic_new_weight", net.homeostatic_new_weight)
         net.homeostatic_regions = data.get(
             "homeostatic_regions", net.homeostatic_regions)
+        # 丰度调控 v3(向后兼容:旧文件无这些键用默认)
+        net.homeostatic_interval_lo = data.get(
+            "homeostatic_interval_lo", net.homeostatic_interval_lo)
+        net.homeostatic_interval_hi = data.get(
+            "homeostatic_interval_hi", net.homeostatic_interval_hi)
+        net.homeostatic_width_stable = data.get(
+            "homeostatic_width_stable", net.homeostatic_width_stable)
+        net.homeostatic_width_active = data.get(
+            "homeostatic_width_active", net.homeostatic_width_active)
+        net.homeostatic_active_threshold = data.get(
+            "homeostatic_active_threshold", net.homeostatic_active_threshold)
+        net.homeostatic_activity_window = data.get(
+            "homeostatic_activity_window", net.homeostatic_activity_window)
+        net.homeostatic_cluster_hop = data.get(
+            "homeostatic_cluster_hop", net.homeostatic_cluster_hop)
+        net.homeostatic_zero_recycle = data.get(
+            "homeostatic_zero_recycle", net.homeostatic_zero_recycle)
+        net.homeostatic_recycle_grace = data.get(
+            "homeostatic_recycle_grace", net.homeostatic_recycle_grace)
+        net.homeostatic_recycle_batch = data.get(
+            "homeostatic_recycle_batch", net.homeostatic_recycle_batch)
 
         for nd in data.get("neurons", []):
             nid = nd["id"]
