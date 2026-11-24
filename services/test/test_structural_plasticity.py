@@ -53,6 +53,7 @@ class TestStepEvolve:
     """步长演化：放电相关性 → 缩短/加长"""
 
     def test_shorten_step_when_correlated(self, net):
+        net.step_evolve_rate = 1.0  # 单元测试: 必演化
         net.connect(0, 1, weight=1.0, step=3)
         # 注入让 0 放电
         net.inject_input(0, 1.5)
@@ -63,6 +64,7 @@ class TestStepEvolve:
         assert net.out_edges[0][1].step < 3, "强相关应缩短步长"
 
     def test_lengthen_step_when_uncorrelated(self, net):
+        net.step_evolve_rate = 1.0  # 单元测试: 必演化
         net.connect(0, 1, weight=1.0, step=1)
         # 只让 1 放电, 0 不放电 → 弱相关 → 加长
         for _ in range(3):
@@ -71,6 +73,7 @@ class TestStepEvolve:
         assert net.out_edges[0][1].step > 1, "弱相关应加长步长"
 
     def test_step_clamped_to_max(self, net):
+        net.step_evolve_rate = 1.0  # 单元测试: 必演化
         net.connect(0, 1, weight=1.0, step=5)  # 已在上限
         for _ in range(3):
             net.inject_input(1, 1.5)

@@ -468,6 +468,10 @@ class SNN:
                 # 目标无放电则连接无激活证据,不改步长
                 if not tgt_hist:
                     continue
+                # 演化速率:以 step_evolve_rate 概率演化(非每步都动)
+                # step_evolve_rate 低→慢演化(保守), 高→快演化(激进)
+                if random.random() > self.step_evolve_rate:
+                    continue
                 # 相关性:目标在源放电后 step+2 窗口内跟随 → 正相关
                 correlated = False
                 for st in src_hist:
