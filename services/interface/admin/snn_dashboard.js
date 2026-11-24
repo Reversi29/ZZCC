@@ -101,6 +101,12 @@ function drawSnn(container, status, graph, decisions) {
             <span class="legend-item"><span class="legend-dot" style="background:#bc8cff"></span>中继</span>
             <span class="legend-item"><span class="legend-dot" style="background:#d29922"></span>抑制</span>
           </div>
+          <div class="legend" style="margin-left:8px">
+            <span class="legend-item" style="color:#8b949e;font-size:11px">边步长:</span>
+            <span class="legend-item"><span class="legend-dot" style="background:rgba(139,148,158,0.8)"></span>1(近/快)</span>
+            <span class="legend-item"><span class="legend-dot" style="background:rgba(201,121,113,0.8)"></span>5</span>
+            <span class="legend-item"><span class="legend-dot" style="background:rgba(248,100,80,0.8)"></span>8(远/慢)</span>
+          </div>
           <a class="topo-link" href="#" onclick="toggleTopoTable('nodes');return false;">神经元表</a>
           <a class="topo-link" href="#" onclick="toggleTopoTable('edges');return false;">路径表</a>
         </div>
@@ -199,29 +205,36 @@ function drawTopology(graph) {
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
 
-  // 布局：按类型分区域（输入左、隐藏中、输出右、中继上/下）
-  const layout = layoutNodes(nodes, W, H);
+  // 布局：步长驱动的力导向（边距离反映传播步长）
+  const layout = layoutNodesByStep(nodes, edges, W, H);
 
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#0d1117';
   ctx.fillRect(0, 0, W, H);
 
-  // 画边
+  // 画边：步长决定颜色+粗细（step 大→传播慢→橙红粗线, step 小→蓝青细线）
   const edgeCount = Math.min(edges.length, 800); // 防卡顿
-  ctx.lineWidth = 0.6;
   for (let i = 0; i < edgeCount; i++) {
     const e = edges[i];
     const a = layout[e.source];
     const b = layout[e.target];
     if (!a || !b) continue;
     const w = e.weight || 0.5;
+    const step = e.step ?? e.delay ?? 1;
     const alpha = Math.min(0.45, 0.08 + w * 0.1);
-    ctx.strokeStyle = `rgba(139, 148, 158, ${alpha})`;
+    // 步长着色: step=1 蓝青, step 增大向橙红渐变(传播延迟直观化)
+    const stepT = Math.min(1, (step - 1) / 7); // 1→8 归一化
+    const r = Math.round(139 + stepT * (248 - 139));   // 139→248
+    const g = Math.round(148 - stepT * (148 - 100));   // 148→100
+    const b2 = Math.round(158 - stepT * (158 - 80));   // 158→80
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b2}, ${alpha})`;
+    ctx.lineWidth = 0.6 + stepT * 1.4;  // 步长越大线越粗
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   }
+  ctx.lineWidth = 0.6; // 恢复默认
 
   // 画节点
   const typeColor = {
@@ -338,6 +351,79 @@ function layoutNodes(nodes, W, H) {
     });
   }
   return layout;
+}
+
+// ── 步长驱动的力导向布局 ──────────────────────────────
+// 神经元间距离反映传播步长(step): 步长大→自然距离远(传播慢), 步长小→近。
+// 力导向: 弹簧力拉向理想长度(base + step*scale), 库仑排斥推开节点。
+// 初始位置用类型分区(layoutNodes), 迭代收敛后保留大体结构。
+function layoutNodesByStep(nodes, edges, W, H) {
+  // 初始位置: 类型分区(输入左/隐藏中/输出右/中继上下)
+  const pos = layoutNodes(nodes, W, H);
+  const ids = nodes.map(n => n.id);
+  const idx = {};
+  ids.forEach((id, i) => idx[id] = i);
+
+  // 边列表(带 step): 只取有效边
+  const es = [];
+  for (const e of edges) {
+    const a = pos[e.source], b = pos[e.target];
+    if (!a || !b) continue;
+    const step = e.step ?? e.delay ?? 1;
+    es.push({ s: e.source, t: e.target, step });
+  }
+
+  // 力导向参数
+  const BASE = 40;          // 步长=1 时的基准距离
+  const STEP_SCALE = 18;    // 每步长增加的像素
+  const REPULSION = 1200;   // 库仑排斥强度
+  const ITERS = 80;         // 迭代次数
+
+  // 迭代: 弹簧 + 排斥
+  for (let iter = 0; iter < ITERS; iter++) {
+    const forces = {};
+    for (const id of ids) forces[id] = { x: 0, y: 0 };
+
+    // 弹簧力(拉向理想长度)
+    for (const e of es) {
+      const a = pos[e.s], b = pos[e.t];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.max(1, Math.hypot(dx, dy));
+      const ideal = BASE + e.step * STEP_SCALE;
+      const force = (dist - ideal) * 0.02;  // 弹簧常数
+      const fx = (dx / dist) * force, fy = (dy / dist) * force;
+      forces[e.s].x += fx; forces[e.s].y += fy;
+      forces[e.t].x -= fx; forces[e.t].y -= fy;
+    }
+
+    // 库仑排斥(节点间)
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = pos[ids[i]], b = pos[ids[j]];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const f = REPULSION / (dist * dist);
+        const fx = (dx / dist) * f, fy = (dy / dist) * f;
+        forces[ids[i]].x -= fx; forces[ids[i]].y -= fy;
+        forces[ids[j]].x += fx; forces[ids[j]].y += fy;
+      }
+    }
+
+    // 应用力(带阻尼, 限制单步位移防震荡)
+    const MAX_STEP = 8;
+    for (const id of ids) {
+      const f = forces[id];
+      const mag = Math.hypot(f.x, f.y);
+      if (mag < 0.01) continue;
+      const scale = Math.min(MAX_STEP / mag, 0.5);
+      pos[id].x += f.x * scale;
+      pos[id].y += f.y * scale;
+      // 边界约束
+      pos[id].x = Math.max(20, Math.min(W - 20, pos[id].x));
+      pos[id].y = Math.max(20, Math.min(H - 20, pos[id].y));
+    }
+  }
+  return pos;
 }
 
 // ── 决策趋势图（ECharts） ──
