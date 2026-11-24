@@ -451,6 +451,12 @@ class SNN:
         # 1. 步长演化 + 2. 修剪:遍历现有连接
         for src in list(self.out_edges.keys()):
             for tgt, conn in list(self.out_edges[src].items()):
+                # 核心区冻结:默认冻结 ID<40(固定拓扑),结构可塑性只作用
+                # 于动态区(≥40 动态输出/概念槽)。防止扰动已收敛的 12/12
+                # 精确放电组合(MEMORY 教训)。
+                if self.plasticity_core_freeze and (src < 40 and tgt < 40):
+                    continue
+
                 # 修剪:权重跌破下限
                 if conn.weight < self.min_weight_for_keep:
                     self.disconnect(src, tgt)
@@ -487,6 +493,9 @@ class SNN:
         for src in fired_now:
             for tgt in fired_now:
                 if src == tgt:
+                    continue
+                # 核心区冻结:不在核心区建连
+                if self.plasticity_core_freeze and (src < 40 and tgt < 40):
                     continue
                 if tgt not in self.out_edges.get(src, {}):
                     # 协同放电 → 突触发生(兴奋性,初始低权重)
@@ -630,13 +639,18 @@ class SNN:
         self.enable_hebbian: bool = True
 
         # ── 结构可塑性(生长/修剪/步长演化)──
-        # 默认关闭:不改变现有行为,需显式启用
-        self.enable_structural_plasticity: bool = False
+        # 默认关闭:不改变现有行为,需显式启用。
+        # 可用环境变量 BRAIN_STRUCTURAL_PLASTICITY=1 全局开启(生产运维开关)。
+        import os as _os
+        self.enable_structural_plasticity: bool = (
+            _os.environ.get("BRAIN_STRUCTURAL_PLASTICITY", "0") == "1"
+        )
         self.min_weight_for_keep: float = 0.05   # 权重低于此值→修剪(断开)
         self.step_evolve_rate: float = 0.01      # 步长演化速率(每步)
         self.step_min: int = 1                   # 步长下限
         self.step_max: int = 5                   # 步长上限
         self.allow_synaptogenesis: bool = False  # 生长(协同放电建连)开关,默认关
+        self.plasticity_core_freeze: bool = True  # 冻结核心区(0-39)防扰动 12/12
         self._recent_fire: dict[int, list[int]] = defaultdict(list)  # 最近放电历史(结构可塑性用)
 
         # 输出历史(用于 Hebbian 回溯)
@@ -991,6 +1005,14 @@ class SNN:
             "weight_decay": self.weight_decay,
             "max_weight": self.max_weight,
             "history_window": self.history_window,
+            # 结构可塑性配置(持久化,生产网络文件保留)
+            "enable_structural_plasticity": self.enable_structural_plasticity,
+            "min_weight_for_keep": self.min_weight_for_keep,
+            "step_evolve_rate": self.step_evolve_rate,
+            "step_min": self.step_min,
+            "step_max": self.step_max,
+            "allow_synaptogenesis": self.allow_synaptogenesis,
+            "plasticity_core_freeze": self.plasticity_core_freeze,
             "neurons": neurons,
             "edges": edges,
             "ewc_importance": self.get_ewc_importance(),
@@ -1008,6 +1030,15 @@ class SNN:
         net.weight_decay = data.get("weight_decay", 0.0)
         net.max_weight = data.get("max_weight", 5.0)
         net.history_window = data.get("history_window", 20)
+        # 结构可塑性配置(向后兼容:旧文件无这些键用默认)
+        net.enable_structural_plasticity = data.get(
+            "enable_structural_plasticity", net.enable_structural_plasticity)
+        net.min_weight_for_keep = data.get("min_weight_for_keep", net.min_weight_for_keep)
+        net.step_evolve_rate = data.get("step_evolve_rate", net.step_evolve_rate)
+        net.step_min = data.get("step_min", net.step_min)
+        net.step_max = data.get("step_max", net.step_max)
+        net.allow_synaptogenesis = data.get("allow_synaptogenesis", net.allow_synaptogenesis)
+        net.plasticity_core_freeze = data.get("plasticity_core_freeze", net.plasticity_core_freeze)
 
         for nd in data.get("neurons", []):
             nid = nd["id"]

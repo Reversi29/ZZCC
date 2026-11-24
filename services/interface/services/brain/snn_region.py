@@ -1318,6 +1318,10 @@ class SNNRegion:
         # 只用 _reward_modulated_strengthen 做因果强化,不受被动 LTD 干扰。
         _saved_hebbian = self.snn.enable_hebbian
         self.snn.enable_hebbian = False
+        # 结构可塑性(修剪/步长演化)默认不接入生产训练:
+        # 会扰动档位槽→隐藏层精确放电组合(见 MEMORY 教训),且修剪易误剪关键边。
+        # 生长已由 _reward_modulated_strengthen 的 auto_create 受控处理。
+        # 如需启用,由上层显式设置 snn.enable_structural_plasticity 后调用。
 
         self._stats["training_count"] += 1
         self._stats["micro_learn_steps"] += 1
