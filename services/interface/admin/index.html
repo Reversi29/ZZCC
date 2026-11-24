@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZZCC 管理平台</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 侧边导航 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">ZZCC</div>
+        <div class="logo-sub">管理平台</div>
+      </div>
+      <nav class="nav">
+        <div class="nav-group">开发</div>
+        <a class="nav-item active" href="#snn" data-page="snn">
+          <span class="nav-icon">🧠</span>
+          <span>SNN 类脑看板</span>
+        </a>
+        <a class="nav-item" href="#decisions" data-page="decisions">
+          <span class="nav-icon">📊</span>
+          <span>决策历史</span>
+        </a>
+        <a class="nav-item" href="#graph" data-page="graph">
+          <span class="nav-icon">🕸️</span>
+          <span>知识图谱</span>
+        </a>
+
+        <div class="nav-group">运营（待开放）</div>
+        <a class="nav-item disabled" href="#content" data-page="content">
+          <span class="nav-icon">📦</span>
+          <span>内容管理</span>
+          <span class="badge">规划</span>
+        </a>
+        <a class="nav-item disabled" href="#users" data-page="users">
+          <span class="nav-icon">👥</span>
+          <span>用户管理</span>
+          <span class="badge">规划</span>
+        </a>
+        <a class="nav-item disabled" href="#interactions" data-page="interactions">
+          <span class="nav-icon">💬</span>
+          <span>互动监控</span>
+          <span class="badge">规划</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="conn-status" id="conn-status">
+          <span class="dot"></span>
+          <span>连接中...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <main class="main">
+      <header class="topbar">
+        <h1 id="page-title">SNN 类脑看板</h1>
+        <div class="topbar-right">
+          <span class="refresh-hint" id="last-refresh">--</span>
+          <button class="btn btn-primary" id="refresh-btn" onclick="refreshAll()">刷新</button>
+        </div>
+      </header>
+      <div id="content" class="content"></div>
+    </main>
+  </div>
+
+  <!-- 页面脚本 -->
+  <script src="app.js"></script>
+  <script src="snn_dashboard.js?v=20261124f"></script>
+  <script src="decisions_page.js"></script>
+  <script src="placeholders.js"></script>
+</body>
+</html>

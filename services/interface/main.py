@@ -297,6 +297,13 @@ def create_app() -> FastAPI:
     if os.path.isfile(_index_html):
         app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
+        # --- 管理平台静态文件 ---
+        # /admin 必须在 SPA fallback 之前挂载，否则被 /{full_path:path} 拦截
+        _admin_dir = os.environ.get("ZZCC_ADMIN_DIR", "/app/admin")
+        if os.path.isdir(_admin_dir):
+            app.mount("/admin", StaticFiles(directory=_admin_dir, html=True), name="admin")
+            _log.info(f"管理平台已挂载: {_admin_dir} -> /admin")
+
         # 静态资源用 no-cache：浏览器每次重新验证（If-Modified-Since/ETag），
         # 构建产物更新后自动拉新，避免启发式缓存导致用户看到旧 JS。
         _no_cache = {"Cache-Control": "no-cache"}
