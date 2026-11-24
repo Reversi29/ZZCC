@@ -366,6 +366,9 @@ class SNN:
         if self.enable_hebbian:
             self._hebbian_update(t, fired_this_step)
 
+        # 4b. 结构可塑性(生长/修剪/步长演化,默认关闭,需显式启用)
+        self._structural_plasticity_update(t, fired_this_step)
+
         # 5. 膜电位衰减(本步结束后,旧信号消退)
         for n in self.neurons:
             n.step(t)
@@ -418,6 +421,77 @@ class SNN:
             for src in list(self.out_edges.keys()):
                 for tgt, conn in list(self.out_edges[src].items()):
                     conn.weight = max(0, conn.weight - self.weight_decay)
+
+    def _structural_plasticity_update(self, t: int, fired_now: set[int]):
+        """结构可塑性(独立于 STDP 的强度调节)。
+
+        三大机制,区别于 _hebbian_update(只调 weight):
+        1. 步长演化:按放电相关性调节 step(强相关→缩短,弱相关→加长)
+        2. 修剪:权重跌破 min_weight_for_keep → 断开(突触修剪)
+        3. 生长:协同放电且连接不存在 → 建连(突触发生)
+
+        注:该阶段只作用于已存在的连接(修剪/步长),不新增神经元。
+        神经元增删由外部拓扑管理负责(如 _learn_* 的 auto_create)。
+        """
+        if not self.enable_structural_plasticity:
+            return
+
+        # 记录最近放电历史
+        for nid in fired_now:
+            self._recent_fire[nid].append(t)
+        # 裁剪历史窗口
+        cutoff = t - self.history_window
+        for nid in list(self._recent_fire.keys()):
+            hist = self._recent_fire[nid]
+            while hist and hist[0] < cutoff:
+                hist.pop(0)
+            if not hist:
+                del self._recent_fire[nid]
+
+        # 1. 步长演化 + 2. 修剪:遍历现有连接
+        for src in list(self.out_edges.keys()):
+            for tgt, conn in list(self.out_edges[src].items()):
+                # 修剪:权重跌破下限
+                if conn.weight < self.min_weight_for_keep:
+                    self.disconnect(src, tgt)
+                    continue
+
+                # 步长演化:按源/目标最近放电相关性
+                src_hist = self._recent_fire.get(src, [])
+                tgt_hist = self._recent_fire.get(tgt, [])
+                # 目标无放电则连接无激活证据,不改步长
+                if not tgt_hist:
+                    continue
+                # 相关性:目标在源放电后 step+2 窗口内跟随 → 正相关
+                correlated = False
+                for st in src_hist:
+                    for tt in tgt_hist:
+                        if 0 < tt - st <= conn.step + 2:
+                            correlated = True
+                            break
+                    if correlated:
+                        break
+                if correlated:
+                    # 强相关 → 缩短步长(路径更快)
+                    new_step = max(self.step_min, conn.step - 1)
+                else:
+                    # 弱相关(源未放电或不同步) → 加长步长(路径变慢)
+                    new_step = min(self.step_max, conn.step + 1)
+                if new_step != conn.step:
+                    self.set_step(src, tgt, new_step)
+
+        # 3. 生长:协同放电但无连接 → 建连
+        # 只在显式学习上下文启用(奖励路径已用 auto_create,这里补通用生长)
+        if not self.allow_synaptogenesis:
+            return
+        for src in fired_now:
+            for tgt in fired_now:
+                if src == tgt:
+                    continue
+                if tgt not in self.out_edges.get(src, {}):
+                    # 协同放电 → 突触发生(兴奋性,初始低权重)
+                    self.connect(src, tgt, weight=0.1, step=self.step_min)
+
 
     # ── 高级接口 ─────────────────────────────────────────────
 
@@ -554,6 +628,16 @@ class SNN:
         self.max_weight: float = 3.0
         # Hebbian 学习开关:推理(sense)时禁用,防止意外削弱权重
         self.enable_hebbian: bool = True
+
+        # ── 结构可塑性(生长/修剪/步长演化)──
+        # 默认关闭:不改变现有行为,需显式启用
+        self.enable_structural_plasticity: bool = False
+        self.min_weight_for_keep: float = 0.05   # 权重低于此值→修剪(断开)
+        self.step_evolve_rate: float = 0.01      # 步长演化速率(每步)
+        self.step_min: int = 1                   # 步长下限
+        self.step_max: int = 5                   # 步长上限
+        self.allow_synaptogenesis: bool = False  # 生长(协同放电建连)开关,默认关
+        self._recent_fire: dict[int, list[int]] = defaultdict(list)  # 最近放电历史(结构可塑性用)
 
         # 输出历史(用于 Hebbian 回溯)
         self._fire_history: dict[int, list[int]] = defaultdict(list)
