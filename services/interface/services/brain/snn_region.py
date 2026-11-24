@@ -1742,12 +1742,25 @@ class SNNRegion:
 
     def status(self) -> dict:
         """网络状态快照。"""
+        # 丰度调控诊断(生产运维 2026-11-24):
+        # 暴露 enable/last_check/recycled/比例,用于确认 v3 在生产真实运行。
+        snn = self.snn
+        homeostatic_info = {
+            "enable": getattr(snn, "enable_homeostatic_ratio", False),
+            "last_check": getattr(snn, "_last_homeostatic_check", 0),
+            "check_interval": getattr(snn, "homeostatic_check_interval", 50),
+            "recycled_count": len(getattr(snn, "_recycled", set())),
+            "zero_recycle": getattr(snn, "homeostatic_zero_recycle", False),
+            "regions": getattr(snn, "homeostatic_regions", []) or [],
+            "target_ratio": getattr(snn, "homeostatic_target_ratio", 2.0),
+        }
         return {
             "ok": True,
             "save_path": self.save_path,
             "stats": self._stats,
             "network": self.snn.stats(),
             "health": self.health(),
+            "homeostatic": homeostatic_info,
         }
 
     def connection_graph(self) -> dict:
