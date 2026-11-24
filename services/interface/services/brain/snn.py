@@ -578,12 +578,12 @@ class SNN:
                 actual_ratio = e_count / n_count
 
                 # 区间判定(带滞回):低于 lo → 生长;高于 hi → 修剪;区间内不动
-                # 生长/修剪目标池用整个 region_neurons(丰度是统计概念),
-                # 群划分只用于判定密度,不限制生长范围(零度节点也能在区域内找到目标)。
+                # 生长/修剪只作用于本群(cluster)——局部丰度语义:
+                # 一个群密度低只长该群,不影响其他群。群内零度节点不激活(留给回收)。
                 if actual_ratio < lo:
-                    self._homeostatic_grow(region_neurons, start, end, target_ratio)
+                    self._homeostatic_grow(cluster, start, end, target_ratio)
                 elif actual_ratio > hi:
-                    self._homeostatic_prune(region_neurons, start, end, target_ratio)
+                    self._homeostatic_prune(cluster, start, end, target_ratio)
 
             # 零度节点回收(神经元数匹配边数)
             if self.homeostatic_zero_recycle:
@@ -624,6 +624,8 @@ class SNN:
         while unvisited:
             seed = min(unvisited)
             # BFS 从 seed 出发,收集 <= hop 跳可达的区域内节点
+            # 邻居遍历不限于 region 内(边常连到 region 外输出节点,如 100+),
+            # 但只有 region 内节点收进群——这样通过外部节点互连的 region 内节点算同群。
             queue = [(seed, 0)]
             cluster = set()
             visited = {seed}
@@ -631,16 +633,17 @@ class SNN:
                 node, d = queue.pop(0)
                 if d > hop:
                     continue
-                cluster.add(node)
+                if node in region_set:
+                    cluster.add(node)
                 if d == hop:
                     continue
-                # 邻居(出边目标 + 入边源)
+                # 邻居(出边目标 + 入边源),不限于 region 内
                 for nb in list(self.out_edges.get(node, {}).keys()):
-                    if nb in region_set and nb not in visited:
+                    if nb not in visited:
                         visited.add(nb)
                         queue.append((nb, d + 1))
                 for nb in list(self.in_edges.get(node, {}).keys()):
-                    if nb in region_set and nb not in visited:
+                    if nb not in visited:
                         visited.add(nb)
                         queue.append((nb, d + 1))
             clusters.append(sorted(cluster))
