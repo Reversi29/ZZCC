@@ -109,12 +109,12 @@ class Connection:
     source: int      # 源神经元
     target: int      # 目标神经元
     weight: float = 1.0   # 权重(正=兴奋,负=抑制)
-    delay: int = 1        # 延迟步数
+    step: int = 1         # 传播步长(信号到达目标所需时间步数)
 
     def to_dict(self) -> dict:
         return {
             "source": self.source, "target": self.target,
-            "weight": self.weight, "delay": self.delay,
+            "weight": self.weight, "step": self.step,
         }
 
 
@@ -126,7 +126,7 @@ class SNN:
         net = SNN(num_neurons=10)
         net.add_neuron(0, NeuronType.INPUT)
         net.add_neuron(9, NeuronType.OUTPUT, threshold=0.5)
-        net.connect(0, 1, weight=1.0, delay=2)
+        net.connect(0, 1, weight=1.0, step=2)
         # 运行 100 个时间步
         for t in range(100):
             net.inject_input(0, 1.5)
@@ -185,7 +185,7 @@ class SNN:
         n.threshold = 99999  # 使其永不激活
         return True
 
-    def connect(self, source: int, target: int, weight: float = 1.0, delay: int = 1) -> bool:
+    def connect(self, source: int, target: int, weight: float = 1.0, step: int = 1) -> bool:
         """添加或修改连接"""
         if source < 0 or source >= self.num_neurons:
             return False
@@ -193,7 +193,7 @@ class SNN:
             return False
         if source == target:
             return False
-        conn = Connection(source=source, target=target, weight=weight, delay=delay)
+        conn = Connection(source=source, target=target, weight=weight, step=step)
         self.out_edges[source][target] = conn
         self.in_edges[target][source] = conn
         return True
@@ -211,15 +211,15 @@ class SNN:
             return True
         return False
 
-    def set_delay(self, source: int, target: int, delay: int) -> bool:
-        """修改连接延迟(路径长短调节)"""
+    def set_step(self, source: int, target: int, step: int) -> bool:
+        """修改连接步长(路径长短调节)"""
         if source < 0 or source >= self.num_neurons:
             return False
         if target < 0 or target >= self.num_neurons:
             return False
         conn = self.out_edges.get(source, {}).get(target)
         if conn:
-            conn.delay = max(1, delay)
+            conn.step = max(1, step)
             return True
         return False
 
@@ -355,7 +355,7 @@ class SNN:
             n = self.neurons[n_id]
             gain = n.gain
             for tgt, conn in self.out_edges.get(n_id, {}).items():
-                arrive_time = t + conn.delay
+                arrive_time = t + conn.step
                 eff_weight = conn.weight * gain
                 heapq.heappush(self._pending_events, (arrive_time, n_id, tgt, eff_weight))
             # 传播完成后立即清零增益:gain 只对本次放电有效,
@@ -386,7 +386,7 @@ class SNN:
         在目标神经元激活时检查:源神经元是否在延迟窗口内先激活过?
 
         规则:
-        - 目标激活,且源在 delay+2 窗口内先激活 → LTP(加强)
+        - 目标激活,且源在 step+2 窗口内先激活 → LTP(加强)
         - 目标激活,但源太久没激活 → LTD(减弱)
         - 全局 weight decay 防止权重爆炸
         """
@@ -400,7 +400,7 @@ class SNN:
 
                 if src_fire_t >= 0 and tgt_fire_t > src_fire_t:
                     gap = tgt_fire_t - src_fire_t
-                    if gap <= conn.delay + 2:
+                    if gap <= conn.step + 2:
                         # STDP LTP:源先激活,目标在窗口内跟随
                         conn.weight = min(
                             self.max_weight,
@@ -512,7 +512,7 @@ class SNN:
                     strengthened += 1
                 elif auto_create:
                     # 突触发生:创建新的直接连接
-                    self.connect(n.id, target_id, weight=auto_create_weight, delay=1)
+                    self.connect(n.id, target_id, weight=auto_create_weight, step=1)
                     strengthened += 1
 
                 # LTD 实验结论:竞争性 LTD 在当前架构下反效果。
@@ -896,7 +896,7 @@ class SNN:
             for tgt, conn in self.out_edges[src].items():
                 edges.append({
                     "source": src, "target": tgt,
-                    "weight": conn.weight, "delay": conn.delay,
+                    "weight": conn.weight, "step": conn.step,
                 })
         return {
             "topology_version": self.TOPOLOGY_VERSION,
@@ -946,8 +946,10 @@ class SNN:
                 net.neurons.append(n)
 
         for ed in data.get("edges", []):
+            # 向后兼容：旧文件用 delay 键，新文件用 step 键
+            _step = ed.get("step", ed.get("delay", 1))
             net.connect(ed["source"], ed["target"],
-                       weight=ed["weight"], delay=ed["delay"])
+                       weight=ed["weight"], step=_step)
         # 恢复 EWC 重要性（此前未持久化，重启/恢复即清零）
         if "ewc_importance" in data:
             net.load_ewc_importance(data.get("ewc_importance", {}))
@@ -1080,31 +1082,31 @@ class SNN:
         ]
         for hid_id, inputs, outputs, w in structured:
             for inp_id in inputs:
-                net.connect(inp_id, hid_id, weight=0.9, delay=1)
+                net.connect(inp_id, hid_id, weight=0.9, step=1)
             for out_id in outputs:
-                net.connect(hid_id, out_id, weight=w, delay=1)
+                net.connect(hid_id, out_id, weight=w, step=1)
 
         # ── 补充缺失输入神经元出边 ────────────────────────────
         # 高紧急度(11)放大 escalate 路径(与信号类型 AND 组合,阈值仍保持选择性)
         _escalate_hidden = {17, 18, 20, 21, 26}
         for inp_id in (4, 5, 11):
             for hid_id in sorted(_escalate_hidden):
-                net.connect(inp_id, hid_id, weight=0.9, delay=1)
+                net.connect(inp_id, hid_id, weight=0.9, step=1)
 
         # ── v3 消歧标记路由 ───────────────────────────────────
         # 38 (ap_low_marker): ap+低紧急度 → auto_approve,抑制 flag 误触
-        net.connect(38, 32, weight=1.5, delay=1)
-        net.connect(38, 19, weight=-0.6, delay=1)
+        net.connect(38, 32, weight=1.5, step=1)
+        net.connect(38, 19, weight=-0.6, step=1)
         # 39 (user_action_marker): user_request 带动作关键词 → escalate
-        net.connect(39, 17, weight=0.9, delay=1)
-        net.connect(3, 17, weight=0.9, delay=1)
+        net.connect(39, 17, weight=0.9, step=1)
+        net.connect(3, 17, weight=0.9, step=1)
         # H19 阈值提升到 1.8(需 1+12 双输入 1.8 才 flag,38 抑制时 1.8-0.6=1.2 不触发)
         net.neurons[19].threshold = 1.8
         # ap 低紧急度直连 auto_approve 辅助路径
-        net.connect(1, 32, weight=0.6, delay=1)
-        net.connect(12, 32, weight=0.6, delay=1)
+        net.connect(1, 32, weight=0.6, step=1)
+        net.connect(12, 32, weight=0.6, step=1)
         # threshold_breach + 低紧急度 → auto_approve
-        net.connect(2, 32, weight=1.5, delay=1)
+        net.connect(2, 32, weight=1.5, step=1)
 
         # 无随机补充连接--避免非选择性激活
 
@@ -1112,7 +1114,7 @@ class SNN:
         for inh_id in range(28, 32):
             for out_id in range(32, 38):
                 if random.random() < 0.3:
-                    net.connect(inh_id, out_id, weight=-0.3, delay=1)
+                    net.connect(inh_id, out_id, weight=-0.3, step=1)
 
         return net
 
@@ -1134,7 +1136,7 @@ class SNN:
         for src in sorted(self.out_edges.keys()):
             for tgt in sorted(self.out_edges[src].keys()):
                 c = self.out_edges[src][tgt]
-                print(f"  {src} -> {tgt}  w={c.weight:.3f}  delay={c.delay}")
+                print(f"  {src} -> {tgt}  w={c.weight:.3f}  step={c.step}")
 
     def stats(self) -> dict:
         """统计信息"""

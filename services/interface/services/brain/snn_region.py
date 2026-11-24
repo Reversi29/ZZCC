@@ -447,7 +447,7 @@ class SNNRegion:
                 # 中继 → 既有隐藏层(弱调制,不触发 AND 门)
                 for hid in _RELAY_HIDDEN_TARGETS:
                     if hid < self.snn.num_neurons:
-                        self.snn.connect(rid, hid, weight=_RELAY_OUT_WEIGHT, delay=1)
+                        self.snn.connect(rid, hid, weight=_RELAY_OUT_WEIGHT, step=1)
                         # 不连输出层:避免 _decode_output 把中继分数计入所有输出
                 # 破坏竞争比较(12 场景硬约束)。中继只调制隐藏层膜电位。
                 # 设定中继阈值
@@ -466,7 +466,7 @@ class SNNRegion:
             if len(self.snn.out_edges.get(nid, ())) == 0:
                 targets = [self.snn.neurons[rid].id for rid in relay_ids]
                 for rid in targets:
-                    self.snn.connect(nid, rid, weight=_RELAY_IN_WEIGHT, delay=1)
+                    self.snn.connect(nid, rid, weight=_RELAY_IN_WEIGHT, step=1)
                 logger.info(
                     f"snn_region: continuous channel {nid} → relay {targets} "
                     f"(w={_RELAY_IN_WEIGHT}, sub-threshold modulation)"
@@ -496,10 +496,10 @@ class SNNRegion:
             if len(self.snn.out_edges.get(rid, ())) == 0:
                 for out_nid in _SENTIENCE_RELAY_OUT_TARGETS:
                     if out_nid < self.snn.num_neurons:
-                        self.snn.connect(rid, out_nid, weight=_SENTIENCE_RELAY_OUT_WEIGHT, delay=1)
+                        self.snn.connect(rid, out_nid, weight=_SENTIENCE_RELAY_OUT_WEIGHT, step=1)
                 self.snn.neurons[rid].threshold = _SENTIENCE_RELAY_THRESHOLD
             if len(self.snn.out_edges.get(nid, ())) == 0:
-                self.snn.connect(nid, rid, weight=_SENTIENCE_RELAY_IN_WEIGHT, delay=1)
+                self.snn.connect(nid, rid, weight=_SENTIENCE_RELAY_IN_WEIGHT, step=1)
         self._auto_save()
 
     def _continuous_weights(self, signal: NeuralSignal) -> Dict[int, float]:
@@ -628,7 +628,7 @@ class SNNRegion:
         if not hidden_pool:
             return
         for hid in hidden_pool:
-            self.snn.connect(input_nid, hid, weight=0.90, delay=1)
+            self.snn.connect(input_nid, hid, weight=0.90, step=1)
         logger.info(f"snn_region: dynamic input {input_nid} exploration → {hidden_pool} (w=0.90)")
 
     # ── 输出侧动态动作(四肢百骸:改变世界的新动作)──────────
@@ -706,12 +706,12 @@ class SNNRegion:
             self.snn.neurons[relay_nid].threshold = _CONCEPT_RELAY_THRESHOLD
             # 概念 → 中继
             if len(self.snn.out_edges.get(nid, ())) == 0:
-                self.snn.connect(nid, relay_nid, weight=_CONCEPT_RELAY_IN_WEIGHT, delay=1)
+                self.snn.connect(nid, relay_nid, weight=_CONCEPT_RELAY_IN_WEIGHT, step=1)
             # 中继 → 既有隐藏层（亚阈值调制，不触发 AND 门）
             if len(self.snn.out_edges.get(relay_nid, ())) == 0:
                 for hid in _RELAY_HIDDEN_TARGETS:
                     if hid < self.snn.num_neurons:
-                        self.snn.connect(relay_nid, hid, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
+                        self.snn.connect(relay_nid, hid, weight=_CONCEPT_RELAY_OUT_WEIGHT, step=1)
             # P3 概念预训练种子：新概念首次出现即预置目标输出连接，
             # 让概念第一次就能引导正确决策方向（而非依赖反馈积累）。
             self._apply_pretrain_seed(concept, relay_nid)
@@ -794,7 +794,7 @@ class SNNRegion:
                     existing.weight = _CONCEPT_PRETRAIN_CONN_WEIGHT
                 else:
                     self.snn.connect(relay_nid, target_output,
-                                     weight=_CONCEPT_PRETRAIN_CONN_WEIGHT, delay=1)
+                                     weight=_CONCEPT_PRETRAIN_CONN_WEIGHT, step=1)
                 # 同时预置 concept_decision_weights（供 _decode_output 融合参考）
                 cdw = self._stats.setdefault("concept_decision_weights", {})
                 entry = cdw.setdefault(c, {})
@@ -1572,7 +1572,7 @@ class SNNRegion:
                 conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
                 if conn is None:
                     # 突触发生：建立中继→输出连接（初始与隐藏层同权重）
-                    self.snn.connect(relay_nid, target_output, weight=_CONCEPT_RELAY_OUT_WEIGHT, delay=1)
+                    self.snn.connect(relay_nid, target_output, weight=_CONCEPT_RELAY_OUT_WEIGHT, step=1)
                     conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
                 if conn is not None and conn.weight < self.snn.max_weight:
                     conn.weight = min(self.snn.max_weight, conn.weight + _CONCEPT_LEARN_ETA * act)
@@ -1606,7 +1606,7 @@ class SNNRegion:
                 conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
                 if conn is None:
                     # 突触发生：建立感受中继→输出连接
-                    self.snn.connect(relay_nid, target_output, weight=_SENTIENCE_RELAY_OUT_WEIGHT, delay=1)
+                    self.snn.connect(relay_nid, target_output, weight=_SENTIENCE_RELAY_OUT_WEIGHT, step=1)
                     conn = self.snn.out_edges.get(relay_nid, {}).get(target_output)
                 if conn is not None and conn.weight < self.snn.max_weight:
                     conn.weight = min(self.snn.max_weight, conn.weight + _CONCEPT_LEARN_ETA * float(act))
@@ -1707,7 +1707,8 @@ class SNNRegion:
                     "source": src,
                     "target": tgt,
                     "weight": round(conn.weight, 4),
-                    "delay": conn.delay,
+                    "step": conn.step,
+                    "delay": conn.step,  # 兼容旧前端字段
                 })
         return {
             "nodes": nodes,
@@ -1809,7 +1810,7 @@ class ShadowSNNRegion(SNNRegion):
                 # 跳过已存在的边
                 if tgt in self.snn.out_edges.get(src, {}):
                     continue
-                self.snn.connect(src, tgt, weight=w, delay=1)
+                self.snn.connect(src, tgt, weight=w, step=1)
                 added += 1
 
             logger.info(

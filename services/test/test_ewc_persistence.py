@@ -17,8 +17,8 @@ def _net():
     n.add_neuron(0, NeuronType.INPUT)
     n.add_neuron(1, NeuronType.EXCITATORY)
     n.add_neuron(2, NeuronType.OUTPUT, threshold=0.5)
-    n.connect(0, 1, weight=1.0, delay=1)
-    n.connect(1, 2, weight=1.0, delay=1)
+    n.connect(0, 1, weight=1.0, step=1)
+    n.connect(1, 2, weight=1.0, step=1)
     return n
 
 

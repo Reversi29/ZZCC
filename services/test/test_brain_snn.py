@@ -37,10 +37,10 @@ def small_net():
     net.add_neuron(2, NeuronType.EXCITATORY, threshold=1.0)
     net.add_neuron(3, NeuronType.EXCITATORY, threshold=1.0)
     net.add_neuron(4, NeuronType.OUTPUT, threshold=1.5)
-    net.connect(0, 2, weight=0.8, delay=1)
-    net.connect(1, 3, weight=0.8, delay=1)
-    net.connect(2, 4, weight=0.8, delay=1)
-    net.connect(3, 4, weight=0.8, delay=2)
+    net.connect(0, 2, weight=0.8, step=1)
+    net.connect(1, 3, weight=0.8, step=1)
+    net.connect(2, 4, weight=0.8, step=1)
+    net.connect(3, 4, weight=0.8, step=2)
     return net
 
 
@@ -70,10 +70,10 @@ class TestStructure:
 
     def test_connect(self):
         net = SNN(num_neurons=3)
-        assert net.connect(0, 1, weight=0.5, delay=2)
+        assert net.connect(0, 1, weight=0.5, step=2)
         conn = net.out_edges[0][1]
         assert conn.weight == 0.5
-        assert conn.delay == 2
+        assert conn.step == 2
         # 反向也能查到
         assert net.in_edges[1][0] is conn
 
@@ -107,17 +107,17 @@ class TestStructure:
         net.set_weight(0, 1, 999)
         assert net.out_edges[0][1].weight == 5.0
 
-    def test_set_delay(self):
+    def test_set_step(self):
         net = SNN(num_neurons=3)
-        net.connect(0, 1, delay=1)
-        net.set_delay(0, 1, 5)
-        assert net.out_edges[0][1].delay == 5
+        net.connect(0, 1, step=1)
+        net.set_step(0, 1, 5)
+        assert net.out_edges[0][1].step == 5
 
-    def test_set_delay_minimum(self):
+    def test_set_step_minimum(self):
         net = SNN(num_neurons=3)
-        net.connect(0, 1, delay=1)
-        net.set_delay(0, 1, 0)
-        assert net.out_edges[0][1].delay == 1
+        net.connect(0, 1, step=1)
+        net.set_step(0, 1, 0)
+        assert net.out_edges[0][1].step == 1
 
     def test_remove_neuron(self):
         net = SNN(num_neurons=3)
@@ -190,10 +190,10 @@ class TestSTDP:
         # 先让 input 0 激活一次
         small_net.inject_input(0, 2.0)
         small_net.step()  # t=1: input 0 fires
-        # 等很多步让 gap 超过 delay+2
+        # 等很多步让 gap 超过 step+2
         for _ in range(20):
             small_net.step()  # 时间推进，0 不再注入
-        # 现在给 exc 2 直接注入让它激活（此时 gap 远超 delay+2=3）
+        # 现在给 exc 2 直接注入让它激活（此时 gap 远超 step+2=3）
         small_net.inject_input(2, 3.0)
         small_net.step()
         w = small_net.out_edges[0][2].weight
@@ -205,8 +205,8 @@ class TestSTDP:
         net.add_neuron(0, NeuronType.INPUT, threshold=0.3)
         net.add_neuron(1, NeuronType.EXCITATORY, threshold=0.3)
         net.add_neuron(2, NeuronType.OUTPUT, threshold=0.3)
-        net.connect(0, 1, weight=1.9, delay=1)
-        net.connect(1, 2, weight=1.9, delay=1)
+        net.connect(0, 1, weight=1.9, step=1)
+        net.connect(1, 2, weight=1.9, step=1)
         for _ in range(20):
             net.inject_input(0, 2.0)
             net.step()
@@ -222,8 +222,8 @@ class TestSTDP:
         net.add_neuron(0, NeuronType.INPUT, threshold=0.5)
         net.add_neuron(1, NeuronType.EXCITATORY, threshold=1.0)
         net.add_neuron(2, NeuronType.OUTPUT, threshold=1.5)
-        net.connect(0, 1, weight=2.0, delay=1)
-        net.connect(1, 2, weight=2.0, delay=1)
+        net.connect(0, 1, weight=2.0, step=1)
+        net.connect(1, 2, weight=2.0, step=1)
 
         # 禁用 Hebbian（推理模式）
         net.enable_hebbian = False
@@ -252,8 +252,8 @@ class TestRewardModulation:
         net.add_neuron(1, NeuronType.EXCITATORY, threshold=1.0)
         net.add_neuron(2, NeuronType.EXCITATORY, threshold=1.0)
         net.add_neuron(3, NeuronType.OUTPUT, threshold=1.5)
-        net.connect(0, 1, weight=0.8, delay=1)
-        net.connect(1, 2, weight=0.5, delay=1)
+        net.connect(0, 1, weight=0.8, step=1)
+        net.connect(1, 2, weight=0.5, step=1)
         # 不连接 2→3，训练后应自举创建
 
         net.train_by_association([0], output_neuron=3, steps=30)
@@ -302,7 +302,7 @@ class TestPersistence:
         orig_conn = small_net.out_edges[0][2]
         loaded_conn = loaded.out_edges[0][2]
         assert loaded_conn.weight == pytest.approx(orig_conn.weight)
-        assert loaded_conn.delay == orig_conn.delay
+        assert loaded_conn.step == orig_conn.step
 
     def test_load_nonexistent(self):
         loaded = SNN.load("/nonexistent/path/snn.json")
@@ -441,8 +441,8 @@ class TestRunInterface:
         net.add_neuron(0, NeuronType.INPUT, threshold=0.3)
         net.add_neuron(1, NeuronType.EXCITATORY, threshold=0.3)
         net.add_neuron(2, NeuronType.OUTPUT, threshold=0.3)
-        net.connect(0, 1, weight=0.5, delay=1)
-        net.connect(1, 2, weight=0.5, delay=1)
+        net.connect(0, 1, weight=0.5, step=1)
+        net.connect(1, 2, weight=0.5, step=1)
         w_before = net.out_edges[0][1].weight
         net.train_hebbian([0], steps=30, strength=2.0)
         w_after = net.out_edges[0][1].weight

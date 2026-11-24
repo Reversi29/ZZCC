@@ -283,7 +283,7 @@ class NeuroRegistry:
         if not hidden_pool:
             return
         for hid in hidden_pool:
-            self.snn.connect(input_nid, hid, weight=0.90, delay=1)
+            self.snn.connect(input_nid, hid, weight=0.90, step=1)
         logger.info(f"neuro_registry: input {input_nid} exploration "
                     f"→ {hidden_pool} (w=0.90)")
 
@@ -294,7 +294,7 @@ class NeuroRegistry:
         if not hidden_pool:
             return
         for hid in hidden_pool:
-            self.snn.connect(hid, output_nid, weight=0.90, delay=1)
+            self.snn.connect(hid, output_nid, weight=0.90, step=1)
         logger.info(f"neuro_registry: output {output_nid} exploration "
                     f"← {hidden_pool} (w=0.90)")
 

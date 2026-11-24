@@ -76,9 +76,9 @@ def test_gain_modulates_downstream():
         snn.add_neuron(0, NeuronType.INPUT, threshold=0.5)
         # 阈值 9.9：下游永不放电，膜电位可累计（否则放电即重置）
         snn.add_neuron(1, NeuronType.INPUT, threshold=9.9)
-        snn.connect(0, 1, weight=0.4, delay=1)
+        snn.connect(0, 1, weight=0.4, step=1)
         snn.inject_weighted({0: strength})
-        # delay=1：事件在 t+1 到达，需两步 step（t=1 放电并排队，t=2 事件到达）
+        # step=1：事件在 t+1 到达，需两步 step（t=1 放电并排队，t=2 事件到达）
         snn.step()
         snn.step()
         return snn.neurons[1].membrane

@@ -143,37 +143,37 @@ class SentienceNet:
         # structure: 24=sentences, 25=avg_len, 26=has_question, 27=has_exclaim
 
         # 威胁感 (44,45)：负面情感 + 紧急标记为主，高金额为弱增益
-        net.connect(9, 44, weight=3.0, delay=1)    # neg → threat_intensity
-        net.connect(16, 44, weight=3.0, delay=1)   # urgency_markers → threat
-        net.connect(19, 44, weight=0.5, delay=1)   # magnitude → 弱增益
-        net.connect(9, 45, weight=2.0, delay=1)
-        net.connect(19, 45, weight=1.5, delay=1)   # magnitude → threat_direction
+        net.connect(9, 44, weight=3.0, step=1)    # neg → threat_intensity
+        net.connect(16, 44, weight=3.0, step=1)   # urgency_markers → threat
+        net.connect(19, 44, weight=0.5, step=1)   # magnitude → 弱增益
+        net.connect(9, 45, weight=2.0, step=1)
+        net.connect(19, 45, weight=1.5, step=1)   # magnitude → threat_direction
 
         # 安全感 (46,47)：正面情感 + 熟悉结构
-        net.connect(8, 46, weight=2.0, delay=1)    # pos → safety
-        net.connect(11, 46, weight=1.5, delay=1)   # dominance → safety
-        net.connect(17, 47, weight=-1.5, delay=1)  # imperative → safety_low
-        net.connect(9, 47, weight=-1.5, delay=1)   # neg → safety_low
+        net.connect(8, 46, weight=2.0, step=1)    # pos → safety
+        net.connect(11, 46, weight=1.5, step=1)   # dominance → safety
+        net.connect(17, 47, weight=-1.5, step=1)  # imperative → safety_low
+        net.connect(9, 47, weight=-1.5, step=1)   # neg → safety_low
 
         # 兴趣感 (48,49)：结构复杂度 + 数值
-        net.connect(24, 48, weight=1.5, delay=1)   # sentences → interest
-        net.connect(18, 48, weight=1.5, delay=1)   # has_number → interest
-        net.connect(25, 49, weight=1.0, delay=1)   # avg_len → interest_depth
+        net.connect(24, 48, weight=1.5, step=1)   # sentences → interest
+        net.connect(18, 48, weight=1.5, step=1)   # has_number → interest
+        net.connect(25, 49, weight=1.0, step=1)   # avg_len → interest_depth
 
         # 困惑感 (50,51)：不确定性 + 疑问结构
-        net.connect(12, 50, weight=2.0, delay=1)   # uncertainty → confusion
-        net.connect(26, 50, weight=1.5, delay=1)   # has_question → confusion
-        net.connect(10, 51, weight=1.0, delay=1)   # arousal → confusion_depth
+        net.connect(12, 50, weight=2.0, step=1)   # uncertainty → confusion
+        net.connect(26, 50, weight=1.5, step=1)   # has_question → confusion
+        net.connect(10, 51, weight=1.0, step=1)   # arousal → confusion_depth
 
         # 紧迫感 (52,53)：紧急标记 + 命令式
-        net.connect(16, 52, weight=2.5, delay=1)   # urgency_markers → urgency
-        net.connect(17, 52, weight=1.5, delay=1)   # imperative → urgency
-        net.connect(19, 53, weight=1.0, delay=1)   # magnitude → urgency_depth
+        net.connect(16, 52, weight=2.5, step=1)   # urgency_markers → urgency
+        net.connect(17, 52, weight=1.5, step=1)   # imperative → urgency
+        net.connect(19, 53, weight=1.0, step=1)   # magnitude → urgency_depth
 
         # 熟悉感 (54,55)：词汇稳定性 + 结构
-        net.connect(0, 54, weight=1.5, delay=1)    # lexical → familiarity
-        net.connect(5, 54, weight=1.0, delay=1)    # unique_ratio → familiarity
-        net.connect(9, 55, weight=-1.5, delay=1)   # neg → familiarity_low
+        net.connect(0, 54, weight=1.5, step=1)    # lexical → familiarity
+        net.connect(5, 54, weight=1.0, step=1)    # unique_ratio → familiarity
+        net.connect(9, 55, weight=-1.5, step=1)   # neg → familiarity_low
 
         # ── 隐藏组合层：每个感受维度 2 个组合检测神经元 ──
         # 隐藏神经元检测"特征组合"（多输入 AND），驱动对应感受输出
@@ -195,10 +195,10 @@ class SentienceNet:
                 hid = base + k
                 # 隐藏→感受输出（初始权重 1.0，学习可调）
                 out = SENTIENCE_DIMS[dim]["neurons"][0]
-                net.connect(hid, out, weight=1.0, delay=1)
+                net.connect(hid, out, weight=1.0, step=1)
                 # 特征→隐藏（组合检测：2 个特征即可触发，阈值 1.5）
                 for feat in features:
-                    net.connect(feat, hid, weight=0.9, delay=1)
+                    net.connect(feat, hid, weight=0.9, step=1)
 
         return net
 
@@ -408,7 +408,7 @@ class SentienceNet:
                     conn.weight = min(self.snn.max_weight, conn.weight + eta)
                     strengthened += 1
                 elif feat not in self.snn.in_edges.get(target, {}):
-                    self.snn.connect(feat, target, weight=eta * 2, delay=1)
+                    self.snn.connect(feat, target, weight=eta * 2, step=1)
                     strengthened += 1
 
         return strengthened

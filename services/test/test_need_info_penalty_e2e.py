@@ -29,11 +29,11 @@ def _pollute_need_info(region):
     nid = region.concept_registry.get("rejection")
     relay = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
     if ni not in region.snn.out_edges.get(relay, {}):
-        region.snn.connect(relay, ni, weight=1.5, delay=1)
+        region.snn.connect(relay, ni, weight=1.5, step=1)
     # 连续中继也污染 need_info
     for src in (218, 221):
         if src < region.snn.num_neurons:
-            region.snn.connect(src, ni, weight=1.8, delay=1)
+            region.snn.connect(src, ni, weight=1.8, step=1)
     return ni
 
 

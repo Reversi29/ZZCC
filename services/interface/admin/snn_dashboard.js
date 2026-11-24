@@ -121,7 +121,7 @@ function drawSnn(container, status, graph, decisions) {
         <summary>路径明细（${graph.edges.length}）</summary>
         <div class="topo-table-wrap">
           <table>
-            <thead><tr><th>源</th><th>目标</th><th>权重</th><th>延迟</th></tr></thead>
+            <thead><tr><th>源</th><th>目标</th><th>权重</th><th>步长</th></tr></thead>
             <tbody id="topo-edges-body"></tbody>
           </table>
         </div>
@@ -296,7 +296,7 @@ function toggleTopoTable(kind) {
             <td>${e.source}</td>
             <td>${e.target}</td>
             <td>${e.weight}</td>
-            <td>${e.delay ?? '-'}</td>
+            <td>${e.step ?? e.delay ?? '-'}</td>
           </tr>`).join('') || '<tr><td colspan="4">无数据</td></tr>';
       }
     }

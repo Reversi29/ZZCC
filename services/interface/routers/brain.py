@@ -1205,7 +1205,7 @@ async def snn_train(request: dict):
 
 @router.get("/snn/connections")
 async def snn_connections():
-    """列出所有连接（含权重和延迟）。"""
+    """列出所有连接（含权重和步长）。"""
     net = snn_mod.snn_region.snn
     connections = []
     for src in net.out_edges:
@@ -1213,7 +1213,8 @@ async def snn_connections():
             connections.append({
                 "source": src, "target": tgt,
                 "weight": round(conn.weight, 4),
-                "delay": conn.delay,
+                "step": conn.step,
+                "delay": conn.step,  # 兼容旧前端字段
             })
     connections.sort(key=lambda e: (-e["weight"], e["source"], e["target"]))
     return {"ok": True, "count": len(connections), "connections": connections}

@@ -306,7 +306,7 @@ class ModalSNNEncoder:
                 self.snn.set_weight(src, tgt, w)
             else:
                 # 新连接：connect 建连接（延迟 1，默认阈值传播）
-                self.snn.connect(src, tgt, weight=max(0, min(3.0, w)), delay=1)
+                self.snn.connect(src, tgt, weight=max(0, min(3.0, w)), step=1)
         else:
             self.weights.setdefault(src, {})[tgt] = w
 
@@ -363,7 +363,7 @@ class ModalSNNEncoder:
             eta: 学习率
         """
         # ── 脉冲前向 + STDP（方向2：真正的脉冲学习） ──
-        # 训练时启用 Hebbian：特征放电→概念检测跟随（delay+2 窗口）→LTP
+        # 训练时启用 Hebbian：特征放电→概念检测跟随（step+2 窗口）→LTP
         # 时序因果强化教师概念的路径；delta 规则下方补突触发生（新连接）
         self.snn.enable_hebbian = True
         self.snn.reset()

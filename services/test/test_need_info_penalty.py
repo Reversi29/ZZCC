@@ -39,7 +39,7 @@ def test_need_info_penalized_in_competition(region):
     nid = region.concept_registry.get("rejection")
     relay = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
     # need_info 输出入边
-    region.snn.connect(relay, ni, weight=1.5, delay=1)
+    region.snn.connect(relay, ni, weight=1.5, step=1)
     # 模拟放电
     region.snn.neurons[relay].last_fire_time = region.snn.time
     region.snn.neurons[relay].membrane = 1.0
@@ -62,8 +62,8 @@ def test_need_info_not_default_winner(region):
     relay = _CONCEPT_RELAY_BASE + (nid - _CONCEPT_NEURON_BASE)
     ni = region.output_registry.register("need_info")
     # rejection 中继 → reject(33) 预训练 0.7，→ need_info 强入边 1.5
-    region.snn.connect(relay, 33, weight=0.7, delay=1)
-    region.snn.connect(relay, ni, weight=1.5, delay=1)
+    region.snn.connect(relay, 33, weight=0.7, step=1)
+    region.snn.connect(relay, ni, weight=1.5, step=1)
     # 放电
     region.snn.neurons[relay].last_fire_time = region.snn.time
     region.snn.neurons[relay].membrane = 1.0
