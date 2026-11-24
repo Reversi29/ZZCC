@@ -511,6 +511,159 @@ class SNN:
                     # 协同放电 → 突触发生(兴奋性,初始低权重)
                     self.connect(src, tgt, weight=0.1, step=self.step_min)
 
+        # ── 丰度调控(homeostatic ratio)──
+        # 神经元总数与神经元:突触比例之间存在关系(类似生态丰度)。
+        # 按区域(动态输入/输出区)检测突触密度,偏离目标比例时
+        # 触发生长(突触稀疏)或修剪(突触过密),向目标比例收敛。
+        # 这是需求导向的:不同区域(图像/文字/音频)各自独立调控,
+        # 识别复杂度高的区域允许更高突触密度。
+        self._homeostatic_ratio_control(t)
+
+
+    def _homeostatic_ratio_control(self, t: int):
+        """丰度调控:按区域维持目标突触:神经元比例(homeostatic plasticity)。
+
+        核心思想(用户 2026-11-24 提出):
+        神经元总数与神经元:突触比例之间存在关系,类似生态学丰度。
+        这应该是需求导向的——识别图像 vs 识别文字的神经元数应有差异。
+
+        机制:
+        - 每个区域(动态输入 40-135 / 动态输出 100-195)有独立目标比例
+        - 定期检测实际 突触:神经元 比例
+        - 偏离目标 → 触发生长(比例过低,突触稀疏)或修剪(比例过高,突触过密)
+        - 只作用于探索区,核心区(0-39)与概念区(220+)冻结保护
+
+        与 _structural_plasticity_update 的区别:
+        - 那是事件驱动(放电相关性),这是稳态驱动(密度目标)
+        - 这是慢调节:每 homeostatic_check_interval 步才检测一次
+
+        Args:
+            t: 当前时间步
+        """
+        # 未启用或非检测周期 → 跳过
+        if not self.enable_homeostatic_ratio:
+            return
+        if t - self._last_homeostatic_check < self.homeostatic_check_interval:
+            return
+        self._last_homeostatic_check = t
+
+        # 区域定义:[(start, end, target_ratio)]
+        # 目标比例 = 每神经元期望拥有的突触边数
+        regions = self._get_homeostatic_regions()
+        if not regions:
+            return
+
+        for start, end, target_ratio in regions:
+            # 统计该区域内神经元与突触
+            region_neurons = [nid for nid in range(start, end)
+                              if nid < self.num_neurons]
+            if not region_neurons:
+                continue
+            n_count = len(region_neurons)
+            # 统计区域内边数：区域内神经元的出边（扇出密度）
+            # 用区域内神经元作为源,统计出边——这衡量该区域的"突触负载"
+            e_count = 0
+            for src in region_neurons:
+                e_count += len(self.out_edges.get(src, {}))
+            # 区域平均扇出 = 边/神经元
+            if n_count == 0:
+                continue
+            actual_ratio = e_count / n_count
+
+            # 偏离检测
+            if actual_ratio < target_ratio * self.homeostatic_tolerance:
+                # 突触过稀 → 生长
+                self._homeostatic_grow(region_neurons, start, end, target_ratio)
+            elif actual_ratio > target_ratio / self.homeostatic_tolerance:
+                # 突触过密 → 修剪(只剪低权重边,保护重要连接)
+                self._homeostatic_prune(region_neurons, start, end, target_ratio)
+
+    def _get_homeostatic_regions(self) -> list:
+        """返回丰度调控区域列表 [(start, end, target_ratio)]。
+
+        默认:动态输入区(40-135)与动态输出区(100-195)。
+        目标比例可独立配置,体现需求导向(不同模态不同密度)。
+        """
+        regions = []
+        if hasattr(self, 'homeostatic_regions') and self.homeostatic_regions:
+            regions = self.homeostatic_regions
+        else:
+            # 默认区域:动态输入区(40-99) + 动态输出区(100-195),互不重叠
+            regions = [
+                (40, 100, self.homeostatic_target_ratio),
+                (100, 196, self.homeostatic_target_ratio),
+            ]
+        return regions
+
+    def _homeostatic_grow(self, region_neurons: list, start: int, end: int,
+                          target_ratio: float):
+        """突触稀疏 → 生长:为区域内活跃神经元建立新连接。
+
+        只连接到区域内目标神经元,初始权重低(可被学习加强)。
+        每次生长限制数量,防止一次性爆炸。
+        """
+        if not region_neurons:
+            return
+        # 从区域内随机挑选源,建立到区域目标的新连接
+        grown = 0
+        max_grow = self.homeostatic_grow_batch
+        for src in region_neurons:
+            if grown >= max_grow:
+                break
+            # 核心区冻结保护(动态区本身不触及 0-39)
+            if self.plasticity_core_freeze and src < 40:
+                continue
+            # 找区域内可连接的目标(未连接且非自身)
+            existing = self.out_edges.get(src, {})
+            candidates = [t for t in region_neurons
+                          if t != src and t not in existing]
+            if not candidates:
+                continue
+            # 随机选目标
+            tgt = random.choice(candidates)
+            # 目标应在同一语义区域(不跨到冻结区)
+            if self.plasticity_core_freeze and (
+                (tgt < 40 or tgt >= self.concept_freeze_start)
+            ):
+                continue
+            self.connect(src, tgt, weight=self.homeostatic_new_weight,
+                         step=self.step_min)
+            grown += 1
+
+    def _homeostatic_prune(self, region_neurons: list, start: int, end: int,
+                           target_ratio: float):
+        """突触过密 → 修剪:断开区域内低权重边。
+
+        保护重要连接(EWC 重要性高或权重高的边不剪)。
+        每次修剪限制数量,防止一次性破坏。
+        """
+        if not region_neurons:
+            return
+        pruned = 0
+        max_prune = self.homeostatic_prune_batch
+        # 收集区域内低权重边
+        candidates = []
+        for src in region_neurons:
+            for tgt, conn in list(self.out_edges.get(src, {}).items()):
+                # 目标应在探索区(40-219),不剪到核心区/概念区
+                if self.plasticity_core_freeze and (
+                    (tgt < 40 or tgt >= self.concept_freeze_start)
+                ):
+                    continue
+                # 保护重要连接:权重高或 EWC 重要性高
+                ewc = self._ewc_importance.get((src, tgt), 0.0)
+                if conn.weight < self.homeostatic_prune_threshold and ewc < 1.0:
+                    candidates.append((src, tgt))
+        # 按权重升序剪(最弱的先剪)
+        candidates.sort(key=lambda x: self.out_edges[x[0]][x[1]].weight)
+        for src, tgt in candidates:
+            if pruned >= max_prune:
+                break
+            # 再检查一次权重保护
+            conn = self.out_edges.get(src, {}).get(tgt)
+            if conn and conn.weight < self.homeostatic_prune_threshold:
+                self.disconnect(src, tgt)
+                pruned += 1
 
     # ── 高级接口 ─────────────────────────────────────────────
 
@@ -663,6 +816,23 @@ class SNN:
         self.plasticity_core_freeze: bool = True  # 冻结核心区(0-39)防扰动 12/12
         self.concept_freeze_start: int = 220  # 概念区冻结起点(220+ 概念预训练种子)
         self._recent_fire: dict[int, list[int]] = defaultdict(list)  # 最近放电历史(结构可塑性用)
+
+        # ── 丰度调控(homeostatic ratio)──
+        # 神经元总数与神经元:突触比例存在关系(类似生态丰度)。
+        # 按区域维持目标突触:神经元比例,需求导向(图像/文字/音频各自独立)。
+        # 默认关闭:不改变现有行为,需显式启用。
+        self.enable_homeostatic_ratio: bool = (
+            _os.environ.get("BRAIN_HOMEOSTATIC_RATIO", "0") == "1"
+        )
+        self.homeostatic_target_ratio: float = 2.0  # 目标突触:神经元比例(每神经元平均扇出)
+        self.homeostatic_tolerance: float = 0.8    # 容忍窗口(低于 0.8×目标→生长,高于 1.25×→修剪)
+        self.homeostatic_check_interval: int = 50  # 每多少步检测一次
+        self.homeostatic_grow_batch: int = 3       # 每次生长最多建连数
+        self.homeostatic_prune_batch: int = 3      # 每次修剪最多断开数
+        self.homeostatic_new_weight: float = 0.1   # 新生长连接初始权重
+        self.homeostatic_prune_threshold: float = 0.3  # 低于此权重才可修剪(保护中等以上连接)
+        self.homeostatic_regions: list = []        # 自定义区域 [(start,end,target)],空用默认
+        self._last_homeostatic_check: int = 0      # 上次检测时间
 
         # 输出历史(用于 Hebbian 回溯)
         self._fire_history: dict[int, list[int]] = defaultdict(list)
@@ -1025,6 +1195,15 @@ class SNN:
             "allow_synaptogenesis": self.allow_synaptogenesis,
             "plasticity_core_freeze": self.plasticity_core_freeze,
             "concept_freeze_start": self.concept_freeze_start,
+            # 丰度调控配置(持久化)
+            "enable_homeostatic_ratio": self.enable_homeostatic_ratio,
+            "homeostatic_target_ratio": self.homeostatic_target_ratio,
+            "homeostatic_tolerance": self.homeostatic_tolerance,
+            "homeostatic_check_interval": self.homeostatic_check_interval,
+            "homeostatic_grow_batch": self.homeostatic_grow_batch,
+            "homeostatic_prune_batch": self.homeostatic_prune_batch,
+            "homeostatic_new_weight": self.homeostatic_new_weight,
+            "homeostatic_regions": self.homeostatic_regions,
             "neurons": neurons,
             "edges": edges,
             "ewc_importance": self.get_ewc_importance(),
@@ -1052,6 +1231,23 @@ class SNN:
         net.allow_synaptogenesis = data.get("allow_synaptogenesis", net.allow_synaptogenesis)
         net.plasticity_core_freeze = data.get("plasticity_core_freeze", net.plasticity_core_freeze)
         net.concept_freeze_start = data.get("concept_freeze_start", net.concept_freeze_start)
+        # 丰度调控配置(向后兼容:旧文件无这些键用默认)
+        net.enable_homeostatic_ratio = data.get(
+            "enable_homeostatic_ratio", net.enable_homeostatic_ratio)
+        net.homeostatic_target_ratio = data.get(
+            "homeostatic_target_ratio", net.homeostatic_target_ratio)
+        net.homeostatic_tolerance = data.get(
+            "homeostatic_tolerance", net.homeostatic_tolerance)
+        net.homeostatic_check_interval = data.get(
+            "homeostatic_check_interval", net.homeostatic_check_interval)
+        net.homeostatic_grow_batch = data.get(
+            "homeostatic_grow_batch", net.homeostatic_grow_batch)
+        net.homeostatic_prune_batch = data.get(
+            "homeostatic_prune_batch", net.homeostatic_prune_batch)
+        net.homeostatic_new_weight = data.get(
+            "homeostatic_new_weight", net.homeostatic_new_weight)
+        net.homeostatic_regions = data.get(
+            "homeostatic_regions", net.homeostatic_regions)
 
         for nd in data.get("neurons", []):
             nid = nd["id"]
