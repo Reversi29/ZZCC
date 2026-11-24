@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""结构可塑性演化护栏(闭环)。
+"""结构可塑性演化护栏(闭环)。宿主机执行。
 
 检测: 动态区演化是否破坏 eval。
 判据: eval < 12(权威用例) 且 动态区有演化(dyn_pruned_total/dyn_grown_total>0
       或 dyn_step_spread>0) → 结构可塑性是嫌疑, 触发回退。
 
-回退: 禁用结构可塑性(写入网络文件 enable_structural_plasticity=False),
-      记录漂移快照供人工审查, 保留网络状态(不硬恢复权重——演化本身不删边,
-      只是参数扰动)。
+回退: 禁用结构可塑性(写入容器网络文件 enable_structural_plasticity=False),
+      记录漂移快照供人工审查, 保留网络状态(不硬恢复权重)。
+
+评估方式: 宿主机代码加载容器网络快照(docker cp), 用权威 eval_cases 评估。
+          回退写入容器 /app/config_data/snn_network.json。
 
 与 snn_drift_guard.py 互补:
 - drift_guard: 权重漂移/拓扑膨胀(网络自身状态退化)
@@ -28,6 +30,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 CONTAINER = "nebula-interface"
@@ -35,6 +38,10 @@ DATA_DIR = "/app/config_data"
 NETWORK = f"{DATA_DIR}/snn_network.json"
 STATS = f"{DATA_DIR}/snn_network_stats.json"
 STRUCT_SNAPSHOT = f"{DATA_DIR}/snn_structural_drifted_%s.json"
+
+# 宿主机代码路径(评估用)
+INTERFACE_DIR = "/Users/mac/ZZCC/services/interface"
+TOOLS_DIR = "/Users/mac/ZZCC/services/tools"
 
 # eval 判据: 权威 12 用例, 掉分即嫌疑
 EVAL_THRESHOLD = 12
@@ -60,29 +67,6 @@ def write_file(path, content):
                  f"cat > {path} <<'ZZCC_GUARD_EOF'\n{content}\nZZCC_GUARD_EOF"])
 
 
-def get_eval_score():
-    """在容器内跑 eval_cases.run, 返回 (通过数, 失败列表)。"""
-    # eval_cases 在 tools 下, 容器内路径需确认
-    cmd = (
-        "cd /app && python3 -c "
-        "\"import sys; sys.path.insert(0,'/app/tools'); "
-        "sys.path.insert(0,'/app/interface'); "
-        "from eval_cases import run; "
-        "from services.brain.snn_region import SNNRegion; "
-        "r=SNNRegion(save_path='/app/config_data/snn_network.json'); "
-        "ok,f=run(r); print(ok, json.dumps(f))\""
-    )
-    try:
-        out = docker_exec(["sh", "-c", cmd])
-        parts = out.strip().rsplit(" ", 1)
-        ok = int(parts[0])
-        fails = json.loads(parts[1]) if len(parts) > 1 else []
-        return ok, fails
-    except Exception as e:
-        print(f"  eval 执行失败: {e}")
-        return None, []
-
-
 def get_dyn_stats():
     """读容器内 stats 文件, 返回动态区演化统计。"""
     raw = read_file(STATS)
@@ -105,6 +89,33 @@ def is_evolution_active(dyn):
     return (dyn.get("dyn_pruned_total", 0) > 0
             or dyn.get("dyn_grown_total", 0) > 0
             or dyn.get("dyn_step_spread", 0) > 0)
+
+
+def eval_container_network():
+    """宿主机代码评估容器网络快照。返回 (通过数, 失败列表)。"""
+    tmpdir = tempfile.mkdtemp(prefix="snn_struct_guard_")
+    local_net = os.path.join(tmpdir, "snn_network.json")
+    try:
+        subprocess.run(["docker", "cp", f"{CONTAINER}:{NETWORK}", local_net],
+                       capture_output=True, check=True)
+    except Exception as e:
+        print(f"  docker cp 失败: {e}")
+        return None, []
+    # 加载网络(宿主机代码)
+    sys.path.insert(0, INTERFACE_DIR)
+    sys.path.insert(0, TOOLS_DIR)
+    try:
+        from services.brain.snn_region import SNNRegion
+        from eval_cases import run
+        region = SNNRegion(save_path=local_net)
+        ok, fails = run(region)
+        return ok, fails
+    except Exception as e:
+        print(f"  宿主机 eval 失败: {e}")
+        return None, []
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def rollback_structural():
@@ -155,7 +166,7 @@ def main():
         print("  动态区无演化, 结构可塑性未扰动, 健康 ✓")
         return 0
 
-    ok, fails = get_eval_score()
+    ok, fails = eval_container_network()
     print(f"  eval: {ok}/{EVAL_THRESHOLD}")
     if ok is None:
         print("  eval 无法执行, 跳过(非致命)")
