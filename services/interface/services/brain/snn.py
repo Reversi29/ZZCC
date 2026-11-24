@@ -1354,6 +1354,9 @@ class SNN:
             "homeostatic_zero_recycle": self.homeostatic_zero_recycle,
             "homeostatic_recycle_grace": self.homeostatic_recycle_grace,
             "homeostatic_recycle_batch": self.homeostatic_recycle_batch,
+            # 零度回收状态(持久化:重启后考察期/回收语义完整)
+            "recycled_nodes": sorted(self._recycled),
+            "registered_at": {str(k): v for k, v in self._registered_at.items()},
             "neurons": neurons,
             "edges": edges,
             "ewc_importance": self.get_ewc_importance(),
@@ -1419,6 +1422,11 @@ class SNN:
             "homeostatic_recycle_grace", net.homeostatic_recycle_grace)
         net.homeostatic_recycle_batch = data.get(
             "homeostatic_recycle_batch", net.homeostatic_recycle_batch)
+        # 零度回收状态(向后兼容:旧文件无这些键用默认)
+        net._recycled = set(data.get("recycled_nodes", []))
+        net._registered_at = {
+            int(k): v for k, v in data.get("registered_at", {}).items()
+        }
 
         for nd in data.get("neurons", []):
             nid = nd["id"]
