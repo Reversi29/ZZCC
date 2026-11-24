@@ -315,6 +315,13 @@ class SNNRegion:
             "boundary_detected_count": 0,
             "ewc_protected_edges": 0,
             "micro_learn_steps": 0,
+            # 动态区(≥40)演化监控: 结构可塑性是否健康演化
+            "dyn_edges": 0,
+            "dyn_step_spread": 0,
+            "dyn_step_distinct": 0,
+            "dyn_pruned": 0,
+            "dyn_grown": 0,
+            "dyn_last_updated": 0,
             # 方向3：概念→决策融合权重（可学习）
             # 深拷贝：内层 dict 也独立，避免改一个实例污染全局默认
             "concept_decision_weights": {
@@ -1468,6 +1475,9 @@ class SNNRegion:
         # 而非人工"金额≤1000→批准"语义。
         self._learn_sentience_drives_output(signal, target_output, eta)
 
+        # 动态区(≥40)演化监控: 结构可塑性是否健康演化
+        self._update_dyn_evolution_stats()
+
         self._auto_save()
 
         # 恢复 Hebbian 状态(推理时可能被 reason() 设为 False)
@@ -1659,6 +1669,13 @@ class SNNRegion:
             "boundary_detected_count": 0,
             "ewc_protected_edges": 0,
             "micro_learn_steps": 0,
+            # 动态区(≥40)演化监控: 结构可塑性是否健康演化
+            "dyn_edges": 0,
+            "dyn_step_spread": 0,
+            "dyn_step_distinct": 0,
+            "dyn_pruned": 0,
+            "dyn_grown": 0,
+            "dyn_last_updated": 0,
             # 概念→决策融合权重（深拷贝，避免内层共享）
             "concept_decision_weights": {
                 k: dict(v) for k, v in _DEFAULT_CONCEPT_DECISION_WEIGHTS.items()
@@ -1684,6 +1701,36 @@ class SNNRegion:
                 json.dump(self._stats, f, ensure_ascii=False)
         except Exception as e:
             logger.warning("snn: stats save failed: %s", str(e))
+
+    def _update_dyn_evolution_stats(self):
+        """动态区(≥40)演化监控。
+
+        统计动态区边数/步长分布, 对比上次快照检测修剪/生长。
+        用于观察结构可塑性(通断/步长)是否健康演化, 供看板/护栏决策。
+        """
+        import time
+        snn = self.snn
+        dyn_edges = 0
+        dyn_steps = []
+        for src, conns in snn.out_edges.items():
+            for tgt, conn in conns.items():
+                if src >= 40 or tgt >= 40:
+                    dyn_edges += 1
+                    dyn_steps.append(conn.step)
+
+        prev_edges = self._stats.get("dyn_edges", 0)
+        cur = {
+            "dyn_edges": dyn_edges,
+            "dyn_step_spread": (max(dyn_steps) - min(dyn_steps)) if dyn_steps else 0,
+            "dyn_step_distinct": len(set(dyn_steps)) if dyn_steps else 0,
+            "dyn_pruned": max(0, prev_edges - dyn_edges),  # 边减少=修剪
+            "dyn_grown": max(0, dyn_edges - prev_edges),    # 边增加=生长
+            "dyn_last_updated": int(time.time()),
+        }
+        # 累计修剪/生长(非覆盖, 观察总量)
+        self._stats["dyn_pruned_total"] = self._stats.get("dyn_pruned_total", 0) + cur["dyn_pruned"]
+        self._stats["dyn_grown_total"] = self._stats.get("dyn_grown_total", 0) + cur["dyn_grown"]
+        self._stats.update(cur)
 
     def status(self) -> dict:
         """网络状态快照。"""
