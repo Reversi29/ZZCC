@@ -476,9 +476,14 @@ class SNN:
                 # 目标无放电则连接无激活证据,不改步长
                 if not tgt_hist:
                     continue
-                # 演化速率:以 step_evolve_rate 概率演化(非每步都动)
-                # step_evolve_rate 低→慢演化(保守), 高→快演化(激进)
-                if random.random() > self.step_evolve_rate:
+                # 演化速率:固定速率或协同活跃度动态速率(二选一)
+                # 固定模式:step_evolve_rate 低→慢演化(保守), 高→快演化(激进)
+                # 动态模式:活跃边(有协同放电历史)演化快,惰性边保持惰性
+                evolve_rate = self._step_evolve_rate_for(src, tgt, conn.step)
+                if evolve_rate <= 0 or random.random() > evolve_rate:
+                    continue
+                # 冷却期:同一边刚演化过,短期不再动(防止来回震荡)
+                if t - self._step_change_time.get((src, tgt), -10**6) < self.step_evolve_cooldown:
                     continue
                 # 相关性:目标在源放电后 step+2 窗口内跟随 → 正相关
                 correlated = False
@@ -497,6 +502,8 @@ class SNN:
                     new_step = min(self.step_max, conn.step + 1)
                 if new_step != conn.step:
                     self.set_step(src, tgt, new_step)
+                    self._step_change_time[(src, tgt)] = t
+                    self._step_evolve_events += 1
 
         # 3. 生长:协同放电但无连接 → 建连
         # 只在显式学习上下文启用(奖励路径已用 auto_create,这里补通用生长)
@@ -679,6 +686,53 @@ class SNN:
         # 超过活跃阈值 → 向活跃宽度线性插值
         ratio = min(1.0, (activity - thresh) / max(0.1, 1.0 - thresh))
         return stable + (active - stable) * ratio
+
+    def _step_evolve_rate_for(self, src: int, tgt: int, step: int) -> float:
+        """协同活跃度 → 步长演化速率。活跃边快,惰性边慢,EWC 固化边减半。
+
+        活跃度的代理信号:源/目标是否都有放电历史,以及源放电与目标
+        放电能否对齐到 [step, step+2] 窗口内。
+
+        与固定速率的关系:step_adaptive_rate=False 时退化为固定 step_evolve_rate,
+        保持向后兼容(旧行为不变)。默认 True 启用动态。
+        """
+        if not self.step_adaptive_rate:
+            return float(self.step_evolve_rate)
+
+        src_hist = self._recent_fire.get(src, [])
+        tgt_hist = self._recent_fire.get(tgt, [])
+
+        # 惰性边:无任何放电历史,或只有目标放电但源从不在窗口内激活
+        if not src_hist or not tgt_hist:
+            activity = 0.0
+        else:
+            hits = 0
+            total = 0
+            for st in src_hist:
+                for tt in tgt_hist:
+                    total += 1
+                    if 0 < tt - st <= step + 2:
+                        hits += 1
+            # hits/total 直接是"协同命中率",天然在 [0,1]
+            activity = hits / max(1, total)
+
+        # 线性插值:惰性→稳定速率, 完全协同→活跃速率
+        # 与 _activity_to_width 同一范式,保证风格一致
+        rate = self.step_rate_stable + (self.step_rate_active - self.step_rate_stable) * activity
+
+        # 地板:step_evolve_rate 语义从"固定速率"变为"地板速率"。
+        # 动态值在其上加速,同时保证任何边都有基础演化机会——
+        # 弱相关边的"加长步长"本身就是有意义的演化方向(远离核心、降激活),
+        # 不能被压到近零。防护靠 step_evolve_cooldown 而非压低惰性速率。
+        rate = max(rate, self.step_evolve_rate)
+
+        # EWC 固化保护:高重要性的边(已固化的重要知识)演化速率减半,
+        # 防止动态速率把 EWC 想锁住的关键通路反复折腾
+        ewc = self._ewc_importance.get((src, tgt), 0.0)
+        if ewc >= self.step_adaptive_ewc_ceil:
+            rate *= 0.5
+
+        return float(min(max(rate, 0.0), 1.0))
 
     def _recycle_zero_neurons(self, region_neurons: list, t: int):
         """回收零度节点:无入边无出边且过考察期 → 回收(软回收,禁活)。
@@ -932,6 +986,21 @@ class SNN:
         self.step_evolve_rate: float = 0.01      # 步长演化速率(每步)
         self.step_min: int = 1                   # 步长下限
         self.step_max: int = 5                   # 步长上限
+
+        # ── 步长演化速率动态调整(协同活跃度驱动)──
+        # 固定速率的问题:稀疏反馈下"几乎永远看不到边长短改变"。
+        # 人脑启发:被协同激活的突触(强相关放电)应快速重塑通路,
+        # 长期闲置的突触保持惰性。故速率随边的放电活跃度自适应。
+        # 速率=协同活跃度插值:active_rate(活跃) ~ stable_rate(惰性)
+        #   rate = stable + (active - stable) * ratio
+        # 与丰度调控的 _activity_to_width 同一套插值范式(稳定窄/活跃宽)。
+        self.step_adaptive_rate: bool = True      # 动态速率开关
+        self.step_rate_active: float = 0.20      # 活跃边演化速率上限
+        self.step_rate_stable: float = 0.02      # 惰性边演化速率下限(受地板限制)
+        self.step_evolve_cooldown: int = 50     # 同一边两次演化最小时间步间隔(防震荡)
+        self.step_adaptive_ewc_ceil: float = 1.0  # EWC≥此值固化,速率减半(护住重要知识)
+        self._step_change_time: dict[tuple[int, int], int] = {}
+        self._step_evolve_events: int = 0         # 累计演化次数(可观测)
         self.allow_synaptogenesis: bool = False  # 生长(协同放电建连)开关,默认关
         self.plasticity_core_freeze: bool = True  # 冻结核心区(0-39)防扰动 12/12
         self.concept_freeze_start: int = 220  # 概念区冻结起点(220+ 概念预训练种子)
@@ -1336,6 +1405,12 @@ class SNN:
             "step_evolve_rate": self.step_evolve_rate,
             "step_min": self.step_min,
             "step_max": self.step_max,
+            "step_adaptive_rate": self.step_adaptive_rate,
+            "step_rate_active": self.step_rate_active,
+            "step_rate_stable": self.step_rate_stable,
+            "step_evolve_cooldown": self.step_evolve_cooldown,
+            "step_adaptive_ewc_ceil": self.step_adaptive_ewc_ceil,
+            "step_evolve_events": self._step_evolve_events,
             "allow_synaptogenesis": self.allow_synaptogenesis,
             "plasticity_core_freeze": self.plasticity_core_freeze,
             "concept_freeze_start": self.concept_freeze_start,
@@ -1387,6 +1462,13 @@ class SNN:
         net.step_evolve_rate = data.get("step_evolve_rate", net.step_evolve_rate)
         net.step_min = data.get("step_min", net.step_min)
         net.step_max = data.get("step_max", net.step_max)
+        net.step_adaptive_rate = data.get("step_adaptive_rate", net.step_adaptive_rate)
+        net.step_rate_active = data.get("step_rate_active", net.step_rate_active)
+        net.step_rate_stable = data.get("step_rate_stable", net.step_rate_stable)
+        net.step_evolve_cooldown = data.get("step_evolve_cooldown", net.step_evolve_cooldown)
+        net.step_adaptive_ewc_ceil = data.get("step_adaptive_ewc_ceil", net.step_adaptive_ewc_ceil)
+        # 演化事件计数恢复(冷却期时间戳不落盘,重载后重新开始计时)
+        net._step_evolve_events = data.get("step_evolve_events", net._step_evolve_events)
         net.allow_synaptogenesis = data.get("allow_synaptogenesis", net.allow_synaptogenesis)
         net.plasticity_core_freeze = data.get("plasticity_core_freeze", net.plasticity_core_freeze)
         net.concept_freeze_start = data.get("concept_freeze_start", net.concept_freeze_start)
