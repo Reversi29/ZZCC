@@ -1078,6 +1078,50 @@ class SNN:
         self.ewc_importance_cap: float = 10.0
         self._last_ewc_adapt: float = 0.0  # 上次生效的 readiness
         self._exploration_rate: float = self.EXPLORATION_BASE_RATE
+
+        # 探索元参数提升为实例属性(原为类属性/硬编码字面量, 写死; 现可自适应+持久化)
+        self.exploration_decay: float = float(self.EXPLORATION_DECAY)
+        self.exploration_boost: float = float(self.EXPLORATION_BOOST)
+        # 上下限原为 _adjust_exploration_rate 内的硬编码字面量, 现为实例属性
+        self.exploration_floor: float = 0.02   # 探索率下限(防归零)
+        self.exploration_ceil: float = 0.5    # 探索率上限(防失控)
+
+        # ── 探索率随成熟度自适应 ─────────────────────────────
+        # 关键防自反馈: explore_converged 本身就是 readiness 的分量(权重 0.15),
+        # 若用完整 readiness 驱动探索率, 会形成
+        # "降探索→探索收敛分变高→readiness 变高→进一步压探索" 的正反馈——
+        # 学生刷自己的指标。故驱动信号只用与探索无关的分量:
+        #   maturity = (teacher_aligned + representation_stable
+        #             + self_consistent) / 3
+        # 也排除 ewc_consolidated(与第一组 EWC 参数解耦, 避免两组互相纠缠)。
+        # 语义: 越成熟 → 探索下限越低(竞争收敛彻底)、衰减越快、
+        #       边界探测强度越小(避免被单次错误大幅扰动)。
+        self.exploration_adaptive: bool = (
+            _os.environ.get("BRAIN_EXPLORATION_ADAPTIVE", "0") == "1"
+        )
+        self.exploration_floor_hi: float = 0.06  # 未成熟端: 保持较高探索
+        self.exploration_floor_lo: float = 0.015 # 成熟端: 竞争收敛彻底
+        self.exploration_decay_hi: float = 0.90   # 未成熟端: 收敛慢, 给更多探索
+        self.exploration_decay_lo: float = 0.98   # 成熟端: 收敛快
+        self.exploration_boost_hi: float = 0.30   # 未成熟端: 边界探测强
+        self.exploration_boost_lo: float = 0.15  # 成熟端: 探测精准不过度
+
+        # ── Hebbian 内源自适应(随成熟度退火)──
+        # enable_hebbian 原本是死开关: reason/train/snn_iterate 三条路径
+        # 全部强制 False(1036/1332/1858), 改它没有任何落点。
+        # 真正的落点是 snn_iterate(内源自主迭代, 无真实反馈、不产出决策),
+        # 对应人脑"清醒期突触也在生长(以生长为主)"。
+        # 实验 tools/experiment_hebbian_iterate.py 证实: 启用后 200 次迭代
+        # eval 仍 12/12, 零边膨胀(Hebbian 只调权重不建连, 667 边暴涨
+        # 前科来自结构可塑性 allow_synaptogenesis, 不是 STDP)。
+        # 退火: readiness 越高 → 内源自主生长强度越大(学生成熟后自己巩固)。
+        self.hebbian_annealing: bool = (
+            _os.environ.get("BRAIN_HEBBIAN_ANNEALING", "0") == "1"
+        )
+        self.hebbian_anneal_lo: float = 0.0   # 未成熟端: 完全靠教师训练
+        self.hebbian_anneal_hi: float = 1.0  # 成熟端: 内源生长全开
+        self._hebbian_autonomy: float = 0.0  # 当前生效的内源自主生长强度
+
         self._consecutive_correct: int = 0
         self._total_decisions: int = 0
         self._recent_decisions: list[bool] = []  # True=正确, False=错误
@@ -1186,17 +1230,61 @@ class SNN:
         if decision_was_correct:
             self._consecutive_correct += 1
             # 连续正确后探索率指数衰减
-            self._exploration_rate *= self.EXPLORATION_DECAY
+            self._exploration_rate *= self.exploration_decay
         else:
             self._consecutive_correct = 0
             # 错误时探索率回升
             self._exploration_rate = min(
-                0.5,  # 最大探索率 50%
-                self._exploration_rate + self.EXPLORATION_BOOST
+                self.exploration_ceil,  # 上限随成熟度自适应
+                self._exploration_rate + self.exploration_boost
             )
 
-        # 底线保护:探索率不低于 2%
-        self._exploration_rate = max(0.02, self._exploration_rate)
+        # 底线保护:探索率不低于下限(随成熟度自适应)
+        self._exploration_rate = max(self.exploration_floor, self._exploration_rate)
+
+    def adapt_exploration_by_maturity(self, maturity: float) -> dict:
+        """按成熟度自适应探索元参数。
+
+        maturity: 与探索无关的成熟度信号(0~1), 由调用方提供,
+        典型为 (teacher_aligned + representation_stable + self_consistent)/3。
+        成熟度高 → 探索下限低、衰减快、探测强度小。
+        """
+        m = max(0.0, min(1.0, float(maturity)))
+        self.exploration_floor = (
+            self.exploration_floor_hi + (self.exploration_floor_lo - self.exploration_floor_hi) * m
+        )
+        self.exploration_decay = (
+            self.exploration_decay_hi + (self.exploration_decay_lo - self.exploration_decay_hi) * m
+        )
+        self.exploration_boost = (
+            self.exploration_boost_hi + (self.exploration_boost_lo - self.exploration_boost_hi) * m
+        )
+        return {
+            "exploration_floor": round(self.exploration_floor, 5),
+            "exploration_decay": round(self.exploration_decay, 5),
+            "exploration_boost": round(self.exploration_boost, 5),
+            "maturity": round(m, 4),
+        }
+
+    def adapt_hebbian_autonomy(self, readiness_score: float) -> dict:
+        """按 readiness 退火内源自主 Hebbian 强度(清醒期生长)。
+
+        readiness 越高 → 内源自主生长越强(学生成熟后自己巩固网络)；
+        越低 → 完全靠教师训练(train_from_feedback)驱动，不自主生长。
+
+        返回的 autonomy 由 snn_iterate 作为 enable_hebbian 的软开关强度；
+        本方法不改变推理路径行为(reason 仍强制 enable_hebbian=False)。
+        """
+        score = max(0.0, min(1.0, float(readiness_score)))
+        self._hebbian_autonomy = (
+            self.hebbian_anneal_lo
+            + (self.hebbian_anneal_hi - self.hebbian_anneal_lo) * score
+        )
+        return {
+            "hebbian_autonomy": round(self._hebbian_autonomy, 4),
+            "readiness_score": round(score, 4),
+            "annealing_enabled": self.hebbian_annealing,
+        }
 
     def _explore(self, active_neurons: list[int]) -> bool:
         """执行一次探索:随机扰动一条边,看决策是否翻转。
@@ -1491,6 +1579,23 @@ class SNN:
             "ewc_alpha_lo": self.ewc_alpha_lo,
             "ewc_decay_slow": self.ewc_decay_slow,
             "ewc_decay_fast": self.ewc_decay_fast,
+            # 探索元参数(随成熟度自适应, 持久化后跨重启稳定)
+            "exploration_decay": self.exploration_decay,
+            "exploration_boost": self.exploration_boost,
+            "exploration_floor": self.exploration_floor,
+            "exploration_ceil": self.exploration_ceil,
+            "exploration_adaptive": self.exploration_adaptive,
+            "exploration_floor_hi": self.exploration_floor_hi,
+            "exploration_floor_lo": self.exploration_floor_lo,
+            "exploration_decay_hi": self.exploration_decay_hi,
+            "exploration_decay_lo": self.exploration_decay_lo,
+            "exploration_boost_hi": self.exploration_boost_hi,
+            "exploration_boost_lo": self.exploration_boost_lo,
+            # Hebbian 内源退火参数(随 readiness 自适应)
+            "hebbian_annealing": self.hebbian_annealing,
+            "hebbian_anneal_lo": self.hebbian_anneal_lo,
+            "hebbian_anneal_hi": self.hebbian_anneal_hi,
+            "hebbian_autonomy": self._hebbian_autonomy,
         }
 
     @classmethod
@@ -1607,6 +1712,38 @@ class SNN:
         net.ewc_alpha_lo = float(data.get("ewc_alpha_lo", net.ewc_alpha_lo))
         net.ewc_decay_slow = float(data.get("ewc_decay_slow", net.ewc_decay_slow))
         net.ewc_decay_fast = float(data.get("ewc_decay_fast", net.ewc_decay_fast))
+        # 探索元参数(向后兼容: 旧文件无这些键用默认)
+        net.exploration_decay = float(
+            data.get("exploration_decay", net.exploration_decay))
+        net.exploration_boost = float(
+            data.get("exploration_boost", net.exploration_boost))
+        net.exploration_floor = float(
+            data.get("exploration_floor", net.exploration_floor))
+        net.exploration_ceil = float(
+            data.get("exploration_ceil", net.exploration_ceil))
+        net.exploration_adaptive = bool(
+            data.get("exploration_adaptive", net.exploration_adaptive))
+        net.exploration_floor_hi = float(
+            data.get("exploration_floor_hi", net.exploration_floor_hi))
+        net.exploration_floor_lo = float(
+            data.get("exploration_floor_lo", net.exploration_floor_lo))
+        net.exploration_decay_hi = float(
+            data.get("exploration_decay_hi", net.exploration_decay_hi))
+        net.exploration_decay_lo = float(
+            data.get("exploration_decay_lo", net.exploration_decay_lo))
+        net.exploration_boost_hi = float(
+            data.get("exploration_boost_hi", net.exploration_boost_hi))
+        net.exploration_boost_lo = float(
+            data.get("exploration_boost_lo", net.exploration_boost_lo))
+        # Hebbian 内源退火参数(向后兼容: 旧文件无这些键用默认)
+        net.hebbian_annealing = bool(
+            data.get("hebbian_annealing", net.hebbian_annealing))
+        net.hebbian_anneal_lo = float(
+            data.get("hebbian_anneal_lo", net.hebbian_anneal_lo))
+        net.hebbian_anneal_hi = float(
+            data.get("hebbian_anneal_hi", net.hebbian_anneal_hi))
+        net._hebbian_autonomy = float(
+            data.get("hebbian_autonomy", net._hebbian_autonomy))
         return net
 
     def save(self, path: str) -> bool:

@@ -1336,17 +1336,64 @@ class SNNRegion:
         _saved_structural = self.snn.enable_structural_plasticity
         self.snn.enable_structural_plasticity = True
 
-        # ── EWC 固化参数随 readiness 自适应 ──────────────
-        # 未成熟(teacher_led) → 强固化: 保护教师蒸馏成果, 遗忘慢
-        # 成熟(autonomous)   → 弱固化: 保留可塑, 遗忘快
-        # 只读 readiness_score, 不改行为(只调固化参数); 失败不阻断训练。
-        if getattr(self.snn, "ewc_adaptive", False):
+        # ── 自适应参数驱动: 从 readiness 读取(只读, 失败不阻断训练) ────
+        # EWC 固化: 未成熟 → 强固化(保护教师蒸馏成果, 遗忘慢);
+        #          成熟   → 弱固化(保留可塑, 遗忘快)。
+        # 探索元参数: 未成熟 → 探索下限高/衰减慢/探测强;
+        #             成熟   → 下限低/收敛快/探测精准。
+        # Hebbian 内源: 随 readiness 退火, 成熟后 snn_iterate 自主生长。
+        # 三组共用一次 readiness_score 计算, 避免重复读决策日志。
+        if (getattr(self.snn, "ewc_adaptive", False)
+                or getattr(self.snn, "exploration_adaptive", False)
+                or getattr(self.snn, "hebbian_annealing", False)):
+            rd = None
+            comps = {}
             try:
                 rd = self.readiness_score()
-                adapted = self.snn.adapt_ewc_by_readiness(rd["score"])
-                self._stats["ewc_adapted"] = adapted
+                comps = rd["components"]
             except Exception:
-                self._stats["ewc_adapted"] = {"error": "readiness_unavailable"}
+                rd = None
+            if rd is not None:
+                # EWC 固化: 用完整 readiness(含探索收敛与固化度)
+                if getattr(self.snn, "ewc_adaptive", False):
+                    try:
+                        self._stats["ewc_adapted"] = self.snn.adapt_ewc_by_readiness(
+                            rd["score"])
+                    except Exception:
+                        self._stats["ewc_adapted"] = {"error": "readiness_unavailable"}
+                # 探索元参数: 只用与探索无关的分量(防学生刷自己的探索指标)
+                if getattr(self.snn, "exploration_adaptive", False):
+                    try:
+                        maturity = (
+                            comps["teacher_aligned"]
+                            + comps["representation_stable"]
+                            + comps["self_consistent"]
+                        ) / 3.0
+                        self._stats["exploration_adapted"] = (
+                            self.snn.adapt_exploration_by_maturity(maturity)
+                        )
+                    except Exception:
+                        self._stats["exploration_adapted"] = {
+                            "error": "readiness_unavailable"}
+            else:
+                if getattr(self.snn, "ewc_adaptive", False):
+                    self._stats["ewc_adapted"] = {"error": "readiness_unavailable"}
+                if getattr(self.snn, "exploration_adaptive", False):
+                    self._stats["exploration_adapted"] = {"error": "readiness_unavailable"}
+            # Hebbian 内源退火: 用完整 readiness(它是"学生自己巩固网络"的总指标,
+            # 与探索无自反馈风险——autonomy 不在 readiness 的任何分量里)
+            if getattr(self.snn, "hebbian_annealing", False):
+                if rd is not None:
+                    try:
+                        self._stats["hebbian_adapted"] = (
+                            self.snn.adapt_hebbian_autonomy(rd["score"])
+                        )
+                    except Exception:
+                        self._stats["hebbian_adapted"] = {
+                            "error": "readiness_unavailable"}
+                else:
+                    self._stats["hebbian_adapted"] = {
+                        "error": "readiness_unavailable"}
 
         self._stats["training_count"] += 1
         self._stats["micro_learn_steps"] += 1
@@ -1824,7 +1871,21 @@ class SNNRegion:
         # 保留学习状态但推理语义：不改变权重
         saved_hebbian = snn.enable_hebbian
         saved_structural = snn.enable_structural_plasticity
-        snn.enable_hebbian = False
+        saved_eta_plus = snn.eta_plus
+        saved_eta_minus = snn.eta_minus
+        # 内源自主生长(清醒期突触生长, 人脑 SHY 对应): 随 readiness 退火。
+        # enable_hebbian 在 reason/train 两条路径被强制 False(1036/1332),
+        # snn_iterate 是唯一有落点的路径——无真实反馈、不产出决策。
+        # 强度由 autonomy(0~1) 缩放 eta_plus/eta_minus, 不碰 _hebbian_update
+        # 核心公式(避免破坏其他 enable_hebbian=True 的路径与向后兼容)。
+        autonomy = 0.0
+        if getattr(snn, "hebbian_annealing", False):
+            autonomy = max(0.0, min(1.0, float(getattr(snn, "_hebbian_autonomy", 0.0))))
+            snn.enable_hebbian = autonomy > 0.0
+            snn.eta_plus = saved_eta_plus * autonomy
+            snn.eta_minus = saved_eta_minus * autonomy
+        else:
+            snn.enable_hebbian = False
         snn.enable_structural_plasticity = False
         try:
             # 内源脉冲：用固定感受神经元（sentience 202+）作弱输入，保持网络活性
@@ -1847,6 +1908,8 @@ class SNNRegion:
                 "confidence": result.confidence if result else 0.0,
                 "boundary_detected": boundary_detected,
                 "exploration_rate": snn._exploration_rate,
+                # 内源自主生长强度(随 readiness 退火), 0=未启用/未成熟
+                "hebbian_autonomy": round(autonomy, 4),
             }
         except Exception as e:
             logger.warning("snn_iterate_error: %s", e)
@@ -1854,6 +1917,8 @@ class SNNRegion:
         finally:
             snn.enable_hebbian = saved_hebbian
             snn.enable_structural_plasticity = saved_structural
+            snn.eta_plus = saved_eta_plus
+            snn.eta_minus = saved_eta_minus
 
     def readiness_score(self) -> dict:
         """自主接管 readiness 评分(0~1)。
