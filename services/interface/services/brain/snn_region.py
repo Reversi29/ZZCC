@@ -1815,24 +1815,14 @@ class SNNRegion:
         snn.enable_hebbian = False
         snn.enable_structural_plasticity = False
         try:
-            # 内源脉冲：用最近一次决策的上下文作为弱输入，保持网络活性
-            # 无外部信号时用默认脉冲（探索 + EWC 更新仍发生）
+            # 内源脉冲：用固定感受神经元（sentience 202+）作弱输入，保持网络活性
+            # 不用 _encode_signal（避免 _ensure_dynamic_input_slot 动态注册新槽扩张网络）
+            # 内源信号不是新概念类型，不该触发开放集扩张——这是迭代周期的原则
             last_ctx = self._stats.get("last_decision_context", {}) or {}
-            # 构造内源信号（source=endogenous）
-            import uuid
-            sig = NeuralSignal(
-                id=str(uuid.uuid4()),
-                type="endogenous_tick",
-                payload={"endogenous": True, **last_ctx},
-                source="endogenous",
-                urgency=30,
-                context={"endogenous": True},
-            )
-            input_neurons = self._encode_signal(sig)
+            input_neurons = [_SENTIENCE_BASE]  # 固定感受神经元（threat），不扩张网络
             strength = 1.5  # 内源弱脉冲
-            cont_weights = self._continuous_weights(sig)
             outputs, boundary_detected, window_fires = snn.step_with_learning(
-                input_neurons, strength, weights=cont_weights or None,
+                input_neurons, strength,
             )
             active = [n.id for n in snn.neurons
                       if n.last_fire_time >= 0 and (snn.time - n.last_fire_time) <= 10]
