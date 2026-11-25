@@ -9,13 +9,18 @@ async function renderBrainCore(container) {
   try {
     const status = await apiGet('/brain/core/status');
     brainCoreState = status;
-    drawBrainCore(container, status);
+    // 并行拉 SNN readiness(自主接管评分)
+    let snnStatus = null;
+    try {
+      snnStatus = await apiGet('/brain/snn/status');
+    } catch (e) { /* SNN 状态拉取失败不阻塞看板 */ }
+    drawBrainCore(container, status, snnStatus);
   } catch (e) {
     container.innerHTML = `<div class="error-box">加载失败：${e.message}</div>`;
   }
 }
 
-function drawBrainCore(container, status) {
+function drawBrainCore(container, status, snnStatus) {
   const cfg = status.config || {};
   const stats = status.stats || {};
   const endo = status.endogenous || {};
@@ -48,6 +53,26 @@ function drawBrainCore(container, status) {
   const l3c = reasoning.l3_calls || 0, l3h = reasoning.l3_hits || 0;
   const snnc = reasoning.snn_calls || 0, snnh = reasoning.snn_hits || 0;
   const pct = (h, c) => c > 0 ? (h / c * 100).toFixed(0) + '%' : '-';
+
+  // 自主接管 readiness
+  const rd = (snnStatus && snnStatus.readiness) || {};
+  const rdScore = (rd.score ?? 0).toFixed(2);
+  const rdStage = rd.stage || 'teacher_led';
+  const rdRaw = rd.raw || {};
+  const rdComp = rd.components || {};
+  const rdWeights = rd.weights || {};
+  const rdLabel = {
+    explore_converged: '探索收敛',
+    representation_stable: '表征收敛',
+    teacher_aligned: '教师对齐',
+    ewc_consolidated: '固化度',
+    self_consistent: '自我一致',
+  };
+  const rdRows = Object.keys(rdLabel).map(k => {
+    const v = rdComp[k] ?? 0;
+    const w = rdWeights[k] ?? 0;
+    return `<tr><td>${rdLabel[k]}</td><td>${(v * 100).toFixed(0)}%</td><td>${(w * 100).toFixed(0)}%</td><td style="color:var(--text-dim)">${(v * w * 100).toFixed(1)}%</td></tr>`;
+  }).join('');
 
   container.innerHTML = `
     <!-- 控制条 -->
@@ -204,6 +229,31 @@ function drawBrainCore(container, status) {
         </div>
       </div>
     </div>
+    <!-- 自主接管 readiness 面板 -->
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-title">自主接管 readiness（把"意识"操作化为可观测判据）</div>
+      <div class="panel-body">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="text-align:center">
+            <div style="font-size:36px;font-weight:700;${rdScoreColor(rdScore)}">${rdScore}</div>
+            <div style="font-size:12px;color:var(--text-dim)">score / 1.0</div>
+          </div>
+          <div>
+            <span class="tag ${rdStageColor(rdStage)}">${rdStageText(rdStage)}</span>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:4px">${rdStageDesc(rdStage)}</div>
+          </div>
+        </div>
+        <table class="topo-table" style="width:100%">
+          <thead><tr><th>指标</th><th>分值</th><th>权重</th><th>加权</th></tr></thead>
+          <tbody>
+            ${rdRows}
+          </tbody>
+        </table>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">
+          探索率 ${rdRaw?.exploration_rate ?? '-'} · 教师对齐 ${rdRaw?.agreement ?? 0}/(${rdRaw?.agreement ?? 0}+${rdRaw?.disagreement ?? 0}) · EWC 均值 ${rdRaw?.ewc_mean ?? '-'}
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -233,6 +283,41 @@ async function brainCoreTick() {
   } catch (e) {
     alert('tick 失败: ' + e.message);
   }
+}
+
+function rdScoreColor(score) {
+  const s = parseFloat(score);
+  if (s >= 0.85) return 'color:var(--success)';
+  if (s >= 0.65) return 'color:var(--primary)';
+  if (s >= 0.35) return 'color:var(--warning)';
+  return 'color:var(--text-dim)';
+}
+
+function rdStageColor(stage) {
+  return {
+    teacher_led: 'tag-yellow',
+    joint: 'tag-blue',
+    student_led: 'tag-green',
+    autonomous: 'tag-green',
+  }[stage] || 'tag-blue';
+}
+
+function rdStageText(stage) {
+  return {
+    teacher_led: '教师主导',
+    joint: '联合决策',
+    student_led: '学生自主',
+    autonomous: '完全自主',
+  }[stage] || stage;
+}
+
+function rdStageDesc(stage) {
+  return {
+    teacher_led: '教师主导：学生 shadow 观察，教师喂数据',
+    joint: '联合决策：教师纠偏但学生已占主导',
+    student_led: '学生自主：教师仅异常/低置信时介入',
+    autonomous: '完全自主：教师只做定期抽查',
+  }[stage] || '';
 }
 
 registerPage('braincore', {
