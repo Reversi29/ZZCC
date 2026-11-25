@@ -116,6 +116,54 @@ function drawBrainCore(container, status) {
       </div>
     </div>
 
+    <!-- 推理→学习机制图 -->
+    <div class="panel">
+      <div class="panel-title">推理 → 学习机制（SNN 迭代路径）</div>
+      <div class="panel-body">
+        <div class="mech-flow">
+          <!-- 入口 -->
+          <div class="mech-col">
+            <div class="mech-node mech-entry">主动<br><span class="mech-sub">/brain/ask</span></div>
+            <div class="mech-node mech-entry">被动<br><span class="mech-sub">/observe → BrainCore tick (15s)</span></div>
+          </div>
+          <div class="mech-arrow">→</div>
+          <!-- 推理引擎 -->
+          <div class="mech-col mech-center">
+            <div class="mech-node mech-engine">推理引擎<br><span class="mech-sub">ReasoningEngine.reason()</span></div>
+            <div class="mech-node mech-region">rule 0.80</div>
+            <div class="mech-node mech-region">statistical 0.60</div>
+            <div class="mech-node mech-region mech-snn">snn 0.55 ⭐</div>
+            <div class="mech-node mech-region">llm 0.50</div>
+            <div class="mech-node mech-region">semantic 0.20</div>
+            <div class="mech-node mech-region">episodic 0.20</div>
+            <div class="mech-node mech-region mech-shadow">shadow 0.10（只观察）</div>
+          </div>
+          <div class="mech-arrow">→</div>
+          <!-- SNN 迭代 -->
+          <div class="mech-col">
+            <div class="mech-node mech-snn-node">snn_region.reason()</div>
+            <div class="mech-node mech-iter">step_with_learning<br><span class="mech-sub">10 步传播 + 探索 + EWC</span></div>
+            <div class="mech-node mech-nolearn">推理时无学习<br><span class="mech-sub">hebbian=False<br>structural=False</span></div>
+          </div>
+        </div>
+        <!-- 学习路径（独立） -->
+        <div class="mech-learn">
+          <div class="mech-learn-label">学习路径（独立于推理）</div>
+          <div class="mech-flow">
+            <div class="mech-col">
+              <div class="mech-node mech-learn-node">LLM 蒸馏<br><span class="mech-sub">_llm_teach_snn</span></div>
+              <div class="mech-node mech-learn-node">用户反馈<br><span class="mech-sub">/brain/feedback</span></div>
+              <div class="mech-node mech-learn-node">手动<br><span class="mech-sub">/snn/train</span></div>
+            </div>
+            <div class="mech-arrow">→</div>
+            <div class="mech-col">
+              <div class="mech-node mech-learn-target">train_from_feedback<br><span class="mech-sub">权重演化 / 结构可塑性</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 推理统计 + 配置 -->
     <div class="grid" style="grid-template-columns:1fr 1fr">
       <div class="panel">

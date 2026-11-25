@@ -330,3 +330,60 @@ table.topo-table tr:hover td { background: rgba(88, 166, 255, 0.04); }
 }
 .legend-item { display: flex; align-items: center; gap: 6px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* ── 推理→学习机制图 ── */
+.mech-flow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.mech-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+.mech-center { flex: 1; min-width: 200px; }
+.mech-node {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.mech-sub { color: var(--text-dim); font-size: 10px; }
+.mech-entry { border-color: var(--accent); color: var(--accent); }
+.mech-engine { border-color: var(--accent); background: rgba(88,166,255,0.08); font-weight: 600; }
+.mech-region { font-size: 11px; }
+.mech-snn { border-color: var(--accent-2); background: rgba(188,140,255,0.12); color: var(--accent-2); }
+.mech-shadow { opacity: 0.6; }
+.mech-snn-node { border-color: var(--accent-2); color: var(--accent-2); font-weight: 600; }
+.mech-iter { border-color: var(--accent); }
+.mech-nolearn { border-color: var(--red); color: var(--red); font-size: 11px; }
+.mech-arrow { font-size: 20px; color: var(--text-dim); }
+.mech-learn {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+.mech-learn-label {
+  font-size: 11px;
+  color: var(--red);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.mech-learn-node {
+  border-color: rgba(248,81,73,0.5);
+  background: rgba(248,81,73,0.06);
+  font-size: 11px;
+}
+.mech-learn-target {
+  border-color: var(--red);
+  background: rgba(248,81,73,0.12);
+  color: var(--red);
+  font-weight: 600;
+}
