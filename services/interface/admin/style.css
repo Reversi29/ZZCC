@@ -140,6 +140,8 @@ body {
 }
 .btn:hover { border-color: var(--accent); }
 .btn-primary { background: rgba(88, 166, 255, 0.15); border-color: var(--accent); color: var(--accent); }
+.btn-danger { background: rgba(248, 81, 73, 0.15); border-color: var(--red); color: var(--red); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .content { padding: 24px; flex: 1; }
 
@@ -300,6 +302,24 @@ canvas#snn-graph { display: block; width: 100%; }
   background: var(--bg-elev);
   z-index: 1;
 }
+
+/* 独立表格(用于 Brain Core 看板推理统计等) */
+table.topo-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+table.topo-table th, table.topo-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+table.topo-table th {
+  color: var(--text-dim);
+  font-weight: 500;
+  background: var(--bg-elev);
+}
+table.topo-table tr:hover td { background: rgba(88, 166, 255, 0.04); }
 
 .legend {
   display: flex;
