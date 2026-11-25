@@ -1843,6 +1843,143 @@ class SNNRegion:
             snn.enable_hebbian = saved_hebbian
             snn.enable_structural_plasticity = saved_structural
 
+    def readiness_score(self) -> dict:
+        """自主接管 readiness 评分(0~1)。
+
+        把"主动吃数据的意识"操作化为 5 个可观测指标,加权合成:
+          1. 探索收敛   — exploration_rate 已从广撒网降到稳定区(权重 0.15)
+          2. 表征收敛   — 权重分布稳定:最近演化导致的权重平均漂移小(权重 0.20)
+          3. 教师分歧率 — shadow 与主 SNN 的 disagreement 占比低(权重 0.25)
+          4. 固化度     — EWC 重要性均值(已有知识被锁定的程度, 权重 0.25)
+          5. 自我一致性 — 蒙特卡洛多次推理决策方差小(权重 0.15)
+
+        阈值判据(0~1):
+          <0.35 → 教师主导(学生 shadow 观察)
+          0.35~0.65 → 联合决策(教师纠偏但学生占主导)
+          0.65~0.85 → 学生自主(教师仅异常/低置信介入)
+          >0.85 → 完全自主(教师只做定期抽查)
+
+        注意:不改变行为,只是让"意识"变得可观测。
+        真实流量下先观察指标怎么走,再决定退火参数。
+        """
+        snn = self.snn
+        s = self._stats
+
+        # ── 指标 1: 探索收敛 ──────────────────────────────
+        # exploration_rate 高(0.3+) = 还在广泛探索,低(→0.05) = 竞争收敛
+        # 用 1 减去归一化探索率。设 0.3 为"完全未收敛",0.0 为"完全收敛"。
+        explore = float(s.get("exploration_rate", 0.1))
+        explore_score = max(0.0, min(1.0, 1.0 - explore / 0.3))
+
+        # ── 指标 2: 表征收敛(权重分布稳定) ────────────────
+        # 权重均值漂移:最近演化导致权重变化总量 vs 边总数。
+        # 稳定表征 = 漂移小(边权重不再大幅变动)。
+        # 代理:active_edges/num_edges 高(多数边有稳定激活) + 权重方差小。
+        w = []
+        for src in snn.out_edges:
+            for c in snn.out_edges[src].values():
+                w.append(c.weight)
+        if w:
+            mean_w = sum(w) / len(w)
+            var_w = sum((x - mean_w) ** 2 for x in w) / len(w)
+            # 权重标准差小 → 表征稳定。以 0.8 为"完全稳定",0.0 为不稳定。
+            std_w = var_w ** 0.5
+            # 权重范围通常 -1~3,std 0.8 以上意味着仍有大量强弱悬殊边(未收敛)
+            weight_stability = max(0.0, min(1.0, 1.0 - std_w / 0.8))
+        else:
+            weight_stability = 0.0
+
+        # ── 指标 3: 教师分歧率 ─────────────────────────────
+        # shadow(学生副本)与主 SNN(教师)的 disagreement 占比。
+        # 分歧率高 → 学生还没学会教师判断;低 → 学生已吸收教师知识。
+        agree = float(s.get("agreement", 0))
+        dis = float(s.get("disagreement", 0))
+        total_comp = agree + dis
+        if total_comp > 0:
+            teacher_align = 1.0 - (dis / total_comp)
+        else:
+            teacher_align = 0.0  # 无对比样本,视为未对齐
+
+        # ── 指标 4: 固化度 ──────────────────────────────────
+        # EWC 重要性均值:已锁定知识程度(0~10)。均值 ≥2 → 明显固化。
+        ewc_mean = float(snn.stats().get("ewc_mean", 0.0))
+        # 以 2.0 为"充分固化",0.0 为无固化
+        ewc_score = max(0.0, min(1.0, ewc_mean / 2.0))
+
+        # ── 指标 5: 自我一致性(蒙特卡洛多次推理) ────────────
+        # 相同输入下多次推理决策一致 → 自主性稳定。
+        # 用决策日志:最近 N 条同类型信号的决策分布熵。
+        # 熵低 = 决策集中 = 一致;熵高 = 决策分散 = 不稳定。
+        consistency_score = 0.0
+        try:
+            if os.path.exists(self._decision_log_path):
+                from collections import Counter
+                recent_entries = []
+                with open(self._decision_log_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            recent_entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+                recent_entries = recent_entries[-50:]
+                if recent_entries:
+                    dec_counts = Counter(e.get("decision") for e in recent_entries if e.get("decision"))
+                    total_dec = sum(dec_counts.values())
+                    if total_dec > 0:
+                        # 信息熵(归一化到 0~1)
+                        import math
+                        entropy = 0.0
+                        for c in dec_counts.values():
+                            p = c / total_dec
+                            entropy -= p * math.log2(p) if p > 0 else 0
+                        # 3 种决策 → 最大熵 log2(3)≈1.585;归一化
+                        max_entropy = math.log2(max(2, len(dec_counts)))
+                        if max_entropy > 0:
+                            norm_entropy = entropy / max_entropy
+                            consistency_score = max(0.0, min(1.0, 1.0 - norm_entropy))
+        except Exception:
+            consistency_score = 0.0
+
+        # ── 加权合成 ──────────────────────────────────────
+        components = {
+            "explore_converged": round(explore_score, 4),
+            "representation_stable": round(weight_stability, 4),
+            "teacher_aligned": round(teacher_align, 4),
+            "ewc_consolidated": round(ewc_score, 4),
+            "self_consistent": round(consistency_score, 4),
+        }
+        weights = {
+            "explore_converged": 0.15,
+            "representation_stable": 0.20,
+            "teacher_aligned": 0.25,
+            "ewc_consolidated": 0.25,
+            "self_consistent": 0.15,
+        }
+        score = sum(components[k] * weights[k] for k in components)
+
+        # 档位
+        if score < 0.35:
+            stage = "teacher_led"      # 教师主导
+        elif score < 0.65:
+            stage = "joint"            # 联合决策
+        elif score < 0.85:
+            stage = "student_led"      # 学生自主(教师仅介入)
+        else:
+            stage = "autonomous"       # 完全自主
+
+        return {
+            "score": round(score, 4),
+            "stage": stage,
+            "components": components,
+            "weights": weights,
+            "raw": {
+                "exploration_rate": explore,
+                "agreement": agree,
+                "disagreement": dis,
+                "ewc_mean": ewc_mean,
+            },
+        }
+
     def status(self) -> dict:
         """网络状态快照。"""
         # 丰度调控诊断(生产运维 2026-11-24):
@@ -1864,6 +2001,7 @@ class SNNRegion:
             "network": self.snn.stats(),
             "health": self.health(),
             "homeostatic": homeostatic_info,
+            "readiness": self.readiness_score(),
         }
 
     def connection_graph(self) -> dict:

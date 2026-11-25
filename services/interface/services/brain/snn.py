@@ -1755,4 +1755,7 @@ class SNN:
             "eta_minus": self.eta_minus,
             "weight_decay": self.weight_decay,
             "max_weight": self.max_weight,
+            # 固化度:EWC 重要性均值(已有知识被锁定的程度, 0~10)
+            "ewc_mean": (sum(self._ewc_importance.values()) / len(self._ewc_importance)) if self._ewc_importance else 0.0,
+            "ewc_count": len(self._ewc_importance),
         }
