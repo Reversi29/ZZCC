@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os as _os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -419,4 +420,7 @@ def _iso() -> str:
 
 
 # 全局单例
-brain_core = BrainCore()
+brain_core = BrainCore(
+    interval_seconds=int(_os.environ.get("BRAIN_CORE_INTERVAL", "15")),
+    snn_iteration_interval=int(_os.environ.get("BRAIN_SNN_ITERATION_INTERVAL", "60")),
+)
