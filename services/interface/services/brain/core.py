@@ -91,6 +91,7 @@ class BrainCore:
         quiet_threshold_seconds: int = 1800,   # 30 分钟无外部信号 → quiet（记忆巩固）
         rest_threshold_seconds: int = 7200,    # 2 小时无外部信号 → rest（突触修剪）
         endogenous_min_interval: int = 600,    # 内源活动最小间隔（10 分钟）
+        snn_iteration_interval: int = 60,      # 独立 SNN 迭代间隔（秒），0=禁用
     ):
         self.interval_seconds = max(1, interval_seconds)
         self.batch_limit = max(1, batch_limit)
@@ -99,6 +100,9 @@ class BrainCore:
         self.quiet_threshold_seconds = max(60, quiet_threshold_seconds)
         self.rest_threshold_seconds = max(self.quiet_threshold_seconds + 60, rest_threshold_seconds)
         self.endogenous_min_interval = max(60, endogenous_min_interval)
+        # 独立 SNN 迭代参数
+        self.snn_iteration_interval = max(0, snn_iteration_interval)
+        self._last_snn_iterate = 0.0
         self.thalamus = Thalamus()
         self.broker = MemoryBroker()
         self._task: Optional[asyncio.Task] = None
@@ -133,6 +137,7 @@ class BrainCore:
             "batch_limit": self.batch_limit,
             "execute_actions": self.execute_actions,
             "thalamus": self.thalamus.stats(),
+            "snn_iteration_interval": self.snn_iteration_interval,
         }
 
     def stats(self) -> dict:
@@ -146,6 +151,10 @@ class BrainCore:
             "quiet_threshold_seconds": self.quiet_threshold_seconds,
             "rest_threshold_seconds": self.rest_threshold_seconds,
             "min_interval_seconds": self.endogenous_min_interval,
+            "snn_iteration_interval": self.snn_iteration_interval,
+            "snn_iterations": self._stats.get("snn_iterations", 0),
+            "last_snn_iterate_ts": self._stats.get("last_snn_iterate_ts"),
+            "sleep_prune_total": self._stats.get("sleep_prune_total", 0),
         }
         return {
             "ok": True,
@@ -205,6 +214,16 @@ class BrainCore:
                     self._stats["endogenous_idle_seconds"] = endo.get("idle_seconds", 0)
             except Exception as exc:
                 self._stats["last_error"] = f"endogenous: {exc}"
+            # 独立 SNN 迭代：定期驱动 SNN 前向传播（不依赖外部信号到达）
+            try:
+                if self.snn_iteration_interval > 0:
+                    now = time.time()
+                    if now - self._last_snn_iterate >= self.snn_iteration_interval:
+                        iter_res = await self._snn_iterate()
+                        if iter_res.get("ok"):
+                            self._last_snn_iterate = now
+            except Exception as exc:
+                self._stats["last_error"] = f"snn_iterate: {exc}"
             elapsed = time.time() - started
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=max(0.1, self.interval_seconds - elapsed))
@@ -316,6 +335,18 @@ class BrainCore:
         if not actions:
             return {"ok": False, "phase": phase, "idle_seconds": idle_seconds, "skipped": "active_phase"}
 
+        # 第二版：rest 阶段实际执行 SNN 大规模修剪（睡眠突触稳态）
+        # 对应人脑睡眠的集中修剪——清醒时细水长流（_homeostatic_ratio_control），
+        # 睡眠时大规模整理（_homeostatic_prune batch 提高 + 零度回收）
+        sleep_prune_result = None
+        if phase == "rest":
+            try:
+                from services.brain import snn_region as snn_mod
+                sleep_prune_result = snn_mod.snn_region.sleep_prune()
+            except Exception as exc:
+                logger.warning("sleep_prune_error: %s", exc)
+                sleep_prune_result = {"ok": False, "error": str(exc)}
+
         # 记录内源节律状态（不做实际信号入队，避免触发 LLM；动作留第二版）
         self._stats["last_endogenous_ts"] = now
         self._stats["endogenous_count"] = self._stats.get("endogenous_count", 0) + 1
@@ -327,7 +358,26 @@ class BrainCore:
             "idle_seconds": idle_seconds,
             "actions": actions,
             "endogenous_count": self._stats["endogenous_count"],
+            "sleep_prune": sleep_prune_result,
         }
+
+    async def _snn_iterate(self) -> dict:
+        """独立 SNN 迭代：定期驱动 SNN 前向传播（不依赖外部信号到达）。
+
+        解决“SNN 迭代周期完全依赖信号到达”的问题：
+        - BrainCore 每 snn_iteration_interval 秒主动驱动一次
+        - 用最近决策上下文/内源脉冲保持 SNN 活性（放电/探索/EWC 更新）
+        - 推理语义：不改变权重（同 reason()）
+        """
+        try:
+            from services.brain import snn_region as snn_mod
+            result = snn_mod.snn_region.snn_iterate()
+            self._stats["snn_iterations"] = self._stats.get("snn_iterations", 0) + 1
+            self._stats["last_snn_iterate_ts"] = time.time()
+            return result
+        except Exception as exc:
+            logger.warning("snn_iterate_error: %s", exc)
+            return {"ok": False, "error": str(exc)}
 
     def _make_endogenous_signal(self, sig_type: str, urgency: int) -> dict:
         """构造内源信号 dict（source=endogenous 标记）。"""

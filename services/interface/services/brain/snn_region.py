@@ -1740,6 +1740,119 @@ class SNNRegion:
         self._stats["dyn_grown_total"] = self._stats.get("dyn_grown_total", 0) + cur["dyn_grown"]
         self._stats.update(cur)
 
+    def sleep_prune(self) -> dict:
+        """睡眠大规模修剪：对应人脑睡眠突触稳态（SHY）的集中修剪。
+
+        与清醒时的 _homeostatic_prune（细水长流、batch 小）不同：
+        - 全探索区（40-219）统一修剪，batch 大幅提高
+        - 按权重升序剪（最弱先剪），保护 EWC 高重要性/高权重边
+        - 核心区（<40）与概念区（220+）冻结不剪
+
+        由 BrainCore _endogenous_tick 的 rest 阶段触发（长时间无外部信号）。
+        """
+        snn = self.snn
+        if not snn.enable_sleep_prune:
+            return {"ok": False, "skipped": "sleep_prune_disabled", "pruned": 0}
+
+        # 全探索区统一修剪（40-219），batch 大幅提高
+        saved_batch = snn.homeostatic_prune_batch
+        saved_interval = snn.homeostatic_check_interval
+        snn.homeostatic_prune_batch = max(saved_batch, 20)  # 睡眠集中修剪 batch 提高
+        try:
+            pruned_total = 0
+            regions = snn._get_homeostatic_regions()
+            # 若默认只覆盖 40-99/100-195，扩展到 40-219（探索区全覆盖）
+            covered = set()
+            for start, end, _target in regions:
+                region_neurons = [nid for nid in range(start, end)
+                                  if nid < snn.num_neurons and nid not in snn._recycled]
+                if not region_neurons:
+                    continue
+                # 拓扑聚类细分（复用现有逻辑）
+                clusters = snn._cluster_by_topology(region_neurons)
+                for cluster in clusters:
+                    if not cluster:
+                        continue
+                    # 直接数 cluster 内出边连接数（无 _count_edges_for 辅助）
+                    before = sum(len(snn.out_edges.get(src, {})) for src in cluster)
+                    snn._homeostatic_prune(cluster, start, end, snn.homeostatic_target_ratio)
+                    after = sum(len(snn.out_edges.get(src, {})) for src in cluster)
+                    pruned_total += max(0, before - after)
+                    covered.update(cluster)
+            # 零度节点回收（睡眠也做）
+            if snn.homeostatic_zero_recycle:
+                for start, end, _t in regions:
+                    region_neurons = [nid for nid in range(start, end)
+                                      if nid < snn.num_neurons and nid not in snn._recycled]
+                    if region_neurons:
+                        snn._recycle_zero_neurons(region_neurons, snn.time)
+            self._stats["sleep_prune_count"] = self._stats.get("sleep_prune_count", 0) + 1
+            self._stats["sleep_prune_total"] = self._stats.get("sleep_prune_total", 0) + pruned_total
+            self._auto_save()
+            return {
+                "ok": True,
+                "pruned": pruned_total,
+                "covered": len(covered),
+                "total": snn.stats()["num_edges"],
+            }
+        finally:
+            snn.homeostatic_prune_batch = saved_batch
+
+    def snn_iterate(self) -> dict:
+        """独立 SNN 迭代：定期驱动一次前向传播（无外部反馈）。
+
+        解决"迭代周期完全依赖信号到达"的问题：
+        - 用最近一次推理的上下文/工作记忆驱动
+        - 无外部信号时用内源脉冲（保持 SNN 活性：放电/探索/EWC 更新）
+        - 不改变权重（无反馈，enable_hebbian=False，同推理语义）
+
+        由 BrainCore 独立迭代调度触发（可配置 snn_iteration_interval）。
+        """
+        snn = self.snn
+        # 保留学习状态但推理语义：不改变权重
+        saved_hebbian = snn.enable_hebbian
+        saved_structural = snn.enable_structural_plasticity
+        snn.enable_hebbian = False
+        snn.enable_structural_plasticity = False
+        try:
+            # 内源脉冲：用最近一次决策的上下文作为弱输入，保持网络活性
+            # 无外部信号时用默认脉冲（探索 + EWC 更新仍发生）
+            last_ctx = self._stats.get("last_decision_context", {}) or {}
+            # 构造内源信号（source=endogenous）
+            import uuid
+            sig = NeuralSignal(
+                id=str(uuid.uuid4()),
+                type="endogenous_tick",
+                payload={"endogenous": True, **last_ctx},
+                source="endogenous",
+                urgency=30,
+                context={"endogenous": True},
+            )
+            input_neurons = self._encode_signal(sig)
+            strength = 1.5  # 内源弱脉冲
+            cont_weights = self._continuous_weights(sig)
+            outputs, boundary_detected, window_fires = snn.step_with_learning(
+                input_neurons, strength, weights=cont_weights or None,
+            )
+            active = [n.id for n in snn.neurons
+                      if n.last_fire_time >= 0 and (snn.time - n.last_fire_time) <= 10]
+            result = self._decode_output(outputs, active, window_fires=window_fires)
+            self._stats["snn_iterations"] = self._stats.get("snn_iterations", 0) + 1
+            self._stats["last_snn_iterate_ts"] = time.time()
+            return {
+                "ok": True,
+                "decision": result.decision if result else None,
+                "confidence": result.confidence if result else 0.0,
+                "boundary_detected": boundary_detected,
+                "exploration_rate": snn._exploration_rate,
+            }
+        except Exception as e:
+            logger.warning("snn_iterate_error: %s", e)
+            return {"ok": False, "error": str(e)}
+        finally:
+            snn.enable_hebbian = saved_hebbian
+            snn.enable_structural_plasticity = saved_structural
+
     def status(self) -> dict:
         """网络状态快照。"""
         # 丰度调控诊断(生产运维 2026-11-24):

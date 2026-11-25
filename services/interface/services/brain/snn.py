@@ -953,6 +953,11 @@ class SNN:
         self.homeostatic_prune_threshold: float = 0.3  # 低于此权重才可修剪(保护中等以上连接)
         self.homeostatic_regions: list = []        # 自定义区域 [(start,end,target)],空用默认
         self._last_homeostatic_check: int = 0      # 上次检测时间
+        # 睡眠大规模修剪（独立门控，默认跟随丰度调控）
+        # 对应人脑睡眠突触稳态（SHY）——清醒细水长流，睡眠集中修剪
+        self.enable_sleep_prune: bool = (
+            _os.environ.get("BRAIN_SLEEP_PRUNE", "0") == "1"
+        )
 
         # ── 丰度调控 v3: 区间丰度 + 活跃度缩放 + 距离聚类 + 零度回收 ──
         # 用户 2026-11-24 23:00 方案确认:
@@ -1336,6 +1341,7 @@ class SNN:
             "concept_freeze_start": self.concept_freeze_start,
             # 丰度调控配置(持久化)
             "enable_homeostatic_ratio": self.enable_homeostatic_ratio,
+            "enable_sleep_prune": self.enable_sleep_prune,
             "homeostatic_target_ratio": self.homeostatic_target_ratio,
             "homeostatic_tolerance": self.homeostatic_tolerance,
             "homeostatic_check_interval": self.homeostatic_check_interval,
@@ -1387,6 +1393,8 @@ class SNN:
         # 丰度调控配置(向后兼容:旧文件无这些键用默认)
         net.enable_homeostatic_ratio = data.get(
             "enable_homeostatic_ratio", net.enable_homeostatic_ratio)
+        net.enable_sleep_prune = data.get(
+            "enable_sleep_prune", net.enable_sleep_prune)
         net.homeostatic_target_ratio = data.get(
             "homeostatic_target_ratio", net.homeostatic_target_ratio)
         net.homeostatic_tolerance = data.get(
