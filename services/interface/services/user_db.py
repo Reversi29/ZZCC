@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS chat_user (
     last_login_at TIMESTAMPTZ,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    role VARCHAR(16) NOT NULL DEFAULT 'user',
     sync_status VARCHAR(16) NOT NULL DEFAULT 'local',
     client_uid VARCHAR(64) UNIQUE
 )
@@ -130,6 +131,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 _CREATE_INDEXES = [
+    # role 列 —— 权限体系基础(user/admin)。IF NOT EXISTS 保证幂等,
+    # 已存在时报错被下方 _ensure_role_column 忽略。
+    "ALTER TABLE chat_user ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user'",
+    "CREATE INDEX IF NOT EXISTS idx_chat_user_role ON chat_user(role)",
     "CREATE INDEX IF NOT EXISTS idx_chat_user_client_uid ON chat_user(client_uid)",
     "CREATE INDEX IF NOT EXISTS idx_chat_user_email ON chat_user(email)",
     "CREATE INDEX IF NOT EXISTS idx_chat_user_phone ON chat_user(phone)",

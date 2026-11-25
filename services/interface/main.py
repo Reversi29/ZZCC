@@ -230,7 +230,7 @@ def create_app() -> FastAPI:
     setup_middleware(app)
 
     # Import routers (they import from dependencies — no circular dependency)
-    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, plugin_marketplace as plugin_marketplace_router, brain as brain_router, feed as feed_router
+    from routers import spaces, tags, edge_types, edges, vertices, query, deploy, import_csv, documents, chat, chat_user, auth, plugins as plugins_router, plugin_marketplace as plugin_marketplace_router, brain as brain_router, feed as feed_router, admin_users as admin_users_router
 
     v1 = "/api/v1"
     app.include_router(spaces.router, prefix=v1)
@@ -250,6 +250,10 @@ def create_app() -> FastAPI:
     app.include_router(plugin_marketplace_router.router, prefix=v1)
     app.include_router(brain_router.router, prefix=v1)
     app.include_router(feed_router.router, prefix=v1)
+    # 管理后台用户管理接口。走 X-Admin-Key 密钥鉴权(而非用户 Bearer),
+    # 因为 /admin 静态页拿不到也不该拿用户 token。
+    # 同样必须先于 SPA fallback 注册。
+    app.include_router(admin_users_router.router, prefix=v1)
 
     # --- Health check (must register before SPA fallback) ---
     @app.get("/health")

@@ -187,6 +187,8 @@ class ChatUserUpdate(BaseModel):
     phone: Optional[str] = None
     is_active: Optional[bool] = None
     is_deleted: Optional[bool] = None
+    # 角色(user/admin)。仅 admin 可修改(路由层校验); 普通用户提交 role 将被忽略。
+    role: Optional[str] = None
 
 
 class ChatUserRead(BaseModel):
@@ -201,6 +203,7 @@ class ChatUserRead(BaseModel):
     updated_at: Optional[str] = None
     last_login_at: Optional[str] = None
     is_active: bool = True
+    role: str = "user"
     sync_status: str = "local"
     client_uid: Optional[str] = None
 

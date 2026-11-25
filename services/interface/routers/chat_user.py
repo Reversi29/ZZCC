@@ -40,6 +40,16 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat/users", tags=["chat-users"])
 
 
+def _is_admin(token_user: dict) -> bool:
+    """判定 token 中的 roles 是否含 admin。
+
+    注意: 绝不能用 `'admin' in roles` 做子串判断 —— 普通用户 roles 为 'user',
+    `'admin' in 'user'` 为 True, 会让所有用户都通过 admin 校验(历史 bug)。
+    roles 支持逗号分隔多值, 故按 token 精确比对。
+    """
+    return "admin" in {r.strip() for r in str(token_user.get("roles", "user")).split(",") if r.strip()}
+
+
 def _user_to_read(row: dict) -> dict:
     """Convert DB row → ChatUserRead dict."""
     if not row:
@@ -56,6 +66,7 @@ def _user_to_read(row: dict) -> dict:
         "updated_at": row["updated_at"].isoformat() if hasattr(row.get("updated_at"), "isoformat") else row.get("updated_at"),
         "last_login_at": row["last_login_at"].isoformat() if hasattr(row.get("last_login_at"), "isoformat") else row.get("last_login_at"),
         "is_active": row.get("is_active", True),
+        "role": str(row.get("role") or "user"),
         "sync_status": row.get("sync_status", "local"),
         "client_uid": row.get("client_uid"),
     }
@@ -105,10 +116,17 @@ async def update_user(
     user=Depends(get_current_user_dep),
 ):
     """Update profile. Self can edit own profile; admin can edit any."""
-    if str(user["id"]) != user_id and "admin" not in str(user.get("roles", "user")):
+    if str(user["id"]) != user_id and not _is_admin(user):
         raise HTTPException(status_code=403, detail="只能修改自己的资料")
 
     data = patch.model_dump(exclude_none=True)
+    # role 是特权字段: 只有 admin 能改。非 admin 提交一律剔除,
+    # 否则任何用户都能把自己抬成 admin。
+    is_self = str(user["id"]) == user_id
+    if "role" in data and not is_self and not _is_admin(user):
+        data.pop("role", None)
+    elif "role" in data:
+        data["role"] = "admin" if str(data["role"]).strip().lower() == "admin" else "user"
     if not data:
         raise HTTPException(status_code=400, detail="无更新内容")
     # Remove is_deleted from user-editable fields
@@ -134,7 +152,7 @@ async def delete_user(
     user=Depends(get_current_user_dep),
 ):
     """Soft-delete user. force=True also nullifies password."""
-    if str(user["id"]) != user_id and "admin" not in str(user.get("roles", "user")):
+    if str(user["id"]) != user_id and not _is_admin(user):
         raise HTTPException(status_code=403, detail="只能删除自己的账号")
 
     if force:

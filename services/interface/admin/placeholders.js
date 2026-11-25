@@ -16,10 +16,8 @@ registerPage('content', {
   title: '内容管理',
   render: (c) => renderOpPlaceholder(c, '内容管理', '广场内容 CRUD / 审核 / 下架，待运营需求明确后开放'),
 });
-registerPage('users', {
-  title: '用户管理',
-  render: (c) => renderOpPlaceholder(c, '用户管理', '用户列表 / 封禁 / 角色分配，待运营需求明确后开放'),
-});
+// 注: 'users' 占位注册已移除 —— 已由 users_page.js 实现真实页面
+// (权限 user/admin + 封禁 is_active), 重复注册会在这里与 registerPage 冲突。
 registerPage('interactions', {
   title: '互动监控',
   render: (c) => renderOpPlaceholder(c, '互动监控', '点赞 / 评论 / 分享 / 观看统计，待运营需求明确后开放'),

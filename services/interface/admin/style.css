@@ -420,3 +420,37 @@ table.topo-table tr:hover td { background: rgba(88, 166, 255, 0.04); }
 .graph-canvas-wrap { max-height: 860px; overflow: auto; }
 .graph-canvas-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
 .graph-canvas-wrap::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+
+/* ═══ 用户管理页 ═══ */
+.u-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.u-toolbar .input { flex: 0 0 280px; }
+.u-pager { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin-top: 14px; }
+.u-pager .pager-info { font-size: 12px; color: var(--text-dim); }
+
+.u-keybar { margin-bottom: 14px; }
+.u-keyhint { font-size: 12.5px; line-height: 1.7; color: var(--text-dim); margin-bottom: 10px; }
+.u-keyhint code { background: rgba(88, 166, 255, 0.12); color: var(--accent); padding: 1px 5px; border-radius: 3px; font-size: 11.5px; }
+.u-keyrow { display: flex; gap: 8px; max-width: 420px; }
+.u-keyrow .input { flex: 1; }
+
+.user-notice { min-height: 26px; font-size: 13px; margin-bottom: 6px; opacity: 0; transition: opacity 0.2s; }
+.user-notice.show { opacity: 1; }
+.user-notice.ok { color: var(--green); }
+.user-notice.err { color: var(--red); }
+
+.u-table th { white-space: nowrap; }
+.u-table td { vertical-align: middle; }
+.u-table .u-name { font-weight: 500; color: var(--text); }
+.u-table .u-sub { font-size: 11.5px; color: var(--text-dim); }
+.u-table .u-ops { white-space: nowrap; }
+.u-table .u-ops .btn { margin-left: 6px; }
+
+.btn-sm { padding: 3px 9px; font-size: 12px; border-radius: 5px; }
+.input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #30363d; border-radius: 6px;
+  color: var(--text); padding: 6px 10px; font-size: 13px; outline: none;
+}
+.input:focus { border-color: var(--accent); }
+.panel-body.no-pad { padding: 0 !important; }
+.dim { color: var(--text-dim); }

@@ -185,7 +185,7 @@ async def login(body: ChatUserLogin):
     uid = str(row["id"])
     log_audit(actor=body.username, action="login", resource=f"chat_user:{uid}")
     return TokenResponse(
-        access_token=create_access_token(uid, body.username, roles="user"),
+        access_token=create_access_token(uid, body.username, roles=str(row.get("role") or "user")),
         refresh_token="",
         expires_in=_TOKEN_TTL_SEC,
         user_id=uid,
