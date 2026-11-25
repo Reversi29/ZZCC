@@ -947,8 +947,9 @@ class SNN:
     # ── 持续学习循环 ──────────────────────────────────────
 
     # EWC (Elastic Weight Consolidation) 参数
-    EWC_ALPHA = 100.0       # 重要性权重系数
-    EWC_IMPORTANCE_DECAY = 0.99  # 重要性衰减(防止全部饱和)
+    # 类属性为默认值;__init__ 提升为实例属性并持久化(可被 readiness 自适应覆盖)。
+    EWC_ALPHA = 100.0       # 重要性权重系数(越大越保护)
+    EWC_IMPORTANCE_DECAY = 0.99  # 重要性衰减(防全部饱和)
 
     # 探索参数(混乱权利)
     EXPLORATION_BASE_RATE = 0.1   # 基础探索率 10%
@@ -1056,6 +1057,26 @@ class SNN:
 
         # ── 持续学习状态 ──
         self._ewc_importance: dict[tuple[int, int], float] = defaultdict(float)
+
+        # EWC 参数提升为实例属性(原为类属性,写死;现可自适应+持久化)
+        self.ewc_alpha: float = float(self.EWC_ALPHA)
+        self.ewc_importance_decay: float = float(self.EWC_IMPORTANCE_DECAY)
+
+        # ── EWC 固化参数随 readiness 自适应 ──────────────────
+        # 学生未成熟(teacher_led) → 强固化: 保护教师蒸馏成果, 遗忘慢(累积快)
+        # 学生成熟(autonomous)   → 弱固化: 保留可塑, 遗忘快, 允许持续自我更新
+        # 类比人脑: 学新知时强巩固防遗忘, 精通后灵活应用。
+        # 默认关闭: 不改变现有行为, 显式启用后由 readiness_score 驱动。
+        self.ewc_adaptive: bool = (
+            _os.environ.get("BRAIN_EWC_ADAPTIVE", "0") == "1"
+        )
+        self.ewc_alpha_hi: float = 100.0  # 未成熟端(强保护)
+        self.ewc_alpha_lo: float = 10.0   # 成熟端(弱保护, 保可塑)
+        self.ewc_decay_slow: float = 0.998  # 未成熟端遗忘慢(稳态重要性 ~5)
+        self.ewc_decay_fast: float = 0.990  # 成熟端遗忘快(稳态重要性 ~1)
+        # 稳态上界封顶, 防固化指标被过度堆高(避免学生"刷指标")
+        self.ewc_importance_cap: float = 10.0
+        self._last_ewc_adapt: float = 0.0  # 上次生效的 readiness
         self._exploration_rate: float = self.EXPLORATION_BASE_RATE
         self._consecutive_correct: int = 0
         self._total_decisions: int = 0
@@ -1096,7 +1117,7 @@ class SNN:
         # (EWC_IMPORTANCE_DECAY 此前定义了但从未调用,是死代码)
         if self._ewc_importance:
             for key in list(self._ewc_importance.keys()):
-                v = self._ewc_importance[key] * self.EWC_IMPORTANCE_DECAY
+                v = self._ewc_importance[key] * self.ewc_importance_decay
                 if v < 0.001:   # 低于阈值清理,防止稀疏表无限膨胀
                     del self._ewc_importance[key]
                 else:
@@ -1106,9 +1127,29 @@ class SNN:
             for tgt, conn in self.out_edges.get(n_id, {}).items():
                 key = (n_id, tgt)
                 self._ewc_importance[key] = min(
-                    10.0,  # 最大重要性
+                    self.ewc_importance_cap,  # 上限随固化度自适应
                     self._ewc_importance[key] + 0.01
                 )
+
+    def adapt_ewc_by_readiness(self, readiness_score: float) -> dict:
+        """按自主接管 readiness 自适应 EWC 固化参数。
+
+        readiness 高(成熟) → 弱固化: 强保护弱, 遗忘快, 保留可塑
+        readiness 低(未成熟) → 强固化: 保护强, 遗忘慢, 锁住教师蒸馏成果
+
+        调用方(snn_region)在拿到 readiness_score 后调本方法, 返回新参数。
+        """
+        score = max(0.0, min(1.0, float(readiness_score)))
+        self.ewc_alpha = self.ewc_alpha_hi + (self.ewc_alpha_lo - self.ewc_alpha_hi) * score
+        self.ewc_importance_decay = (
+            self.ewc_decay_slow + (self.ewc_decay_fast - self.ewc_decay_slow) * score
+        )
+        self._last_ewc_adapt = score
+        return {
+            "ewc_alpha": round(self.ewc_alpha, 3),
+            "ewc_importance_decay": round(self.ewc_importance_decay, 5),
+            "readiness_score": round(score, 4),
+        }
 
     def get_ewc_importance(self) -> dict:
         """导出 EWC 重要性(持久化用)。key 为 "src->tgt" 字符串。"""
@@ -1132,7 +1173,7 @@ class SNN:
         重要性 10 → 乘数 0.1(强烈保护)
         """
         importance = self._ewc_importance.get((src, tgt), 0.0)
-        return 1.0 / (1.0 + self.EWC_ALPHA * importance)
+        return 1.0 / (1.0 + self.ewc_alpha * importance)
 
     # ── 探索机制(混乱权利)────────────────────────────────
 
@@ -1441,6 +1482,15 @@ class SNN:
             "neurons": neurons,
             "edges": edges,
             "ewc_importance": self.get_ewc_importance(),
+            # EWC 固化参数(随 readiness 自适应, 持久化后跨重启稳定)
+            "ewc_alpha": self.ewc_alpha,
+            "ewc_importance_decay": self.ewc_importance_decay,
+            "ewc_importance_cap": self.ewc_importance_cap,
+            "ewc_adaptive": self.ewc_adaptive,
+            "ewc_alpha_hi": self.ewc_alpha_hi,
+            "ewc_alpha_lo": self.ewc_alpha_lo,
+            "ewc_decay_slow": self.ewc_decay_slow,
+            "ewc_decay_fast": self.ewc_decay_fast,
         }
 
     @classmethod
@@ -1546,6 +1596,17 @@ class SNN:
         # 恢复 EWC 重要性（此前未持久化，重启/恢复即清零）
         if "ewc_importance" in data:
             net.load_ewc_importance(data.get("ewc_importance", {}))
+        # 恢复 EWC 固化参数(向后兼容: 旧文件无这些键用默认)
+        net.ewc_alpha = float(data.get("ewc_alpha", net.ewc_alpha))
+        net.ewc_importance_decay = float(
+            data.get("ewc_importance_decay", net.ewc_importance_decay))
+        net.ewc_importance_cap = float(
+            data.get("ewc_importance_cap", net.ewc_importance_cap))
+        net.ewc_adaptive = bool(data.get("ewc_adaptive", net.ewc_adaptive))
+        net.ewc_alpha_hi = float(data.get("ewc_alpha_hi", net.ewc_alpha_hi))
+        net.ewc_alpha_lo = float(data.get("ewc_alpha_lo", net.ewc_alpha_lo))
+        net.ewc_decay_slow = float(data.get("ewc_decay_slow", net.ewc_decay_slow))
+        net.ewc_decay_fast = float(data.get("ewc_decay_fast", net.ewc_decay_fast))
         return net
 
     def save(self, path: str) -> bool:

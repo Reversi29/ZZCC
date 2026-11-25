@@ -1336,6 +1336,18 @@ class SNNRegion:
         _saved_structural = self.snn.enable_structural_plasticity
         self.snn.enable_structural_plasticity = True
 
+        # ── EWC 固化参数随 readiness 自适应 ──────────────
+        # 未成熟(teacher_led) → 强固化: 保护教师蒸馏成果, 遗忘慢
+        # 成熟(autonomous)   → 弱固化: 保留可塑, 遗忘快
+        # 只读 readiness_score, 不改行为(只调固化参数); 失败不阻断训练。
+        if getattr(self.snn, "ewc_adaptive", False):
+            try:
+                rd = self.readiness_score()
+                adapted = self.snn.adapt_ewc_by_readiness(rd["score"])
+                self._stats["ewc_adapted"] = adapted
+            except Exception:
+                self._stats["ewc_adapted"] = {"error": "readiness_unavailable"}
+
         self._stats["training_count"] += 1
         self._stats["micro_learn_steps"] += 1
 
