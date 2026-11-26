@@ -302,6 +302,12 @@ class SNNRegion:
         # 概念区冻结对齐: 概念预训练种子(220+)不参与结构可塑性演化
         self.snn.concept_freeze_start = _CONCEPT_NEURON_BASE
 
+        # ── 发育驱动器(增殖→突触探索→自发分簇)──
+        # 用户 2026-11-26: 增殖分化的网络骨架需形成。
+        # DevelopmentDriver 包装 SNN，只在动态区(40-199)生长，核心区不动。
+        from services.brain.development import DevelopmentDriver
+        self.dev_driver = DevelopmentDriver(self.snn)
+
         self._stats = {
             "reason_calls": 0,
             "reason_hits": 0,
@@ -1919,6 +1925,34 @@ class SNNRegion:
             snn.enable_structural_plasticity = saved_structural
             snn.eta_plus = saved_eta_plus
             snn.eta_minus = saved_eta_minus
+
+    def development_tick(self) -> dict:
+        """发育循环：增殖→突触探索→自发分簇→修剪（发育式结构形成）。
+
+        用户 2026-11-26 洞察：人脑先增殖再分化、突触从无到有探索；
+        当前 SNN 增殖分化骨架未形成。
+
+        由 BrainCore _endogenous_tick 的 rest 阶段触发（睡眠期发育），
+        或手动调用 /brain/dev/tick。
+
+        与 sleep_prune（睡眠修剪）互补：
+        - sleep_prune: 修剪已有边（突触稳态）
+        - development_tick: 增殖+探索新边+分化（结构形成）
+
+        安全：只在动态区(40-199)生长，核心区(0-39)完全不动。
+        """
+        try:
+            result = self.dev_driver.run_development_cycle(time=self.snn.time)
+            self._stats["development_ticks"] = self._stats.get("development_ticks", 0) + 1
+            self._auto_save()
+            return {"ok": True, **result}
+        except Exception as exc:
+            logger.warning("development_tick_error: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def development_status(self) -> dict:
+        """发育状态（/brain/dev/status）。"""
+        return self.dev_driver.status()
 
     def readiness_score(self) -> dict:
         """自主接管 readiness 评分(0~1)。

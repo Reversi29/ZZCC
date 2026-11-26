@@ -1220,6 +1220,53 @@ async def snn_connections():
     return {"ok": True, "count": len(connections), "connections": connections}
 
 
+@router.get("/dev/status")
+async def dev_status():
+    """发育状态（增殖/突触探索/自发分簇可观测）。
+
+    用户 2026-11-26 洞察：增殖分化的网络骨架形成。
+    返回阶段/动态区神经元/内部边/分簇统计。
+    """
+    try:
+        return {"ok": True, **snn_mod.snn_region.development_status()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/dev/tick")
+async def dev_tick():
+    """手动触发一次发育循环（增殖→突触探索→自发分簇→修剪）。
+
+    安全：只在动态区(40-199)生长，核心区(0-39)不动，
+    不破坏现有 12/12 决策（test_eval_preserved 已验证）。
+    """
+    try:
+        result = snn_mod.snn_region.development_tick()
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/dev/neurons")
+async def dev_neurons():
+    """发育区神经元列表（含类型/阈值/放电）。"""
+    net = snn_mod.snn_region.snn
+    neurons = []
+    for nid in range(40, min(220, net.num_neurons)):
+        if nid >= len(net.neurons):
+            continue
+        n = net.neurons[nid]
+        if n.neuron_type.value == "unused":
+            continue
+        neurons.append({
+            "id": nid, "type": n.neuron_type.value,
+            "threshold": n.threshold, "fires": n.fire_count,
+            "in_deg": len(net.in_edges.get(nid, {})),
+            "out_deg": len(net.out_edges.get(nid, {})),
+        })
+    return {"ok": True, "count": len(neurons), "neurons": neurons}
+
+
 # ─────────────────────────────────────────────────────────────
 # 图谱布局 API — 供前端调用，返回 world 坐标
 # 传入 nodes/links，服务端用 networkx 计算布局，返回 {id:[x,y]}

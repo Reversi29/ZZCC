@@ -89,6 +89,21 @@ function drawSnn(container, status, graph, decisions) {
       </div>
     </div>
 
+    <!-- 发育状态面板（增殖→突触探索→自发分簇，用户 2026-11-26） -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>发育状态</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="dev-stage" class="tag tag-purple">加载中</span>
+          <button class="btn btn-sm" id="dev-tick-btn" onclick="runDevTick()">触发发育</button>
+          <button class="btn btn-sm" onclick="refreshDevPanel()">刷新</button>
+        </div>
+      </div>
+      <div class="panel-body" id="dev-panel-body">
+        <div class="loading">发育状态加载中...</div>
+      </div>
+    </div>
+
     <!-- SNN 拓扑可视化 -->
     <div class="panel">
       <div class="panel-title">
@@ -460,6 +475,54 @@ function drawDecisionChart(decs) {
       areaStyle: { color: 'rgba(88, 166, 255, 0.1)' },
     }],
   });
+}
+
+// ── 发育面板（增殖→突触探索→自发分簇）──
+async function refreshDevPanel() {
+  const body = document.getElementById('dev-panel-body');
+  const stageEl = document.getElementById('dev-stage');
+  if (!body) return;
+  body.innerHTML = '<div class="loading">加载中...</div>';
+  try {
+    const dev = await apiGet('/brain/dev/status');
+    const stageMap = { embryo: '胚胎', proliferating: '增殖', exploring: '探索', differentiated: '分化' };
+    if (stageEl) {
+      stageEl.textContent = stageMap[dev.stage] || dev.stage;
+    }
+    const clusters = (dev.clusters || []).map(c => c.length);
+    body.innerHTML = `
+      <div class="grid" style="margin-bottom:8px">
+        <div class="card"><div class="card-label">发育阶段</div><div class="card-value sm">${stageMap[dev.stage] || dev.stage}</div></div>
+        <div class="card"><div class="card-label">动态区神经元</div><div class="card-value">${dev.dev_neurons ?? '-'}</div></div>
+        <div class="card"><div class="card-label">骨架边</div><div class="card-value ${(dev.dev_edges||0) > 0 ? 'green' : 'yellow'}">${dev.dev_edges ?? 0}</div></div>
+        <div class="card"><div class="card-label">自发分簇</div><div class="card-value">${clusters.length || '-'}</div></div>
+        <div class="card"><div class="card-label">探索累计</div><div class="card-value">${dev.explored_edges ?? 0}</div></div>
+        <div class="card"><div class="card-label">修剪累计</div><div class="card-value">${dev.pruned_edges ?? 0}</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+        增殖 ${dev.proliferated ?? 0} 神经元 · 分簇大小: ${clusters.length ? clusters.join(', ') : '未分簇'}
+      </div>
+      ${(dev.dev_edges||0) > 0
+        ? '<div style="font-size:12px;color:var(--green)">✅ 骨架已形成：动态区内部边 > 0（增殖分化的网络骨架）</div>'
+        : '<div style="font-size:12px;color:var(--yellow)">⚠️ 骨架未形成：动态区内部边 = 0（增殖了但没探索连接）</div>'}
+    `;
+  } catch (e) {
+    body.innerHTML = `<div class="error-box">发育状态加载失败：${e.message}</div>`;
+  }
+}
+
+async function runDevTick() {
+  const btn = document.getElementById('dev-tick-btn');
+  const body = document.getElementById('dev-panel-body');
+  if (btn) { btn.disabled = true; btn.textContent = '发育中...'; }
+  try {
+    await apiPost('/brain/dev/tick', {});
+    await refreshDevPanel();
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="error-box">发育触发失败：${e.message}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '触发发育'; }
+  }
 }
 
 // 注册页面

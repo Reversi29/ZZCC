@@ -93,6 +93,7 @@ class BrainCore:
         rest_threshold_seconds: int = 7200,    # 2 小时无外部信号 → rest（突触修剪）
         endogenous_min_interval: int = 600,    # 内源活动最小间隔（10 分钟）
         snn_iteration_interval: int = 60,      # 独立 SNN 迭代间隔（秒），0=禁用
+        development_interval: int = 0,          # 发育循环间隔（秒），0=禁用（保守默认）
     ):
         self.interval_seconds = max(1, interval_seconds)
         self.batch_limit = max(1, batch_limit)
@@ -104,6 +105,9 @@ class BrainCore:
         # 独立 SNN 迭代参数
         self.snn_iteration_interval = max(0, snn_iteration_interval)
         self._last_snn_iterate = 0.0
+        # 发育循环参数（用户 2026-11-26: 增殖分化骨架形成）
+        self.development_interval = max(0, development_interval)
+        self._last_development = 0.0
         self.thalamus = Thalamus()
         self.broker = MemoryBroker()
         self._task: Optional[asyncio.Task] = None
@@ -225,6 +229,17 @@ class BrainCore:
                             self._last_snn_iterate = now
             except Exception as exc:
                 self._stats["last_error"] = f"snn_iterate: {exc}"
+            # 独立发育循环：增殖→突触探索→自发分簇（用户 2026-11-26）
+            # 保守默认禁用（development_interval=0），启用后定期驱动发育。
+            try:
+                if self.development_interval > 0:
+                    now = time.time()
+                    if now - self._last_development >= self.development_interval:
+                        dev_res = await self._development_tick()
+                        if dev_res.get("ok"):
+                            self._last_development = now
+            except Exception as exc:
+                self._stats["last_error"] = f"development: {exc}"
             elapsed = time.time() - started
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=max(0.1, self.interval_seconds - elapsed))
@@ -340,6 +355,7 @@ class BrainCore:
         # 对应人脑睡眠的集中修剪——清醒时细水长流（_homeostatic_ratio_control），
         # 睡眠时大规模整理（_homeostatic_prune batch 提高 + 零度回收）
         sleep_prune_result = None
+        development_result = None
         if phase == "rest":
             try:
                 from services.brain import snn_region as snn_mod
@@ -347,6 +363,14 @@ class BrainCore:
             except Exception as exc:
                 logger.warning("sleep_prune_error: %s", exc)
                 sleep_prune_result = {"ok": False, "error": str(exc)}
+            # 睡眠期发育：增殖→突触探索→自发分簇（人脑睡眠发育对应）
+            # 保守默认：仅当 development_interval>0 启用。
+            if self.development_interval > 0:
+                try:
+                    development_result = snn_mod.snn_region.development_tick()
+                except Exception as exc:
+                    logger.warning("development_tick_error: %s", exc)
+                    development_result = {"ok": False, "error": str(exc)}
 
         # 记录内源节律状态（不做实际信号入队，避免触发 LLM；动作留第二版）
         self._stats["last_endogenous_ts"] = now
@@ -360,6 +384,7 @@ class BrainCore:
             "actions": actions,
             "endogenous_count": self._stats["endogenous_count"],
             "sleep_prune": sleep_prune_result,
+            "development": development_result,
         }
 
     async def _snn_iterate(self) -> dict:
@@ -378,6 +403,24 @@ class BrainCore:
             return result
         except Exception as exc:
             logger.warning("snn_iterate_error: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    async def _development_tick(self) -> dict:
+        """独立发育循环：增殖→突触探索→自发分簇（发育式结构形成）。
+
+        用户 2026-11-26 洞察：人脑先增殖再分化、突触从无到有探索。
+        定期驱动发育（development_interval 秒），仅在动态区生长，
+        核心区不动，不破坏现有 12/12 决策。
+        """
+        try:
+            from services.brain import snn_region as snn_mod
+            result = snn_mod.snn_region.development_tick()
+            self._stats["development_ticks"] = self._stats.get("development_ticks", 0) + 1
+            self._stats["last_development_ts"] = time.time()
+            self._stats["last_development"] = result
+            return result
+        except Exception as exc:
+            logger.warning("development_tick_error: %s", exc)
             return {"ok": False, "error": str(exc)}
 
     def _make_endogenous_signal(self, sig_type: str, urgency: int) -> dict:
@@ -423,4 +466,5 @@ def _iso() -> str:
 brain_core = BrainCore(
     interval_seconds=int(_os.environ.get("BRAIN_CORE_INTERVAL", "15")),
     snn_iteration_interval=int(_os.environ.get("BRAIN_SNN_ITERATION_INTERVAL", "60")),
+    development_interval=int(_os.environ.get("BRAIN_DEVELOPMENT_INTERVAL", "0")),
 )
