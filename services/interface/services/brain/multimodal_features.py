@@ -51,7 +51,23 @@ class MultimodalExtractor:
             from PIL import Image
         except Exception:
             return {}
-        img = Image.open(path).convert("RGB")
+        # 关键：透明 PNG 不能直接 convert("RGB")——透明像素会被当成黑色 (0,0,0)，
+        # 导致黑色线条图标整图全黑、特征坍缩（edge/bright/颜色全 0，round 恒 0.81）。
+        # 正确做法：合成对比色背景。线条为深色→白底；线条为浅色（白色图标，深色 UI 用）→黑底。
+        # 自动检测：非透明像素平均亮度 >128 用黑底，否则白底。
+        raw = Image.open(path).convert("RGBA")
+        # 先用非透明像素判断线条明暗
+        non_alpha = [p for p in raw.getdata() if p[3] > 0]
+        if non_alpha:
+            line_lum = sum(0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2] for p in non_alpha) / len(non_alpha)
+        else:
+            line_lum = 0.0
+        if line_lum > 128:  # 浅色线条（白色图标）→ 黑底
+            bg_color = (0, 0, 0, 255)
+        else:  # 深色线条（黑色图标）→ 白底
+            bg_color = (255, 255, 255, 255)
+        bg = Image.new("RGBA", raw.size, bg_color)
+        img = Image.alpha_composite(bg, raw).convert("RGB")
         img = img.resize((64, 64))  # 降采样控成本
         px = list(img.getdata())
         n = len(px)
@@ -124,7 +140,11 @@ class MultimodalExtractor:
                 edge_n += 1
             if y < 63 and abs(lums_raw[i + 64] - lums_raw[i]) > 26:
                 edge_n += 1
-        edge = _norm(edge_n / n / 0.30)
+        # 归一化分母 0.42：实测 7 图标原始密度 0.103~0.402，
+        # 用 0.30 会把 attachment(1.34)/error(1.27)/send(1.12) 截断到 1.0，
+        # 三个不同笔画密度压平成同一个值，区分度被丢弃。
+        # 0.42 让最大值 0.402/0.42=0.957 恰好不触顶。
+        edge = _norm(edge_n / n / 0.42)
 
         # 关键：必须产出 VISUAL_FEATURES 全部 9 键，否则 SNN 输入层丢弃未知特征
         # （认知层视觉 SNN 输入层固定 9 维，extra 键不影响但会漏激活）

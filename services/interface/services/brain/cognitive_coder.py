@@ -400,6 +400,32 @@ class ModalSNNEncoder:
                         if cur > 0.3:
                             self._set_weight(fidx, hid, max(0.1, cur - eta * 0.5))
 
+        # ── 非教师概念的抑制（防 winner-take-all 坍缩）──
+        # 原实现只遍历 teacher.items()，**不在教师字典里的概念永不衰减**。
+        # apple 的先验连接（red/green/round→apple）几乎对任何输入都触发
+        # Hebbian LTP，只增不减，最终主导所有样本：实测 7 个不同语义图标
+        # 全部坍缩到 apple(1.00)，真标签蒸馏也救不回。
+        # 现对未激活概念施加衰减，让被拒概念的先验连接逐步弱化。
+        # 关键修复：Hebbian 阶段（enable_hebbian=True）会**全局**加强所有先验边，
+        # 包括非 teacher 概念的 apple/novelty——实测一次蒸馏 apple 边净增 +0.175，
+        # 而非教师衰减仅 eta*0.5=-0.025，远不足以抵消 → 坍缩。
+        # 将非教师衰减提升到 eta*4（=0.20 > 0.175），确保非教师概念边**净衰减**，
+        # 方向正确：teacher 概念加强、非 teacher 概念抑制。
+        active = {c for c, v in teacher.items() if v > 0.3}
+        for name in self.registry.all():
+            if name in active:
+                continue
+            nidx = self.registry.get(name)
+            if nidx is None:
+                continue
+            nhid = self._hidden_start + nidx
+            for feat in self.concept_prior.get(name, []):
+                if feat in self.feature_names:
+                    fidx = self.feature_names.index(feat)
+                    cur = self._get_weight(fidx, nhid)
+                    if cur > 0.05:
+                        self._set_weight(fidx, nhid, max(0.0, cur - eta * 4))
+
     def register_concept(self, name: str, prior_features: Optional[List[str]] = None) -> int:
         """动态注册新概念（开放集）。
 
@@ -465,24 +491,64 @@ class ModalSNNEncoder:
 
 # ── 模态特征提取（Phase 1 规则式） ──
 def _visual_to_concepts(visual_features: Dict[str, float]) -> Dict[str, float]:
-    """视觉特征 → 概念假设（规则式，Phase 1）。"""
+    """视觉特征 → 概念假设（规则式，Phase 1）。
+
+    关键约束：演示概念（apple）只在彩色数据上激活。
+    这批业务图标是单色的（实测 red==green==blue 恒等、saturation 恒 0），
+    颜色通道退化成了亮度通道，会让 apple 规则在单色图标上误触发。
+    """
     concepts: Dict[str, float] = {}
     red = visual_features.get("red", 0.0)
     green = visual_features.get("green", 0.0)
+    blue = visual_features.get("blue", 0.0)
     round_s = visual_features.get("round", 0.0)
     bright = visual_features.get("bright", 0.0)
     dark = visual_features.get("dark", 0.0)
+    saturation = visual_features.get("saturation", 0.0)
 
-    apple = (red + green) / 2.0 * round_s
-    if apple > 0.1:
-        concepts["apple"] = min(1.0, apple)
+    # apple：需要真彩色 + 圆形轮廓。单色数据（saturation≈0）直接不产出，
+    # 否则 red/green 在灰图上等于亮度，会把 document/error 误判成苹果。
+    # 实测 icon-document red=green=blue=0.521 → 无闸门时 apple=0.352（误触发）。
+    if saturation > 0.15:
+        apple = (red + green) / 2.0 * round_s
+        if apple > 0.1:
+            concepts["apple"] = min(1.0, apple)
+
+    # danger：红 + 暗。红不加饱和度闸门——实测单色图标（icon-error
+    # 灰度 0.405）正是 danger 语义，闸门会把它拦到 0.238 < 0.3。
+    # 闸门只对 apple 生效（它是演示概念，不应污染业务数据）。
     danger = (dark * 0.5 + red * 0.3)
     if danger > 0.1:
         concepts["danger"] = min(1.0, danger)
+
+    # novelty：高亮度（信息量不依赖饱和度）
     if bright > 0.6:
         concepts["novelty"] = min(1.0, bright * 0.7)
 
+    # 注意：不从视觉特征推 urgency。
+    # 实测证明这是个臆造规则：icon-arrow（urgency 语义）edge 最低 0.245，
+    # 而 edge 最高的 attachment(0.957)/error(0.904) 分别是 approval/danger 语义。
+    # 笔画密度高只说明图形复杂，不携带紧急语义——硬推会让
+    # urgency 抢走 danger 的样本（实测 icon-error 被 urgency 0.871 压过 danger 0.431）。
+    # urgency 由文本关键词 / 音频音调产生，不进视觉规则。
+
     return concepts
+
+
+def _labeled_teacher(sample: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """从样本的真实标注构建教师信号；无标注返回 None。
+
+    优先 "concepts"（多标签 {name: 0~1}），其次 "concept"（单标签，强度 0.9）。
+    返回空字典表示「有标注字段但内容为空」，仍应优先于规则式猜测。
+    """
+    concepts = sample.get("concepts")
+    if isinstance(concepts, dict):
+        cleaned = {k: float(v) for k, v in concepts.items() if float(v) > 0}
+        return cleaned
+    concept = sample.get("concept")
+    if concept:
+        return {str(concept): 0.9}
+    return None
 
 
 def _text_to_concepts(text: str) -> Dict[str, float]:
@@ -768,10 +834,11 @@ class CognitiveCoder:
         )
 
     def distill(self, samples: List[Dict[str, Any]], eta: float = 0.05) -> Dict[str, int]:
-        """蒸馏训练：用规则式编码作为教师，训练模态 SNN。
+        """蒸馏训练：优先用真实标签，否则回退规则式编码作教师。
 
         Args:
-            samples: 训练样本列表，每个含 visual/audio 特征
+            samples: 训练样本列表，每个含 visual/audio 特征；
+                可选 "concept"（单标签）或 "concepts"（多标签 {name: 0~1}）
             eta: 学习率
 
         Returns:
@@ -781,7 +848,11 @@ class CognitiveCoder:
         for sample in samples:
             visual = sample.get("visual")
             if visual:
-                teacher = _visual_to_concepts(visual)
+                # 真实标签优先：规则式教师在单色图标上会误触发演示概念
+                # （实测 icon-document 被判成 apple），蒸馏会忠实学到错误。
+                teacher = _labeled_teacher(sample)
+                if teacher is None:
+                    teacher = _visual_to_concepts(visual)
                 self.visual_snn.distill_step(visual, teacher, eta)
                 stats["visual_distill"] += 1
             audio = sample.get("audio")
