@@ -26,6 +26,7 @@ slowapi>=0.1.9
 
 # Graph layout (Brain knowledge graph layout API)
 networkx>=3.0
+pillow>=10.0.0
 numpy>=1.26.0
 
 # Retry / resilience
