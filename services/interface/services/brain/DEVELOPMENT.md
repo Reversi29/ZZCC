@@ -67,3 +67,28 @@
 1. 单元测试：分区域探索覆盖、输出链打通、步长演化、权重稳固
 2. 集成测试：development_tick 后功能区都有边、eval 12/12
 3. 生产部署：干净基线重新发育，验证功能链 + eval 12/12
+
+## v2 实现验证（2026-11-27 部署后）
+
+生产部署 v2 后实测：
+- dev/status：`zone_explored={input:12, output:11, concept:0}`（分功能区覆盖）
+- `output_chain_edges=88`（输出区→核心输出，消除死端）
+- `step_evolve_events=5`（步长演化，非全 1）
+- `dev_edges=118 ≤ max_dev_edges=120`（收敛机制防暴涨）
+- 生产网络 231 神经元/387 边，**eval 12/12**（核心区冻结不受影响）
+
+**关键修复（开发中发现）**：
+1. `proliferate` 过度创建：`add_neuron` 填充中间神经元默认 EXCITATORY 污染计数
+   → 用 `_proliferated_ids` 显式跟踪
+2. `_ensure_output_chain` 消耗骨架预算：链边（输出→核心 32-37）目标 <40 不计
+   `_count_dev_edges` → 独立于预算，否则耗尽 remaining 致 `_explore_zone` 不跑
+3. `_evolve_steps` 取错边：权重最高但已是下界（step=1 且 strong→缩短不变）
+   → 可演化优先（new_step != conn.step）+ 只演化保留边（weight≥keep_weight）
+4. `_prune_weakest` 排序 bool 反向：`(step==1)` 让 step≠1 排前先剪
+   → 改 `(step != 1)` 保留多尺度边
+5. `prune_weak_synapses` 剪负权重：侧向抑制（负权重）被当弱边剪
+   → 只剪正权重弱边（0 < w < keep_weight）
+6. 加载现有网络不同步 `_proliferated_ids`：dev_neurons 只计新增增殖
+   → 加载后同步动态区已有神经元（20→160）
+
+**验证**：test_brain_development_v2 7/7（3 次稳定）、v1 8/8、全量 525 passed 零回归。
