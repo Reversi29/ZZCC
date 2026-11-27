@@ -118,6 +118,26 @@ MULTIMODAL_SAMPLES: List[Dict[str, Any]] = [
 ]
 
 
+def _sample_key(s: Dict[str, Any]):
+    """样本去重指纹。
+
+    原实现仅用 (concept, visual_keys)，对无 visual 的纯文本/结构化样本
+    visual_keys 恒为 ()，不同内容的样本被误判重复而丢失。
+    现纳入 text/payload 内容摘要，保证同 concept 不同内容的样本不被误去重。
+
+    `_src` 是样本来源标识：内建样本无此字段，构造样本（图标/话术/表格）有，
+    避免构造样本与内建同 concept 样本合法碰撞而被误过滤。
+    """
+    text = str(s.get("text") or "")
+    payload = s.get("payload") or {}
+    pstr = "".join(f"{k}={v}" for k, v in sorted(
+        (k, v) for k, v in payload.items() if k in ("fields", "rows", "columns")
+    ))
+    visual = tuple(sorted((s.get("visual") or {}).keys()))
+    audio = tuple(sorted((s.get("audio") or {}).keys()))
+    return (s.get("concept"), s.get("_src"), text, pstr, visual, audio)
+
+
 class MultimodalDataset:
     """多模态数据集：同事物多模态表示，供无感映射训练。
 
@@ -137,11 +157,10 @@ class MultimodalDataset:
                 with open(self.path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 extra = data.get("extra_samples", [])
-                # 去重：内建概念 + 已有的扩充
-                existing = {(s.get("concept"), tuple(sorted((s.get("visual") or {}).keys())))
-                            for s in self._samples}
+                # 去重：按内容指纹（concept + 模态内容），非仅 concept+visual_keys
+                existing = {_sample_key(s) for s in self._samples}
                 for s in extra:
-                    key = (s.get("concept"), tuple(sorted((s.get("visual") or {}).keys())))
+                    key = _sample_key(s)
                     if key not in existing:
                         self._samples.append(s)
                         existing.add(key)
@@ -152,10 +171,8 @@ class MultimodalDataset:
         """持久化扩充样本。"""
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            builtin_keys = {(s.get("concept"), tuple(sorted((s.get("visual") or {}).keys())))
-                            for s in MULTIMODAL_SAMPLES}
-            extra = [s for s in self._samples
-                     if (s.get("concept"), tuple(sorted((s.get("visual") or {}).keys()))) not in builtin_keys]
+            builtin_keys = {_sample_key(s) for s in MULTIMODAL_SAMPLES}
+            extra = [s for s in self._samples if _sample_key(s) not in builtin_keys]
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump({"extra_samples": extra}, f, ensure_ascii=False, indent=2)
         except Exception:

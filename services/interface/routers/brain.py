@@ -55,6 +55,30 @@ def _get_v2_engine() -> Any:
 
 logger = logging.getLogger("brain.api")
 
+
+_TRAINED_ICON_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "static", "assets", "packages", "flutter_chat_ui", "assets",
+)
+
+
+def _load_training_samples() -> tuple:
+    """加载内置多模态数据集作为训练样本（无请求样本时的回退）。
+
+    接通 multimodal_dataset 此前的死代码链路：
+    MultimodalDataset → build_dataset（真实图标特征提取 + 业务话术 + OA 真实表格）
+    → contrastive_align / train_supervised / distill
+
+    Returns:
+        (samples, used_fallback)
+    """
+    from services.brain.multimodal_dataset import MultimodalDataset
+    from services.brain.multimodal_dataset_builder import build_dataset
+    ds = MultimodalDataset()
+    icon = _TRAINED_ICON_DIR if os.path.isdir(_TRAINED_ICON_DIR) else None
+    build_dataset(ds, icon_dir=icon)
+    return ds.samples(), True
+
 router = APIRouter(prefix="/brain", tags=["Brain AI"])
 
 _CONFIG_FILE = os.environ.get(
@@ -238,7 +262,7 @@ class LearnRequest(BaseModel):
 
 
 class CognitiveTrainRequest(BaseModel):
-    samples: List[dict] = Field(..., description="训练样本列表，每个含 visual/audio/text + concepts 标签")
+    samples: List[dict] = Field(default_factory=list, description="训练样本列表（visual/audio/text + concepts 标签）；留空则回退到内置多模态数据集")
     eta: float = Field(0.05, ge=0.0, le=1.0, description="学习率")
     method: str = Field("supervised", description="训练方法: supervised/contrastive/distill")
 
@@ -878,13 +902,24 @@ async def cognitive_train(request: CognitiveTrainRequest):
         if v2 is None or v2.cognitive_coder is None:
             return {"ok": False, "error": "v2 引擎未初始化"}
         coder = v2.cognitive_coder
+        # 无显式样本时回退到内置多模态数据集（接通此前死代码的训练链路）
+        samples = request.samples
+        fallback = False
+        if not samples:
+            samples, fallback = _load_training_samples()
+        if request.method == "supervised" and samples and not samples[0].get("concepts"):
+            # train_supervised 需要 concepts 标签；数据集样本未标注时用 concept 生成
+            samples = [dict(s, concepts={s["concept"]: 0.9})
+                       for s in samples if s.get("concept")]
         if request.method == "contrastive":
-            stats = coder.contrastive_align(request.samples, eta=request.eta)
+            stats = coder.contrastive_align(samples, eta=request.eta)
         elif request.method == "distill":
-            stats = coder.distill(request.samples, eta=request.eta)
+            stats = coder.distill(samples, eta=request.eta)
         else:
-            stats = coder.train_supervised(request.samples, eta=request.eta)
-        return {"ok": True, "stats": stats, "concepts": coder.registry.all()}
+            stats = coder.train_supervised(samples, eta=request.eta)
+        return {"ok": True, "stats": stats, "concepts": coder.registry.all(),
+                "source": "dataset_fallback" if fallback else "request",
+                "sample_count": len(samples)}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
