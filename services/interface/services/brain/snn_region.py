@@ -307,6 +307,11 @@ class SNNRegion:
         # DevelopmentDriver 包装 SNN，只在动态区(40-199)生长，核心区不动。
         from services.brain.development import DevelopmentDriver
         self.dev_driver = DevelopmentDriver(self.snn)
+        # v2 修复：加载现有网络时，把动态区(40-199)已有神经元同步到
+        # _proliferated_ids，避免重载后 dev_neurons 只计新增增殖（丢失已形成骨架）。
+        for _n in self.snn.neurons:
+            if 40 <= _n.id <= 199 and _n.neuron_type.value != "unused":
+                self.dev_driver._proliferated_ids.add(_n.id)
 
         self._stats = {
             "reason_calls": 0,
