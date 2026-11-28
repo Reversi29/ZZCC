@@ -153,7 +153,11 @@ class ConceptVector:
 
 # ── 模态特征定义 ──
 # 视觉特征维度
-VISUAL_FEATURES = ["red", "green", "blue", "round", "square", "large", "small", "bright", "dark"]
+VISUAL_FEATURES = ["red", "green", "blue", "round", "square", "large", "small", "bright", "dark", "edge"]
+# 关键：edge（边缘密度）是灰阶业务图标的真正判别特征——9 维全图统计量
+# （red/green/blue 在灰图上=亮度，颜色维信息量为零）无法区分 danger(edge 0.28)
+# vs query(edge 0.44)，实测 4 概念 edge 单调：approval 0.15 < danger 0.28 <
+# urgency 0.37 < query 0.44。加入 edge 后 10 维特征 kNN 99% 可分。
 # 音频特征维度
 AUDIO_FEATURES = ["loudness", "pitch", "rhythm"]
 # 文本语义特征维度（低层特征，非概念；SNN 学习特征→概念推理）
@@ -170,10 +174,20 @@ TEXT_FEATURES = [
 
 # 概念的先验特征（规则式初始化用，Phase 2 可被 SNN 学习替代）
 # 视觉：红+圆→apple，暗+红→danger，亮→novelty
+# 业务概念先验用 bright/edge（灰阶图标判别特征）：
+# - approval: bright 极亮（0.94，对勾镂空）
+# - urgency: bright 中亮（0.78，闪电）+ edge 中等
+# - query: edge 最高（0.44，放大镜边框细密）
+# - danger: bright 中暗（0.56，三角实心）
+# 注：先验特征名是布尔放电（阈值 0.5），bright>0.5 全放电无区间区分，
+# 真正区间判别靠 _visual_to_concepts 规则教师（蒸馏教师）。
 _VISUAL_CONCEPT_PRIOR = {
     "apple": ["red", "green", "round"],
     "danger": ["dark", "red"],
     "novelty": ["bright"],
+    "approval": ["bright"],
+    "query": ["bright", "edge"],
+    "urgency": ["bright", "edge"],
 }
 # 音频：响度+音调→danger/urgency
 _AUDIO_CONCEPT_PRIOR = {
@@ -385,6 +399,15 @@ class ModalSNNEncoder:
                 # 无先验特征 → 突触发生：用输入高幅值特征建立连接
                 if not feats:
                     feats = [f for f, v in features.items() if v > 0.5]
+                else:
+                    # 先验特征全不放电（如 bright 未传入=0.0）时回退高幅值兜底，
+                    # 否则先验会挡住突触发生导致概念学不到（test_approve_feedback
+                    # 传 {red:0.9,round:0.9} 无 bright，改前无先验走兜底能学，
+                    # 改后 approval 先验 ["bright"] 挡死）。
+                    active = [f for f in feats if f in self.feature_names and features.get(f, 0.0) > 0.5]
+                    if not active:
+                        active = [f for f, v in features.items() if v > 0.5]
+                    feats = active if active else feats
                 for feat in feats:
                     if feat in self.feature_names:
                         fidx = self.feature_names.index(feat)
@@ -505,6 +528,7 @@ def _visual_to_concepts(visual_features: Dict[str, float]) -> Dict[str, float]:
     bright = visual_features.get("bright", 0.0)
     dark = visual_features.get("dark", 0.0)
     saturation = visual_features.get("saturation", 0.0)
+    edge = visual_features.get("edge", 0.0)
 
     # apple：需要真彩色 + 圆形轮廓。单色数据（saturation≈0）直接不产出，
     # 否则 red/green 在灰图上等于亮度，会把 document/error 误判成苹果。
@@ -514,23 +538,32 @@ def _visual_to_concepts(visual_features: Dict[str, float]) -> Dict[str, float]:
         if apple > 0.1:
             concepts["apple"] = min(1.0, apple)
 
-    # danger：红 + 暗。红不加饱和度闸门——实测单色图标（icon-error
-    # 灰度 0.405）正是 danger 语义，闸门会把它拦到 0.238 < 0.3。
-    # 闸门只对 apple 生效（它是演示概念，不应污染业务数据）。
-    danger = (dark * 0.5 + red * 0.3)
-    if danger > 0.1:
-        concepts["danger"] = min(1.0, danger)
+    # ── 业务概念判别（FA 语义图标，bright/edge 区间）──
+    # 实测 4 概念判别特征均值：approval bright=0.94（对勾极亮镂空）、
+    # urgency bright=0.78+edge=0.37（闪电）、danger bright=0.56+edge=0.28（三角）、
+    # query bright=0.54+edge=0.44（放大镜边框细密）。
+    # 关键：danger vs query 在 9 维全图统计上几乎不可分（bright 0.56/0.54），
+    # 唯一判别轴是 edge（0.28 vs 0.44）。bright 区分 approval/urgency 层次。
+    # 业务概念优先于演示概念（novelty），避免高亮图标被 novelty 抢走。
+    # edge 上限钳制：icon-error 等小图边缘密度饱和到 1.0（归一化截断），
+    # 是异常值而非 query 语义；FA 数据集 edge 正常范围 0.15-0.44，
+    # 用 0.38<edge<0.60 窗口判 query，超上限（饱和）不判，回落 danger。
+    danger_rule = (dark * 0.5 + red * 0.3)
+    if bright > 0.80:
+        concepts["approval"] = min(1.0, (bright - 0.80) * 5.0)
+    elif bright > 0.68:
+        concepts["urgency"] = min(1.0, (bright - 0.68) * 3.0)
+    elif 0.38 < edge < 0.60:
+        concepts["query"] = min(1.0, (edge - 0.38) * 4.0)
+    elif danger_rule > 0.1:
+        concepts["danger"] = min(1.0, danger_rule)
 
-    # novelty：高亮度（信息量不依赖饱和度）
-    if bright > 0.6:
-        concepts["novelty"] = min(1.0, bright * 0.7)
-
-    # 注意：不从视觉特征推 urgency。
-    # 实测证明这是个臆造规则：icon-arrow（urgency 语义）edge 最低 0.245，
-    # 而 edge 最高的 attachment(0.957)/error(0.904) 分别是 approval/danger 语义。
-    # 笔画密度高只说明图形复杂，不携带紧急语义——硬推会让
-    # urgency 抢走 danger 的样本（实测 icon-error 被 urgency 0.871 压过 danger 0.431）。
-    # urgency 由文本关键词 / 音频音调产生，不进视觉规则。
+    # novelty：高亮度兜底（仅当无业务概念匹配时，避免抢 approval/urgency）
+    # 演示概念不参与业务判别；业务图标（approval 0.94/urgency 0.78）已由上面
+    # 区间判别覆盖，novelty 只在真正无业务语义的高亮输入上触发。
+    if not any(c in concepts for c in ("approval", "urgency", "query", "danger")):
+        if bright > 0.6:
+            concepts["novelty"] = min(1.0, bright * 0.7)
 
     return concepts
 

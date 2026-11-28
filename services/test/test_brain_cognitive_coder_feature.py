@@ -22,17 +22,18 @@ class TestFeatureOpenSet:
         self.coder = CognitiveCoder()
 
     def test_initial_features(self):
-        """初始视觉特征 9 个。"""
-        assert len(self.coder.visual_snn.feature_names) == 9
+        """初始视觉特征 10 个（含 edge）。"""
+        assert len(self.coder.visual_snn.feature_names) == 10
         assert "red" in self.coder.visual_snn.feature_names
         assert "dark" in self.coder.visual_snn.feature_names
+        assert "edge" in self.coder.visual_snn.feature_names
 
     def test_register_feature(self):
         """动态注册新特征。"""
         idx = self.coder.register_feature("visual", "yellow")
-        assert idx == 9
+        assert idx == 10
         assert "yellow" in self.coder.visual_snn.feature_names
-        assert self.coder.visual_snn.num_features == 10
+        assert self.coder.visual_snn.num_features == 11
 
     def test_register_existing_feature(self):
         """注册已存在特征返回原索引。"""
@@ -44,7 +45,7 @@ class TestFeatureOpenSet:
         self.coder.register_concept("banana", prior_features={"visual": ["yellow", "curved"]})
         assert "yellow" in self.coder.visual_snn.feature_names
         assert "curved" in self.coder.visual_snn.feature_names
-        assert self.coder.visual_snn.num_features == 11
+        assert self.coder.visual_snn.num_features == 12
 
     def test_visual_new_feature_detects_concept(self):
         """视觉新特征识别新概念（黄+弯→banana）。"""
